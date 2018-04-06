@@ -58,16 +58,18 @@ def run(name,data):
     salt = salt.client.LocalClient()
     targets = data['targets']
     target_type = data['target_type']
-    command = data['command']
+    cmdargs = [data['command']]
+    if 'cwd' in data:
+        cmdargs.append(data['cwd'])
     #except Exception as e:
     #    print(e)
     #    return
 
     if 'number_of_targets' in data and data['number_of_trgets'] != 0:
-        results = salt.cmd_subset(targets, 'cmd.run', arg=command, tgt_type=target_type,\
+        results = salt.cmd_subset(targets, 'cmd.run', cmdargs, tgt_type=target_type,\
                 sub=data['number_of_targets'])
     else:
-        results = salt.cmd(targets, 'cmd.run', arg=command, tgt_type=target_type)
+        results = salt.cmd(targets, 'cmd.run', cmdargs, tgt_type=target_type)
 
     print(results)
 
