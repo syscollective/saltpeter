@@ -89,7 +89,6 @@ while True:
         result = parsecron(name,crons[name])
         if result == False:
             continue
-        print(result)
         if result['nextrun'] < 1:
             if name not in last_run or datetime.utcnow() - last_run[name] > timedelta(seconds=1):
                 last_run[name] = datetime.utcnow()
@@ -98,5 +97,4 @@ while True:
                 p.start()
 
 
-    print(multiprocessing.active_children())
     time.sleep(0.5)
