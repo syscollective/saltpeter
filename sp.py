@@ -67,9 +67,9 @@ def run(name,data):
 
     if 'number_of_targets' in data and data['number_of_trgets'] != 0:
         results = salt.cmd_subset(targets, 'cmd.run', cmdargs, tgt_type=target_type,\
-                sub=data['number_of_targets'])
+                sub=data['number_of_targets'], full_return=True)
     else:
-        results = salt.cmd(targets, 'cmd.run', cmdargs, tgt_type=target_type)
+        results = salt.cmd(targets, 'cmd.run', cmdargs, tgt_type=target_type, full_return=True)
 
     print(results)
 
