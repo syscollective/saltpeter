@@ -16,7 +16,7 @@ def readconfig():
     for f in os.listdir(args.configdir):
         if not re.match('^.+\.yaml$',f):
             continue
-        config += open(f,'r').read()
+        config += open(args.configdir+'/'+f,'r').read()
     return yaml.load(config)
 
 def parsecron(name,data):
@@ -65,20 +65,48 @@ def run(name,data):
     #    print(e)
     #    return
 
-    if 'number_of_targets' in data and data['number_of_trgets'] != 0:
-        results = salt.cmd_subset(targets, 'cmd.run', cmdargs, tgt_type=target_type,\
-                sub=data['number_of_targets'], full_return=True)
+    log(name,'','','','','','start',datetime.now())
+    if 'number_of_targets' in data and data['number_of_targets'] != 0:
+        results = salt.cmd_subset(targets, 'cmd.run_all', cmdargs, tgt_type=target_type, sub=data['number_of_targets'], full_return=True)
     else:
-        results = salt.cmd(targets, 'cmd.run', cmdargs, tgt_type=target_type, full_return=True)
+        results = salt.cmd(targets, 'cmd.run_all', cmdargs, tgt_type=target_type, full_return=True)
 
-    print(results)
+    for machine in results:
+        print('Debug:', results)
+        log(name, machine, results[machine]['ret']['retcode'], results[machine]['ret']['stdout'],\
+                results[machine]['ret']['stderr'], '', 'machine_out', datetime.now())
+
+def log(cron, machine, code, stdout, stderr, status, what, time):
+    logfile = open(args.logdir+'/'+cron+'.log','a')
+    if what == 'start':
+        content = "###### Starting %s at %s ################\n" % (cron, time)
+    else:
+        content = """########## %s ################
+**** Exit Code %d ******
+--------STDOUT----------
+%s
+
+------END STDOUT--------
+--------STDERR----------
+%s
+------END STDERR--------
+####### END %s at %s #########
+""" % (machine, code, stdout, stderr, machine, time)
+    logfile.write(content)
+    logfile.close()
+
 
 parser = argparse.ArgumentParser()
 
 parser.add_argument('-c', '--configdir', default='/etc/saltpeter',\
         help='Configuration directory location')
 
+parser.add_argument('-l', '--logdir', default='/var/log/saltpeter',\
+        help='Log directory location')
+
+
 args = parser.parse_args()
+
 
 bad_crons = []
 last_run = {}
