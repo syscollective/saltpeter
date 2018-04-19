@@ -31,6 +31,7 @@ def parsecron(name,data):
             print('Missing required %s property from "%s"' % (e,name))
             bad_crons.append(name)
         return False
+    ret = {}
     if 'sec' in data:
         sec = data['sec']
     else:
@@ -39,6 +40,11 @@ def parsecron(name,data):
         year = data['year']
     else:
         year = '*'
+    if 'soft_timeout' in data:
+        ret['soft_timeout'] = data['soft_timeout']
+    if 'hard_timeout' in data:
+        ret['hard_timeout'] = data['hard_timeout']
+
 
     try:
         entry = CronTab('%s %s %s %s %s %s %s' % (sec, minute, hour, dom, mon, dow, year))
@@ -51,10 +57,10 @@ def parsecron(name,data):
 
     if name in bad_crons:
         bad_crons.remove(name)
-    nextrun = entry.next(now=datetime.now()-timedelta(seconds=1),default_utc=True)
-    return {'nextrun': nextrun}
+    ret['nextrun'] = entry.next(now=datetime.now()-timedelta(seconds=1),default_utc=True)
+    return ret
 
-def run(name,data):
+def run(name,data,instance):
     import salt.client
     salt = salt.client.LocalClient()
     targets = data['targets']
@@ -64,8 +70,10 @@ def run(name,data):
         cmdargs.append('cwd='+data['cwd'])
     if 'user' in data:
         cmdargs.append('runas='+data['user'])
+    if 'hard_timeout' in data:
+        cmdargs.append('timeout='+str(data['hard_timeout']))
 
-    log(cron=name, what='start')
+    log(cron=name, what='start', instance=procname)
     if 'number_of_targets' in data and data['number_of_targets'] != 0:
         results = salt.cmd_subset(targets, 'cmd.run_all', cmdargs,\
                 tgt_type=target_type, sub=data['number_of_targets'], full_return=True)
@@ -75,20 +83,20 @@ def run(name,data):
 
     if len(results) > 0:
         for machine in results:
-            log('machine_result',name, machine, results[machine]['ret']['retcode'],\
+            log('machine_result',name, procname, machine, results[machine]['ret']['retcode'],\
                     results[machine]['ret']['stdout'], results[machine]['ret']['stderr'],\
                     '', datetime.now())
     else:
-        log(cron=name, what='no_machines')
+        log(cron=name, what='no_machines', instance=procname)
 
-def log(what, cron, machine='', code='', stdout='', stderr='', status='', time=datetime.now()):
+def log(what, cron, instance, machine='', code='', stdout='', stderr='', status='', time=datetime.now()):
     logfile = open(args.logdir+'/'+cron+'.log','a')
     if what == 'start':
-        content = "###### Starting %s at %s ################\n" % (cron, time)
+        content = "###### Starting %s at %s ################\n" % (instance, time)
     elif what == 'no_machines':
-        content = "!!!!!! No targets matched !!!!!!\n"
+        content = "!!!!!! No targets matched for %s !!!!!!\n" % instance
     else:
-        content = """########## %s ################
+        content = """########## %s from %s ################
 **** Exit Code %d ******
 --------STDOUT----------
 %s
@@ -96,13 +104,20 @@ def log(what, cron, machine='', code='', stdout='', stderr='', status='', time=d
 --------STDERR----------
 %s
 ------END STDERR--------
-####### END %s at %s #########
-""" % (machine, code, stdout, stderr, machine, time)
+####### END %s from %s at %s #########
+""" % (machine, instance, code, stdout, stderr, machine, instance, time)
 
     logfile.write(content)
     logfile.flush()
     logfile.close()
 
+def timeout(which, process):
+    if which == 'hard':
+        print('Process %s is about to reach hard timeout! It will be killed soon!' % process.name)
+        processlist[process.name]['hard_timeout'] += timedelta(minutes=5)
+    if which == 'soft':
+        print('Process %s reached soft timeout!' % process.name)
+        processlist[process.name]['soft_timeout'] += timedelta(minutes=5)
 
 parser = argparse.ArgumentParser()
 
@@ -118,6 +133,7 @@ args = parser.parse_args()
 
 bad_crons = []
 last_run = {}
+processlist = {}
 while True:
 
     crons = readconfig()
@@ -128,9 +144,27 @@ while True:
         if result['nextrun'] < 1:
             if name not in last_run or datetime.utcnow() - last_run[name] > timedelta(seconds=1):
                 last_run[name] = datetime.utcnow()
-                print('Firing %s!' % name)
-                p = multiprocessing.Process(target=run, args=(name,crons[name]))
+                procname = name+'_'+str(int(time.time()))
+                print('Firing %s!' % procname)
+                p = multiprocessing.Process(target=run, args=(name,crons[name],procname), name=procname)
+                processlist[procname] = {}
+                if result.has_key('soft_timeout'):
+                    processlist[procname]['soft_timeout'] = datetime.now()+timedelta(seconds = result['soft_timeout'])
+                if result.has_key('hard_timeout'):
+                    processlist[procname]['hard_timeout'] = datetime.now()+timedelta(seconds = result['hard_timeout']-1)
                 p.start()
 
-
     time.sleep(0.5)
+    processes = multiprocessing.active_children()
+    for entry in list(processlist):
+        found = False
+        for process in processes:
+            if entry == process.name:
+                found = True
+                if processlist[entry].has_key('soft_timeout') and processlist[entry]['soft_timeout'] < datetime.now():
+                    timeout('soft',process)
+                if processlist[entry].has_key('hard_timeout') and processlist[entry]['hard_timeout'] < datetime.now():
+                    timeout('hard',process)
+        if found == False:
+            print('Deleting process %s as it must have finished' % entry)
+            del(processlist[entry])
