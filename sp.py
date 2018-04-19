@@ -51,7 +51,8 @@ def parsecron(name,data):
 
     if name in bad_crons:
         bad_crons.remove(name)
-    return {'nextrun': entry.next(default_utc=True) }
+    nextrun = entry.next(now=datetime.now()-timedelta(seconds=1),default_utc=True)
+    return {'nextrun': nextrun}
 
 def run(name,data):
     import salt.client
@@ -60,39 +61,46 @@ def run(name,data):
     target_type = data['target_type']
     cmdargs = [data['command']]
     if 'cwd' in data:
-        cmdargs.append(data['cwd'])
-    #except Exception as e:
-    #    print(e)
-    #    return
+        cmdargs.append('cwd='+data['cwd'])
+    if 'user' in data:
+        cmdargs.append('runas='+data['user'])
 
-    log(name,'','','','','','start',datetime.now())
+    log(cron=name, what='start')
     if 'number_of_targets' in data and data['number_of_targets'] != 0:
-        results = salt.cmd_subset(targets, 'cmd.run_all', cmdargs, tgt_type=target_type, sub=data['number_of_targets'], full_return=True)
+        results = salt.cmd_subset(targets, 'cmd.run_all', cmdargs,\
+                tgt_type=target_type, sub=data['number_of_targets'], full_return=True)
     else:
-        results = salt.cmd(targets, 'cmd.run_all', cmdargs, tgt_type=target_type, full_return=True)
+        results = salt.cmd(targets, 'cmd.run_all', cmdargs,\
+                tgt_type=target_type, full_return=True)
 
-    for machine in results:
-        print('Debug:', results)
-        log(name, machine, results[machine]['ret']['retcode'], results[machine]['ret']['stdout'],\
-                results[machine]['ret']['stderr'], '', 'machine_out', datetime.now())
+    if len(results) > 0:
+        for machine in results:
+            log('machine_result',name, machine, results[machine]['ret']['retcode'],\
+                    results[machine]['ret']['stdout'], results[machine]['ret']['stderr'],\
+                    '', datetime.now())
+    else:
+        log(cron=name, what='no_machines')
 
-def log(cron, machine, code, stdout, stderr, status, what, time):
+def log(what, cron, machine='', code='', stdout='', stderr='', status='', time=datetime.now()):
     logfile = open(args.logdir+'/'+cron+'.log','a')
     if what == 'start':
         content = "###### Starting %s at %s ################\n" % (cron, time)
+    elif what == 'no_machines':
+        content = "!!!!!! No targets matched !!!!!!\n"
     else:
         content = """########## %s ################
 **** Exit Code %d ******
 --------STDOUT----------
 %s
-
 ------END STDOUT--------
 --------STDERR----------
 %s
 ------END STDERR--------
 ####### END %s at %s #########
 """ % (machine, code, stdout, stderr, machine, time)
+
     logfile.write(content)
+    logfile.flush()
     logfile.close()
 
 
