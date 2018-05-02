@@ -75,21 +75,20 @@ def run(name,data,instance):
 
     log(cron=name, what='start', instance=procname)
     if 'number_of_targets' in data and data['number_of_targets'] != 0:
-        results = salt.cmd_subset(targets, 'cmd.run_all', cmdargs,\
+        results = salt.cmd_subset(targets, 'cmd.run', cmdargs,\
                 tgt_type=target_type, sub=data['number_of_targets'], full_return=True)
     else:
-        results = salt.cmd(targets, 'cmd.run_all', cmdargs,\
+        results = salt.cmd(targets, 'cmd.run', cmdargs,\
                 tgt_type=target_type, full_return=True)
 
     if len(results) > 0:
         for machine in results:
-            log('machine_result',name, procname, machine, results[machine]['ret']['retcode'],\
-                    results[machine]['ret']['stdout'], results[machine]['ret']['stderr'],\
-                    '', datetime.now())
+            log('machine_result',name, procname, machine, results[machine]['retcode'],\
+                    results[machine]['ret'], '', datetime.now())
     else:
         log(cron=name, what='no_machines', instance=procname)
 
-def log(what, cron, instance, machine='', code='', stdout='', stderr='', status='', time=datetime.now()):
+def log(what, cron, instance, machine='', code='', out='', status='', time=datetime.now()):
     logfile = open(args.logdir+'/'+cron+'.log','a')
     if what == 'start':
         content = "###### Starting %s at %s ################\n" % (instance, time)
@@ -98,14 +97,9 @@ def log(what, cron, instance, machine='', code='', stdout='', stderr='', status=
     else:
         content = """########## %s from %s ################
 **** Exit Code %d ******
---------STDOUT----------
 %s
-------END STDOUT--------
---------STDERR----------
-%s
-------END STDERR--------
 ####### END %s from %s at %s #########
-""" % (machine, instance, code, stdout, stderr, machine, instance, time)
+""" % (machine, instance, code, out, machine, instance, time)
 
     logfile.write(content)
     logfile.flush()
