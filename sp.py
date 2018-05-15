@@ -73,7 +73,7 @@ def run(name,data,instance):
     if 'hard_timeout' in data:
         cmdargs.append('timeout='+str(data['hard_timeout']))
 
-    log(cron=name, what='start', instance=procname)
+    log(cron=name, what='start', instance=procname, time=datetime.now())
     if 'number_of_targets' in data and data['number_of_targets'] != 0:
         results = salt.cmd_subset(targets, 'cmd.run', cmdargs,\
                 tgt_type=target_type, sub=data['number_of_targets'], full_return=True)
@@ -89,12 +89,13 @@ def run(name,data,instance):
 
     if len(results) > 0:
         for machine in results:
-            log('machine_result',name, procname, machine, results[machine]['retcode'],\
-                    results[machine]['ret'], '', datetime.now())
+            log(what='machine_result',cron=name, instance=procname, machine=machine,\
+                    code=results[machine]['retcode'], out=results[machine]['ret'],\
+                    time=datetime.now())
     else:
-        log(cron=name, what='no_machines', instance=procname)
+        log(cron=name, what='no_machines', instance=procname, time=datetime.now())
 
-def log(what, cron, instance, machine='', code='', out='', status='', time=datetime.now()):
+def log(what, cron, instance, time, machine='', code='', out='', status=''):
     logfile = open(args.logdir+'/'+cron+'.log','a')
     if what == 'start':
         content = "###### Starting %s at %s ################\n" % (instance, time)
