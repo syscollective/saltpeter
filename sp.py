@@ -100,9 +100,15 @@ def run(name,data,instance):
 
     if len(results) > 0:
         for machine in results:
-            log(what='machine_result',cron=name, instance=procname, machine=machine,\
-                    code=results[machine]['retcode'], out=results[machine]['ret'],\
-                    time=datetime.now())
+            #check if result is Bool in a probably retarded way
+            if type(results[machine]) == type(True):
+				log(what='machine_result',cron=name, instance=procname, machine=machine,\
+						code=1, out='Bool output: %r' % results[machine],\
+						time=datetime.now())
+            else:
+                log(what='machine_result',cron=name, instance=procname, machine=machine,\
+						code=results[machine]['retcode'], out=results[machine]['ret'],\
+						time=datetime.now())
     else:
         log(cron=name, what='no_machines', instance=procname, time=datetime.now())
 
