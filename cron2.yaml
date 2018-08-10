@@ -1,8 +1,0 @@
-cron2:
-    hour: 6,3
-    mon: '*'
-    dow: 4
-    dom: '*'
-    sec: 0,30
-
-    command: /usr/bin/touch /tmp/cron2
