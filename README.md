@@ -1,6 +1,6 @@
 Syntax:
 
-
+```
 example:
 #name of the cron, has to be unique system-wide
 
@@ -38,4 +38,4 @@ example:
 
     number_of_targets: 0
 #number of machines to execute on, optional, 0 means all
-
+```
