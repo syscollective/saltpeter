@@ -1,1 +1,4 @@
-sp-env/
+/sp-env/
+/dist/
+*.pyc
+*.egg-info

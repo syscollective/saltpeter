@@ -11,20 +11,21 @@ from crontab import CronTab
 import multiprocessing
 
 
-def readconfig():
+def readconfig(configdir):
+    global bad_files
     config = {}
-    for f in os.listdir(args.configdir):
+    for f in os.listdir(configdir):
         if not re.match('^.+\.yaml$',f):
             continue
         try:
-            config_string = open(args.configdir+'/'+f,'r').read()
+            config_string = open(configdir+'/'+f,'r').read()
             config.update(yaml.load(config_string))
             if f in bad_crons:
                 bad_files.remove(f)
         except Exception as e:
             if f not in bad_files:
                 print('Could not parse file %s: %s' % (f,e))
-		bad_files.append(f)
+                bad_files.append(f)
     return config
 
 
@@ -69,7 +70,7 @@ def parsecron(name,data):
     return ret
 
 
-def run(name,data,instance):
+def run(name,data,procname):
     import salt.client
     salt = salt.client.LocalClient()
     targets = data['targets']
@@ -102,13 +103,13 @@ def run(name,data,instance):
         for machine in results:
             #check if result is Bool in a probably retarded way
             if type(results[machine]) == type(True):
-				log(what='machine_result',cron=name, instance=procname, machine=machine,\
-						code=1, out='Bool output: %r' % results[machine],\
-						time=datetime.now())
+                                log(what='machine_result',cron=name, instance=procname, machine=machine,\
+                                                code=1, out='Bool output: %r' % results[machine],\
+                                                time=datetime.now())
             else:
                 log(what='machine_result',cron=name, instance=procname, machine=machine,\
-						code=results[machine]['retcode'], out=results[machine]['ret'],\
-						time=datetime.now())
+                                                code=results[machine]['retcode'], out=results[machine]['ret'],\
+                                                time=datetime.now())
     else:
         log(cron=name, what='no_machines', instance=procname, time=datetime.now())
 
@@ -140,7 +141,8 @@ def timeout(which, process):
         print('Process %s reached soft timeout!' % process.name)
         processlist[process.name]['soft_timeout'] += timedelta(minutes=5)
 
-if __name__ == "__main__":
+
+def main():
     parser = argparse.ArgumentParser()
 
     parser.add_argument('-c', '--configdir', default='/etc/saltpeter',\
@@ -148,8 +150,11 @@ if __name__ == "__main__":
 
     parser.add_argument('-l', '--logdir', default='/var/log/saltpeter',\
             help='Log directory location')
+    global args
     args = parser.parse_args()
 
+    global bad_crons
+    global bad_files
     bad_crons = []
     bad_files = []
     last_run = {}
@@ -157,7 +162,7 @@ if __name__ == "__main__":
 
     while True:
 
-        crons = readconfig()
+        crons = readconfig(args.configdir)
         for name in crons:
             result = parsecron(name,crons[name])
             if result == False:
@@ -197,3 +202,7 @@ if __name__ == "__main__":
             if found == False:
                 print('Deleting process %s as it must have finished' % entry)
                 del(processlist[entry])
+
+
+if __name__ == "__main__":
+    main()
