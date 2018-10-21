@@ -1,0 +1,20 @@
+version: '3'
+
+services:
+    sp-master:
+        build: ../
+        hostname: sp-master.sp.local
+        volumes:
+            - ../:/opt/saltpeter
+            - ./config:/etc/saltpeter
+            - ./logs:/var/log/saltpeter
+    sp-min1:
+        build: ./salt-minion/
+        hostname: sp-min1.sp.local
+        depends_on:
+            - sp-master
+    sp-min2:
+        build: ./salt-minion/
+        hostname: sp-min2.sp.local
+        depends_on:
+            - sp-master

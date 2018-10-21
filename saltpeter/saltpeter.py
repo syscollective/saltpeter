@@ -85,19 +85,28 @@ def run(name,data,procname):
 
     log(cron=name, what='start', instance=procname, time=datetime.now())
     if 'number_of_targets' in data and data['number_of_targets'] != 0:
-        results = salt.cmd_subset(targets, 'cmd.run', cmdargs,\
-                tgt_type=target_type, sub=data['number_of_targets'],\
-                full_return=True)
+        try:
+            results = salt.cmd_subset(targets, 'cmd.run', cmdargs,\
+                    tgt_type=target_type, sub=data['number_of_targets'],\
+                    full_return=True)
+        except:
+            results = {}
     elif 'batch_size' in data and data['batch_size'] != 0:
-        generator = salt.cmd_batch(targets, 'cmd.run', cmdargs,\
-                tgt_type=target_type, batch=str(data['batch_size']), raw=True)
-        results = {}
-        for i in generator:
-            results[i['data']['id']] = { 'ret': i['data']['return'],\
-                    'retcode': i['data']['retcode'] }
+        try:
+            generator = salt.cmd_batch(targets, 'cmd.run', cmdargs,\
+                    tgt_type=target_type, batch=str(data['batch_size']), raw=True)
+            results = {}
+            for i in generator:
+                results[i['data']['id']] = { 'ret': i['data']['return'],\
+                        'retcode': i['data']['retcode'] }
+        except:
+            results = {}
     else:
-        results = salt.cmd(targets, 'cmd.run', cmdargs,\
-                tgt_type=target_type, full_return=True)
+        try:
+            results = salt.cmd(targets, 'cmd.run', cmdargs,\
+                    tgt_type=target_type, full_return=True)
+        except:
+            results = {}
 
     if len(results) > 0:
         for machine in results:
@@ -133,6 +142,7 @@ def log(what, cron, instance, time, machine='', code='', out='', status=''):
 
 
 def timeout(which, process):
+    global processlist
     if which == 'hard':
         print('Process %s is about to reach hard timeout! It will be killed soon!'\
                 % process.name)
@@ -155,6 +165,7 @@ def main():
 
     global bad_crons
     global bad_files
+    global processlist
     bad_crons = []
     bad_files = []
     last_run = {}
