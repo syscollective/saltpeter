@@ -1,4 +1,12 @@
-Developing using Docker:
+### Description:
+
+Saltpeter is a distributed cron implementation using salt as the remote execution layer.
+
+It reads configuration from yaml files in a folder specified by -c (default /etc/saltpeter).
+
+
+
+### Developing using Docker:
 
 There is an example docker-compose file in examples which starts 1 container with salt-master and saltpeter and 2 additional salt-minion containers.
 
@@ -11,7 +19,7 @@ cd examlples; docker-compose up
 The master should come up and automatically accept the 2 minions (or however many) when they come up. Saltpeter will attempt to run the jobs it finds in examples/config and produce logs on stdout and in examples/logs/*.log .
 
 
-Syntax:
+### Config syntax:
 
 ```
 example:
@@ -29,6 +37,11 @@ example:
 
     command: '/usr/bin/touch /tmp/example_cron; hostname -f'
 #command to run
+    user: 'root'
+#user to run the command as on the target machine
+
+    cwd: '/'
+#change to this dir before executing
 
     targets: 'lon123*'
 #expression to match target machines
@@ -50,5 +63,12 @@ example:
 #https://docs.saltstack.com/en/latest/topics/targeting/compound.html
 
     number_of_targets: 0
-#number of machines to execute on, optional, 0 means all
+#number of machines to execute on, optional, 0 means all;
+#if set to 1, it will execute on only 1 machine randomly chosen from the available targets
+
+    soft_timeout: 120
+    hard_timeout: 240
+# timeout values; soft_timeout is used only for monitoring purposes, it will only produce a line in the log so far
+# hard_timeout will actually kill the job when exceeded
+
 ```
