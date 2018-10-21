@@ -1,3 +1,16 @@
+Developing using Docker:
+
+There is an example docker-compose file in examples which starts 1 container with salt-master and saltpeter and 2 additional salt-minion containers.
+
+Just do:
+
+```
+cd examlples; docker-compose up
+```
+
+The master should come up and automatically accept the 2 minions (or however many) when they come up. Saltpeter will attempt to run the jobs it finds in examples/config and produce logs on stdout and in examples/logs/*.log .
+
+
 Syntax:
 
 ```
