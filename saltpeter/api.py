@@ -26,12 +26,12 @@ class GetGameByIdHandler(tornado.web.RequestHandler):
                      'release_date': date.today().isoformat() }
         self.write(response)
  
-def start(sh):
+def start(port, sh):
     application = tornado.web.Application([
         (r"/getgamebyid/([0-9]+)", GetGameByIdHandler),
         (r"/version", VersionHandler),
         (r"/shared", SharedHandler, dict(shared=sh))
     ])
-    application.listen(8888)
+    application.listen(port)
     print "api started"
     tornado.ioloop.IOLoop.instance().start()

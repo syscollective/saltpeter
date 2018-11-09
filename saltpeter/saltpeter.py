@@ -75,7 +75,7 @@ def parsecron(name,data):
     return ret
 
 
-def run(name,data,procname):
+def run(name,data,procname,sh):
     import salt.client
     salt = salt.client.LocalClient()
     targets = data['targets']
@@ -196,6 +196,14 @@ def main():
 
     parser.add_argument('-l', '--logdir', default='/var/log/saltpeter',\
             help='Log directory location')
+
+    parser.add_argument('-a', '--api', action='store_true' ,\
+            help='Start the http api')
+
+    parser.add_argument('-p', '--port', type=int, default=8888,\
+            help='HTTP api port')
+
+
     global args
     args = parser.parse_args()
 
@@ -208,16 +216,15 @@ def main():
     last_run = {}
     processlist = {}
 
-    #start the api
     manager = multiprocessing.Manager()
     sh = manager.dict()
-    plm = 0
-
     sh['count'] = 1
 
-    a = multiprocessing.Process(target=api.start, args=(sh,), name='api')
+    #start the api
+    if args.api:
 
-    a.start()
+        a = multiprocessing.Process(target=api.start, args=(args.port,sh), name='api')
+        a.start()
 
     while True:
 
@@ -233,7 +240,7 @@ def main():
                     procname = name+'_'+str(int(time.time()))
                     print('Firing %s!' % procname)
                     p = multiprocessing.Process(target=run,\
-                            args=(name,crons[name],procname), name=procname)
+                            args=(name,crons[name],procname,sh), name=procname)
                     processlist[procname] = {}
                     if result.has_key('soft_timeout'):
                         processlist[procname]['soft_timeout'] = \
