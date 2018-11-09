@@ -9,6 +9,11 @@ import time
 from datetime import datetime,timedelta
 from crontab import CronTab
 import multiprocessing
+import api
+import tornado.escape
+import tornado.ioloop
+import tornado.web
+
 
 
 def readconfig(configdir):
@@ -151,7 +156,38 @@ def timeout(which, process):
         print('Process %s reached soft timeout!' % process.name)
         processlist[process.name]['soft_timeout'] += timedelta(minutes=5)
 
+def startapi(sh):
+    application = tornado.web.Application([
+        (r"/getgamebyid/([0-9]+)", GetGameByIdHandler),
+        (r"/version", VersionHandler),
+        (r"/shared", SharedHandler, dict(shared=sh))
+    ])
+    application.listen(8888)
+    print "api started"
+    tornado.ioloop.IOLoop.instance().start()
 
+class VersionHandler(tornado.web.RequestHandler):
+    def get(self):
+        response = { 'version': '3.5.1',
+                     'last_build':  date.today().isoformat() }
+        self.write(response)
+
+class SharedHandler(tornado.web.RequestHandler):
+    def initialize(self, shared):
+        self.shared = shared
+    def get(self):
+        print type(self.shared)
+        response = self.shared.copy()
+        print response
+        self.write(response)
+ 
+class GetGameByIdHandler(tornado.web.RequestHandler):
+    def get(self, id):
+        response = { 'id': int(id),
+                     'name': 'Crazy Game',
+                     'release_date': date.today().isoformat() }
+        self.write(response)
+ 
 def main():
     parser = argparse.ArgumentParser()
 
@@ -166,10 +202,22 @@ def main():
     global bad_crons
     global bad_files
     global processlist
+    global sh
     bad_crons = []
     bad_files = []
     last_run = {}
     processlist = {}
+
+    #start the api
+    manager = multiprocessing.Manager()
+    sh = manager.dict()
+    plm = 0
+
+    sh['count'] = 1
+
+    a = multiprocessing.Process(target=api.start, args=(sh,), name='api')
+
+    a.start()
 
     while True:
 
@@ -196,6 +244,8 @@ def main():
                     p.start()
 
         time.sleep(0.5)
+    #    with sh.get_lock():
+        sh['count'] += 1
 
         #process cleanup and timeout enforcing
         processes = multiprocessing.active_children()

@@ -14,6 +14,7 @@ setup(name='saltpeter',
       install_requires=[
           'salt',
           'crontab',
-          'pyyaml'
+          'pyyaml',
+          'tornado'
       ],
       zip_safe=False)
