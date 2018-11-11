@@ -8,6 +8,8 @@ services:
             - ../:/opt/saltpeter
             - ./config:/etc/saltpeter
             - ./logs:/var/log/saltpeter
+        ports:
+            - 8888:8888
     sp-min1:
         build: ./salt-minion/
         hostname: sp-min1.sp.local
