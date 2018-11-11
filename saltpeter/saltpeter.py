@@ -156,38 +156,7 @@ def timeout(which, process):
         print('Process %s reached soft timeout!' % process.name)
         processlist[process.name]['soft_timeout'] += timedelta(minutes=5)
 
-def startapi(sh):
-    application = tornado.web.Application([
-        (r"/getgamebyid/([0-9]+)", GetGameByIdHandler),
-        (r"/version", VersionHandler),
-        (r"/shared", SharedHandler, dict(shared=sh))
-    ])
-    application.listen(8888)
-    print "api started"
-    tornado.ioloop.IOLoop.instance().start()
 
-class VersionHandler(tornado.web.RequestHandler):
-    def get(self):
-        response = { 'version': '3.5.1',
-                     'last_build':  date.today().isoformat() }
-        self.write(response)
-
-class SharedHandler(tornado.web.RequestHandler):
-    def initialize(self, shared):
-        self.shared = shared
-    def get(self):
-        print type(self.shared)
-        response = self.shared.copy()
-        print response
-        self.write(response)
- 
-class GetGameByIdHandler(tornado.web.RequestHandler):
-    def get(self, id):
-        response = { 'id': int(id),
-                     'name': 'Crazy Game',
-                     'release_date': date.today().isoformat() }
-        self.write(response)
- 
 def main():
     parser = argparse.ArgumentParser()
 
@@ -219,7 +188,8 @@ def main():
     manager = multiprocessing.Manager()
     sh = manager.dict()
     sh['count'] = 1
-
+    sh['running'] = manager.dict()
+    
     #start the api
     if args.api:
 
@@ -227,7 +197,7 @@ def main():
         a.start()
 
     while True:
-
+        
         crons = readconfig(args.configdir)
         for name in crons:
             result = parsecron(name,crons[name])
@@ -239,6 +209,8 @@ def main():
                     last_run[name] = datetime.utcnow()
                     procname = name+'_'+str(int(time.time()))
                     print('Firing %s!' % procname)
+                    sh['time'] = str(datetime.utcnow())
+                    sh['running'][procname] = {'name': name}
                     p = multiprocessing.Process(target=run,\
                             args=(name,crons[name],procname,sh), name=procname)
                     processlist[procname] = {}
@@ -249,10 +221,9 @@ def main():
                         processlist[procname]['hard_timeout'] = \
                                 datetime.now()+timedelta(seconds = result['hard_timeout']-1)
                     p.start()
-
         time.sleep(0.5)
-    #    with sh.get_lock():
         sh['count'] += 1
+    #    with sh.get_lock():
 
         #process cleanup and timeout enforcing
         processes = multiprocessing.active_children()
@@ -270,6 +241,7 @@ def main():
             if found == False:
                 print('Deleting process %s as it must have finished' % entry)
                 del(processlist[entry])
+                #del(sh['running'][entry])
 
 
 if __name__ == "__main__":
