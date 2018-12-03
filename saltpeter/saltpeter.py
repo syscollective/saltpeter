@@ -179,7 +179,6 @@ def main():
     global bad_crons
     global bad_files
     global processlist
-    global sh
     bad_crons = []
     bad_files = []
     last_run = {}
@@ -187,13 +186,13 @@ def main():
 
     manager = multiprocessing.Manager()
     sh = manager.dict()
+    running = manager.dict()
     sh['count'] = 1
-    sh['running'] = manager.dict()
     
     #start the api
     if args.api:
 
-        a = multiprocessing.Process(target=api.start, args=(args.port,sh), name='api')
+        a = multiprocessing.Process(target=api.start, args=(args.port,sh,running), name='api')
         a.start()
 
     while True:
@@ -210,7 +209,8 @@ def main():
                     procname = name+'_'+str(int(time.time()))
                     print('Firing %s!' % procname)
                     sh['time'] = str(datetime.utcnow())
-                    sh['running'][procname] = {'name': name}
+                    running[procname]=  { 'last_run': str(last_run[name]), 'name': name}
+
                     p = multiprocessing.Process(target=run,\
                             args=(name,crons[name],procname,sh), name=procname)
                     processlist[procname] = {}
@@ -241,7 +241,8 @@ def main():
             if found == False:
                 print('Deleting process %s as it must have finished' % entry)
                 del(processlist[entry])
-                #del(sh['running'][entry])
+                del(running[entry])
+        #print running
 
 
 if __name__ == "__main__":
