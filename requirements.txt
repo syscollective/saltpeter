@@ -2,3 +2,4 @@ salt
 crontab
 pyyaml
 tornado
+elasticsearch

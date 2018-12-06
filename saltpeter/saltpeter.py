@@ -6,15 +6,10 @@ import argparse
 import re
 import yaml
 import time
-from datetime import datetime,timedelta
+from datetime import datetime,timedelta,date
 from crontab import CronTab
 import multiprocessing
 import api
-import tornado.escape
-import tornado.ioloop
-import tornado.web
-
-
 
 def readconfig(configdir):
     global bad_files
@@ -145,6 +140,16 @@ def log(what, cron, instance, time, machine='', code='', out='', status=''):
     logfile.flush()
     logfile.close()
 
+    if use_es:
+        doc = { 'job_name': cron, "job_instance": instance, '@timestamp': time,\
+                'return_code': code, 'machine': machine, 'output': out, 'msg_type': what } 
+        index_name = 'saltpeter-%s' % date.today().strftime('%Y.%m.%d')
+        try:
+            #es.indices.create(index=index_name, ignore=400)
+            es.index(index=index_name, doc_type='saltpeter', body=doc)
+        except:
+            print "Can't write to elasticsearch"
+
 
 def timeout(which, process):
     global processlist
@@ -172,6 +177,12 @@ def main():
     parser.add_argument('-p', '--port', type=int, default=8888,\
             help='HTTP api port')
 
+    parser.add_argument('-e', '--elasticsearch', default='',\
+            help='Elasticsearch host')
+
+    parser.add_argument('-i', '--index', default='saltpeter',\
+            help='Elasticsearch index name')
+
 
     global args
     args = parser.parse_args()
@@ -179,6 +190,8 @@ def main():
     global bad_crons
     global bad_files
     global processlist
+    global use_es
+    use_es = False
     bad_crons = []
     bad_files = []
     last_run = {}
@@ -191,10 +204,16 @@ def main():
     
     #start the api
     if args.api:
-
         a = multiprocessing.Process(target=api.start, args=(args.port,sh,running), name='api')
         a.start()
 
+    if args.elasticsearch != '':
+        from elasticsearch import Elasticsearch
+        use_es = True
+        global es
+        es = Elasticsearch(args.elasticsearch)
+
+    #main loop
     while True:
         
         crons = readconfig(args.configdir)
