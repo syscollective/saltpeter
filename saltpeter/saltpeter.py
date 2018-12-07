@@ -94,6 +94,7 @@ def run(name,data,procname,running):
         random.shuffle(minions)
         targets_list = minions[:data['number_of_targets']]
 
+    print 'targets:', targets_list
     if 'batch_size' in data and data['batch_size'] != 0:
         chunk = []
         count = 0
@@ -107,11 +108,13 @@ def run(name,data,procname,running):
                     generator = salt.cmd_iter(chunk, 'cmd.run', cmdargs,
                             tgt_type='list', raw=True)
                     for i in generator:
-                        results[i['data']['id']] = { 'ret': i['data']['return'],
-                                'retcode': i['data']['retcode'], 'endtime': datetime.utcnow() }
-                        running[procname]['machines'].remove(i['data']['id'])
-                    chunk = []
-                except:
+                m = i.keys()[0]
+                r = i[m]['retcode']
+                o = i[m]['ret']
+                results[m] = { 'ret': o, 'retcode': r, 'endtime': datetime.utcnow() }
+                running[procname]['machines'].remove(m)
+                except Exception as e:
+                    print 'Exception triggered in run() at "batch_size" condition', e
                     chunk = []
     else:
         running[procname]=  { 'started': str(now), 'name': name, 'machines': targets_list }
@@ -120,11 +123,13 @@ def run(name,data,procname,running):
                     tgt_type='list', full_return=True)
             results = {}
             for i in generator:
-                results[i['data']['id']] = { 'ret': i['data']['return'],
-                        'retcode': i['data']['retcode'], 'endtime': datetime.utcnow() }
-                running[procname]['machines'].remove(i['data']['id'])
-        except:
-            results = {}
+                m = i.keys()[0]
+                r = i[m]['retcode']
+                o = i[m]['ret']
+                results[m] = { 'ret': o, 'retcode': r, 'endtime': datetime.utcnow() }
+                running[procname]['machines'].remove(m)
+        except Exception as e:
+            print 'Exception triggered in run()', e
 
     if len(results) > 0:
         for machine in results:
