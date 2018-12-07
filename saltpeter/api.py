@@ -10,13 +10,13 @@ class VersionHandler(tornado.web.RequestHandler):
                      'last_build':  date.today().isoformat() }
         self.write(response)
 
-class RunningHandler(tornado.web.RequestHandler):
-    def initialize(self, running):
-        self.running = running
+class DictReturner(tornado.web.RequestHandler):
+    def initialize(self, content):
+        self.content = content
     def get(self):
-        response = self.running.copy()
+        response = self.content.copy()
         self.write(response)
- 
+
 class GetGameByIdHandler(tornado.web.RequestHandler):
     def get(self, id):
         response = { 'id': int(id),
@@ -24,11 +24,12 @@ class GetGameByIdHandler(tornado.web.RequestHandler):
                      'release_date': date.today().isoformat() }
         self.write(response)
  
-def start(port, sh, running):
+def start(port, config, running):
     application = tornado.web.Application([
         (r"/getgamebyid/([0-9]+)", GetGameByIdHandler),
         (r"/version", VersionHandler),
-        (r"/running", RunningHandler, dict(running=running))
+        (r"/config", DictReturner, dict(content=config)),
+        (r"/running", DictReturner, dict(content=running))
     ])
     application.listen(port)
     print "api started"

@@ -66,11 +66,11 @@ def parsecron(name,data):
 
     if name in bad_crons:
         bad_crons.remove(name)
-    ret['nextrun'] = entry.next(now=datetime.now()-timedelta(seconds=1),default_utc=True)
+    ret['nextrun'] = entry.next(now=datetime.utcnow()-timedelta(seconds=1),default_utc=True)
     return ret
 
 
-def run(name,data,procname,sh):
+def run(name,data,procname,running):
     import salt.client
     salt = salt.client.LocalClient()
     targets = data['targets']
@@ -83,28 +83,51 @@ def run(name,data,procname,sh):
     if 'hard_timeout' in data:
         cmdargs.append('timeout='+str(data['hard_timeout']))
 
-    log(cron=name, what='start', instance=procname, time=datetime.now())
+    now = datetime.utcnow()
+    debuglog('started'+str(now)+'\n')
+    log(cron=name, what='start', instance=procname, time=now)
+    minion_ret = salt.cmd(targets, 'test.ping', tgt_type=target_type)
+    debuglog('minion_ret '+str(minion_ret)+'\n')
+    minions = list(minion_ret)
+    debuglog('minions '+str(minions)+'\n')
+    targets_list = minions
+    debuglog('targets '+str(targets_list)+'\n')
+
     if 'number_of_targets' in data and data['number_of_targets'] != 0:
+        import random
+        random.shuffle(minions)
+        targets_list = minions[:data['number_of_targets']]
+
+    if 'batch_size' in data and data['batch_size'] != 0:
+        chunk = []
+        count = 0
+        results = {}
+        for t in targets_list:
+            count += 1
+            chunk.append(t)
+            if len(chunk) == data['batch_size'] or count == len(targets_list):
+                running[procname]=  { 'started': str(now), 'name': name, 'machines': chunk }
+                try:
+                    generator = salt.cmd_iter(chunk, 'cmd.run', cmdargs,
+                            tgt_type='list', raw=True)
+                    for i in generator:
+                        results[i['data']['id']] = { 'ret': i['data']['return'],
+                                'retcode': i['data']['retcode'] }
+                        running[procname]['machines'].remove(i['data']['id'])
+                    chunk = []
+                except:
+                    chunk = []
+    else:
+        running[procname]=  { 'started': str(now), 'name': name, 'machines': targets_list}
         try:
-            results = salt.cmd_subset(targets, 'cmd.run', cmdargs,\
-                    tgt_type=target_type, sub=data['number_of_targets'],\
-                    full_return=True)
-        except:
-            results = {}
-    elif 'batch_size' in data and data['batch_size'] != 0:
-        try:
-            generator = salt.cmd_batch(targets, 'cmd.run', cmdargs,\
-                    tgt_type=target_type, batch=str(data['batch_size']), raw=True)
+            debuglog('targets after '+str(targets_list)+'\n')
+            generator = salt.cmd_iter(targets_list, 'cmd.run', cmdargs,
+                    tgt_type='list', full_return=True)
             results = {}
             for i in generator:
-                results[i['data']['id']] = { 'ret': i['data']['return'],\
+                results[i['data']['id']] = { 'ret': i['data']['return'],
                         'retcode': i['data']['retcode'] }
-        except:
-            results = {}
-    else:
-        try:
-            results = salt.cmd(targets, 'cmd.run', cmdargs,\
-                    tgt_type=target_type, full_return=True)
+                running[procname]['machines'].remove(i['data']['id'])
         except:
             results = {}
 
@@ -112,15 +135,21 @@ def run(name,data,procname,sh):
         for machine in results:
             #check if result is Bool in a probably retarded way
             if type(results[machine]) == type(True):
-                                log(what='machine_result',cron=name, instance=procname, machine=machine,\
-                                                code=1, out='Bool output: %r' % results[machine],\
-                                                time=datetime.now())
+                log(what='machine_result',cron=name, instance=procname, machine=machine,
+                        code=1, out='Bool output: %r' % results[machine],
+                        time=datetime.now())
             else:
-                log(what='machine_result',cron=name, instance=procname, machine=machine,\
-                                                code=results[machine]['retcode'], out=results[machine]['ret'],\
-                                                time=datetime.now())
+                log(what='machine_result',cron=name, instance=procname, machine=machine,
+                        code=results[machine]['retcode'], out=results[machine]['ret'],
+                        time=datetime.now())
     else:
         log(cron=name, what='no_machines', instance=procname, time=datetime.now())
+
+def debuglog(content):
+    logfile = open(args.logdir+'/'+'debug.log','a')
+    logfile.write(content)
+    logfile.flush()
+    logfile.close()
 
 
 def log(what, cron, instance, time, machine='', code='', out='', status=''):
@@ -141,7 +170,7 @@ def log(what, cron, instance, time, machine='', code='', out='', status=''):
     logfile.close()
 
     if use_es:
-        doc = { 'job_name': cron, "job_instance": instance, '@timestamp': time,\
+        doc = { 'job_name': cron, "job_instance": instance, '@timestamp': time,
                 'return_code': code, 'machine': machine, 'output': out, 'msg_type': what } 
         index_name = 'saltpeter-%s' % date.today().strftime('%Y.%m.%d')
         try:
@@ -198,13 +227,12 @@ def main():
     processlist = {}
 
     manager = multiprocessing.Manager()
-    sh = manager.dict()
     running = manager.dict()
-    sh['count'] = 1
+    config = manager.dict()
     
     #start the api
     if args.api:
-        a = multiprocessing.Process(target=api.start, args=(args.port,sh,running), name='api')
+        a = multiprocessing.Process(target=api.start, args=(args.port,config,running,), name='api')
         a.start()
 
     if args.elasticsearch != '':
@@ -216,9 +244,9 @@ def main():
     #main loop
     while True:
         
-        crons = readconfig(args.configdir)
-        for name in crons:
-            result = parsecron(name,crons[name])
+        config['crons'] = readconfig(args.configdir)
+        for name in config['crons']:
+            result = parsecron(name,config['crons'][name])
             if result == False:
                 continue
             if result['nextrun'] < 1:
@@ -227,22 +255,19 @@ def main():
                     last_run[name] = datetime.utcnow()
                     procname = name+'_'+str(int(time.time()))
                     print('Firing %s!' % procname)
-                    sh['time'] = str(datetime.utcnow())
-                    running[procname]=  { 'last_run': str(last_run[name]), 'name': name}
 
+                    #running[procname] = {'empty': True}
                     p = multiprocessing.Process(target=run,\
-                            args=(name,crons[name],procname,sh), name=procname)
+                            args=(name,config['crons'][name],procname,running), name=procname)
                     processlist[procname] = {}
                     if result.has_key('soft_timeout'):
                         processlist[procname]['soft_timeout'] = \
-                                datetime.now()+timedelta(seconds = result['soft_timeout'])
+                                datetime.utcnow()+timedelta(seconds = result['soft_timeout'])
                     if result.has_key('hard_timeout'):
                         processlist[procname]['hard_timeout'] = \
-                                datetime.now()+timedelta(seconds = result['hard_timeout']-1)
+                                datetime.utcnow()+timedelta(seconds = result['hard_timeout']-1)
                     p.start()
         time.sleep(0.5)
-        sh['count'] += 1
-    #    with sh.get_lock():
 
         #process cleanup and timeout enforcing
         processes = multiprocessing.active_children()
@@ -252,15 +277,16 @@ def main():
                 if entry == process.name:
                     found = True
                     if processlist[entry].has_key('soft_timeout') and \
-                            processlist[entry]['soft_timeout'] < datetime.now():
+                            processlist[entry]['soft_timeout'] < datetime.utcnow():
                         timeout('soft',process)
                     if processlist[entry].has_key('hard_timeout') and \
-                            processlist[entry]['hard_timeout'] < datetime.now():
+                            processlist[entry]['hard_timeout'] < datetime.utcnow():
                         timeout('hard',process)
             if found == False:
                 print('Deleting process %s as it must have finished' % entry)
                 del(processlist[entry])
-                del(running[entry])
+                if running.has_key(entry):
+                    del(running[entry])
         #print running
 
 
