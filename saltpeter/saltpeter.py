@@ -153,6 +153,8 @@ def log(what, cron, instance, time, machine='', code='', out='', status=''):
         content = "###### Starting %s at %s ################\n" % (instance, time)
     elif what == 'no_machines':
         content = "!!!!!! No targets matched for %s !!!!!!\n" % instance
+    elif what == 'end':
+        content = "###### Finished %s at %s ################\n" % (instance, time)
     else:
         content = """########## %s from %s ################
 **** Exit Code %d ******
@@ -279,6 +281,9 @@ def main():
                         timeout('hard',process)
             if found == False:
                 print('Deleting process %s as it must have finished' % entry)
+                name = entry.split('_')[0]
+                log(cron=name, what='end', instance=entry, time=datetime.utcnow())
+
                 del(processlist[entry])
                 if running.has_key(entry):
                     del(running[entry])
