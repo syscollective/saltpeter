@@ -84,14 +84,10 @@ def run(name,data,procname,running):
         cmdargs.append('timeout='+str(data['hard_timeout']))
 
     now = datetime.utcnow()
-    debuglog('started'+str(now)+'\n')
     log(cron=name, what='start', instance=procname, time=now)
     minion_ret = salt.cmd(targets, 'test.ping', tgt_type=target_type)
-    debuglog('minion_ret '+str(minion_ret)+'\n')
     minions = list(minion_ret)
-    debuglog('minions '+str(minions)+'\n')
     targets_list = minions
-    debuglog('targets '+str(targets_list)+'\n')
 
     if 'number_of_targets' in data and data['number_of_targets'] != 0:
         import random
@@ -112,21 +108,20 @@ def run(name,data,procname,running):
                             tgt_type='list', raw=True)
                     for i in generator:
                         results[i['data']['id']] = { 'ret': i['data']['return'],
-                                'retcode': i['data']['retcode'] }
+                                'retcode': i['data']['retcode'], 'endtime': datetime.utcnow() }
                         running[procname]['machines'].remove(i['data']['id'])
                     chunk = []
                 except:
                     chunk = []
     else:
-        running[procname]=  { 'started': str(now), 'name': name, 'machines': targets_list}
+        running[procname]=  { 'started': str(now), 'name': name, 'machines': targets_list }
         try:
-            debuglog('targets after '+str(targets_list)+'\n')
             generator = salt.cmd_iter(targets_list, 'cmd.run', cmdargs,
                     tgt_type='list', full_return=True)
             results = {}
             for i in generator:
                 results[i['data']['id']] = { 'ret': i['data']['return'],
-                        'retcode': i['data']['retcode'] }
+                        'retcode': i['data']['retcode'], 'endtime': datetime.utcnow() }
                 running[procname]['machines'].remove(i['data']['id'])
         except:
             results = {}
@@ -137,11 +132,11 @@ def run(name,data,procname,running):
             if type(results[machine]) == type(True):
                 log(what='machine_result',cron=name, instance=procname, machine=machine,
                         code=1, out='Bool output: %r' % results[machine],
-                        time=datetime.now())
+                        time=results[machine]['endtime'])
             else:
                 log(what='machine_result',cron=name, instance=procname, machine=machine,
                         code=results[machine]['retcode'], out=results[machine]['ret'],
-                        time=datetime.now())
+                        time=results[machine]['endtime'])
     else:
         log(cron=name, what='no_machines', instance=procname, time=datetime.now())
 
