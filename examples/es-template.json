@@ -1,0 +1,58 @@
+{
+  "index_patterns": ["saltpeter*"],
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 2
+  },
+  "mappings": {
+    "saltpeter": {
+      "properties": {
+        "job_name": {
+        "type": "text",
+          "fields": {
+            "keyword": {
+              "ignore_above": 256,
+              "type": "keyword"
+            }
+          }
+        },
+        "@timestamp": {
+          "type": "date"
+        },
+        "output": {
+          "type": "text"
+        },
+        "return_code": {
+          "type": "integer"
+        },
+        "job_instance": {
+          "type": "text",
+          "fields": {
+            "keyword": {
+            "ignore_above": 256,
+            "type": "keyword"
+            }
+          }
+        },
+        "msg_type": {
+          "type": "text",
+          "fields": {
+            "keyword": {
+            "ignore_above": 256,
+            "type": "keyword"
+            }
+          }
+        },
+        "machine": {
+          "type": "text",
+          "fields": {
+            "keyword": {
+            "ignore_above": 256,
+            "type": "keyword"
+            }
+          }
+        }
+      }
+    }
+  }
+}
