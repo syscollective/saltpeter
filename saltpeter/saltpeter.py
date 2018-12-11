@@ -94,7 +94,6 @@ def run(name,data,procname,running):
         random.shuffle(minions)
         targets_list = minions[:data['number_of_targets']]
 
-    print 'targets:', targets_list
     if 'batch_size' in data and data['batch_size'] != 0:
         chunk = []
         count = 0
@@ -106,13 +105,14 @@ def run(name,data,procname,running):
                 running[procname]=  { 'started': str(now), 'name': name, 'machines': chunk }
                 try:
                     generator = salt.cmd_iter(chunk, 'cmd.run', cmdargs,
-                            tgt_type='list', raw=True)
+                            tgt_type='list', full_return=True)
                     for i in generator:
-                m = i.keys()[0]
-                r = i[m]['retcode']
-                o = i[m]['ret']
-                results[m] = { 'ret': o, 'retcode': r, 'endtime': datetime.utcnow() }
-                running[procname]['machines'].remove(m)
+                        #print "Generator item: ", chunk, i
+                        m = i.keys()[0]
+                        r = i[m]['retcode']
+                        o = i[m]['ret']
+                        results[m] = { 'ret': o, 'retcode': r, 'endtime': datetime.utcnow() }
+                        running[procname]['machines'].remove(m)
                 except Exception as e:
                     print 'Exception triggered in run() at "batch_size" condition', e
                     chunk = []
@@ -123,6 +123,7 @@ def run(name,data,procname,running):
                     tgt_type='list', full_return=True)
             results = {}
             for i in generator:
+                #print "Generator item that works: ", targets_list, i
                 m = i.keys()[0]
                 r = i[m]['retcode']
                 o = i[m]['ret']
@@ -152,7 +153,7 @@ def debuglog(content):
     logfile.close()
 
 
-def log(what, cron, instance, time, machine='', code='', out='', status=''):
+def log(what, cron, instance, time, machine='', code=0, out='', status=''):
     logfile = open(args.logdir+'/'+cron+'.log','a')
     if what == 'start':
         content = "###### Starting %s at %s ################\n" % (instance, time)
@@ -177,9 +178,10 @@ def log(what, cron, instance, time, machine='', code='', out='', status=''):
         index_name = 'saltpeter-%s' % date.today().strftime('%Y.%m.%d')
         try:
             #es.indices.create(index=index_name, ignore=400)
-            es.index(index=index_name, doc_type='saltpeter', body=doc)
-        except:
-            print "Can't write to elasticsearch"
+            es.index(index=index_name, doc_type='saltpeter', body=doc, request_timeout=20)
+        except Exception as e:
+            print "Can't write to elasticsearch", doc
+            print e
 
 
 def timeout(which, process):
@@ -241,7 +243,7 @@ def main():
         from elasticsearch import Elasticsearch
         use_es = True
         global es
-        es = Elasticsearch(args.elasticsearch)
+        es = Elasticsearch(args.elasticsearch,maxsize=50)
 
     #main loop
     while True:
