@@ -14,6 +14,8 @@ setup(name='saltpeter',
       install_requires=[
           'salt',
           'crontab',
-          'pyyaml'
+          'pyyaml',
+          'tornado',
+          'elasticsearch'
       ],
       zip_safe=False)
