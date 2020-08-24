@@ -8,13 +8,17 @@ COPY ./ /opt/saltpeter/
 RUN apt-get update && \
     apt-get install -y -o DPkg::Options::=--force-confold wget
 
-RUN wget -O - https://repo.saltstack.com/apt/ubuntu/16.04/amd64/latest/SALTSTACK-GPG-KEY.pub | apt-key add - && \
-    echo 'deb http://repo.saltstack.com/apt/ubuntu/16.04/amd64/latest xenial main' > /etc/apt/sources.list.d/saltstack.list && \
+RUN wget -O - https://repo.saltstack.com/apt/ubuntu/16.04/amd64/2019.2/SALTSTACK-GPG-KEY.pub | apt-key add - &&\
+    echo 'deb http://repo.saltstack.com/apt/ubuntu/16.04/amd64/2019.2 xenial main' > /etc/apt/sources.list.d/saltstack.list && \
     apt-get update
+
+#RUN wget -O - https://repo.saltstack.com/apt/ubuntu/16.04/amd64/latest/SALTSTACK-GPG-KEY.pub | apt-key add - && \
+#    echo 'deb http://repo.saltstack.com/apt/ubuntu/16.04/amd64/latest xenial main' > /etc/apt/sources.list.d/saltstack.list && \
+#    apt-get update
 
 # Install Salt master and minion
 RUN apt-get install -y -o DPkg::Options::=--force-confold \
-	salt-master
+	salt-master salt-minion
 
 # Install pip and python-dev
 RUN apt-get install -y -o DPkg::Options::=--force-confold \
@@ -23,6 +27,7 @@ RUN apt-get install -y -o DPkg::Options::=--force-confold \
 # Configure salt master
 RUN echo "auto_accept: True" > /etc/salt/master.d/auto_accept.conf
 #RUN echo "master: saltpeter-master" > /etc/salt/minion.d/masters.conf
+RUN echo "master: sp-master" > /etc/salt/minion.d/masters.conf
 
 # Install Saltperer's dependencies
 RUN pip install -r /opt/saltpeter/requirements.txt

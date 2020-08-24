@@ -3,6 +3,7 @@ version: '3'
 services:
     sp-master:
         build: ../
+        image: saltpeter
         hostname: sp-master.sp.local
         volumes:
             - ../:/opt/saltpeter
@@ -11,12 +12,14 @@ services:
         ports:
             - 8888:8888
     sp-min1:
-        build: ./salt-minion/
+        image: saltpeter:latest
         hostname: sp-min1.sp.local
+        entrypoint: ["/usr/bin/salt-minion", "-l", "info"]
         depends_on:
             - sp-master
     sp-min2:
-        build: ./salt-minion/
+        image: saltpeter:latest
         hostname: sp-min2.sp.local
+        entrypoint: ["/usr/bin/salt-minion", "-l", "info"]
         depends_on:
             - sp-master
