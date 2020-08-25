@@ -22,6 +22,16 @@ class VersionHandler(tornado.web.RequestHandler):
         self.finish()
 
 class DictReturner(tornado.web.RequestHandler):
+    def set_default_headers(self):
+        print "setting headers!!!"
+        self.set_header("Access-Control-Allow-Origin", "*")
+        self.set_header("Access-Control-Allow-Headers", "x-requested-with")
+        self.set_header('Access-Control-Allow-Methods', 'GET, OPTIONS')
+    def options(self):
+        # no body
+        self.set_status(204)
+        self.finish()
+
     def initialize(self, content):
         self.content = content
     def get(self):
