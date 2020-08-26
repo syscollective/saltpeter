@@ -5,12 +5,33 @@ import tornado.web
 from multiprocessing import Manager
  
 class VersionHandler(tornado.web.RequestHandler):
+    def set_default_headers(self):
+        print "setting headers!!!"
+        self.set_header("Access-Control-Allow-Origin", "*")
+        self.set_header("Access-Control-Allow-Headers", "DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range")
+        self.set_header('Access-Control-Allow-Methods', 'GET, OPTIONS')
+
     def get(self):
         response = { 'version': '3.5.1',
                      'last_build':  date.today().isoformat() }
         self.write(response)
 
+    def options(self):
+        # no body
+        self.set_status(204)
+        self.finish()
+
 class DictReturner(tornado.web.RequestHandler):
+    def set_default_headers(self):
+        print "setting headers!!!"
+        self.set_header("Access-Control-Allow-Origin", "*")
+        self.set_header("Access-Control-Allow-Headers", "DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range")
+        self.set_header('Access-Control-Allow-Methods', 'GET, OPTIONS')
+    def options(self):
+        # no body
+        self.set_status(204)
+        self.finish()
+
     def initialize(self, content):
         self.content = content
     def get(self):
