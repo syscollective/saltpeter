@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 import json
 import os
@@ -114,7 +114,7 @@ def run(name,data,procname,running):
                         results[m] = { 'ret': o, 'retcode': r, 'endtime': datetime.utcnow() }
                         running[procname]['machines'].remove(m)
                 except Exception as e:
-                    print 'Exception triggered in run() at "batch_size" condition', e
+                    print('Exception triggered in run() at "batch_size" condition', e)
                     chunk = []
     else:
         running[procname]=  { 'started': str(now), 'name': name, 'machines': targets_list }
@@ -123,14 +123,13 @@ def run(name,data,procname,running):
                     tgt_type='list', full_return=True)
             results = {}
             for i in generator:
-                #print "Generator item that works: ", targets_list, i
                 m = i.keys()[0]
                 r = i[m]['retcode']
                 o = i[m]['ret']
                 results[m] = { 'ret': o, 'retcode': r, 'endtime': datetime.utcnow() }
                 running[procname]['machines'].remove(m)
         except Exception as e:
-            print 'Exception triggered in run()', e
+            print('Exception triggered in run()', e)
 
     if len(results) > 0:
         for machine in results:
@@ -180,8 +179,8 @@ def log(what, cron, instance, time, machine='', code=0, out='', status=''):
             #es.indices.create(index=index_name, ignore=400)
             es.index(index=index_name, doc_type='saltpeter', body=doc, request_timeout=20)
         except Exception as e:
-            print "Can't write to elasticsearch", doc
-            print e
+            print("Can't write to elasticsearch", doc)
+            print(e)
 
 
 def timeout(which, process):
@@ -264,10 +263,10 @@ def main():
                     p = multiprocessing.Process(target=run,\
                             args=(name,config['crons'][name],procname,running), name=procname)
                     processlist[procname] = {}
-                    if result.has_key('soft_timeout'):
+                    if 'soft_timeout' in result:
                         processlist[procname]['soft_timeout'] = \
                                 datetime.utcnow()+timedelta(seconds = result['soft_timeout'])
-                    if result.has_key('hard_timeout'):
+                    if 'hard_timeout' in result:
                         processlist[procname]['hard_timeout'] = \
                                 datetime.utcnow()+timedelta(seconds = result['hard_timeout']-1)
                     p.start()
@@ -280,10 +279,10 @@ def main():
             for process in processes:
                 if entry == process.name:
                     found = True
-                    if processlist[entry].has_key('soft_timeout') and \
+                    if 'soft_timeout' in processlist[entry]  and \
                             processlist[entry]['soft_timeout'] < datetime.utcnow():
                         timeout('soft',process)
-                    if processlist[entry].has_key('hard_timeout') and \
+                    if 'hard_timeout' in processlist[entry] and \
                             processlist[entry]['hard_timeout'] < datetime.utcnow():
                         timeout('hard',process)
             if found == False:
@@ -292,7 +291,7 @@ def main():
                 log(cron=name, what='end', instance=entry, time=datetime.utcnow())
 
                 del(processlist[entry])
-                if running.has_key(entry):
+                if entry in running:
                     del(running[entry])
         #print running
 

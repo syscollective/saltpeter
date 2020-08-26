@@ -1,5 +1,5 @@
 salt
 crontab
 pyyaml
-tornado==4.2
+tornado
 elasticsearch

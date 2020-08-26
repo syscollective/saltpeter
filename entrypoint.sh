@@ -2,4 +2,8 @@
 
 /usr/bin/salt-master -d
 
-/opt/saltpeter/saltpeter/saltpeter.py -a -p 8888
+while true
+do
+    sleep 2
+    /opt/saltpeter/saltpeter/saltpeter.py -a -p 8888
+done
