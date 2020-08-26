@@ -6,7 +6,6 @@ from multiprocessing import Manager
  
 class VersionHandler(tornado.web.RequestHandler):
     def set_default_headers(self):
-        print "setting headers!!!"
         self.set_header("Access-Control-Allow-Origin", "*")
         self.set_header("Access-Control-Allow-Headers", "DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range")
         self.set_header('Access-Control-Allow-Methods', 'GET, OPTIONS')
@@ -23,7 +22,6 @@ class VersionHandler(tornado.web.RequestHandler):
 
 class DictReturner(tornado.web.RequestHandler):
     def set_default_headers(self):
-        print "setting headers!!!"
         self.set_header("Access-Control-Allow-Origin", "*")
         self.set_header("Access-Control-Allow-Headers", "DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range")
         self.set_header('Access-Control-Allow-Methods', 'GET, OPTIONS')
@@ -53,5 +51,4 @@ def start(port, config, running):
         (r"/running", DictReturner, dict(content=running))
     ])
     application.listen(port)
-    print "api started"
     tornado.ioloop.IOLoop.instance().start()
