@@ -108,7 +108,7 @@ def run(name,data,procname,running):
                             tgt_type='list', full_return=True)
                     for i in generator:
                         #print "Generator item: ", chunk, i
-                        m = i.keys()[0]
+                        m = list(i)[0]
                         r = i[m]['retcode']
                         o = i[m]['ret']
                         results[m] = { 'ret': o, 'retcode': r, 'endtime': datetime.utcnow() }
@@ -123,7 +123,7 @@ def run(name,data,procname,running):
                     tgt_type='list', full_return=True)
             results = {}
             for i in generator:
-                m = i.keys()[0]
+                m = list(i)[0]
                 r = i[m]['retcode']
                 o = i[m]['ret']
                 results[m] = { 'ret': o, 'retcode': r, 'endtime': datetime.utcnow() }
