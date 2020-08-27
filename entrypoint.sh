@@ -5,5 +5,5 @@
 while true
 do
     sleep 2
-    /opt/saltpeter/saltpeter/main.py -a -p 8888
+    PYTHONPATH=/opt/saltpeter /opt/saltpeter/saltpeter/main.py -a -p 8888
 done
