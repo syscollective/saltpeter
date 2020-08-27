@@ -9,7 +9,7 @@ setup(name='saltpeter',
       license='MIT',
       packages=['saltpeter'],
       entry_points = {
-          'console_scripts': ['saltpeter=saltpeter.saltpeter:main'],
+          'console_scripts': ['saltpeter=saltpeter.main:main'],
       },
       install_requires=[
           'salt',

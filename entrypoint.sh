@@ -5,5 +5,5 @@
 while true
 do
     sleep 2
-    /opt/saltpeter/saltpeter/saltpeter.py -a -p 8888
+    /opt/saltpeter/saltpeter/main.py -a -p 8888
 done

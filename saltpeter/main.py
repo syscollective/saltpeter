@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+from saltpeter import api
 import json
 import os
 import argparse
@@ -9,7 +10,6 @@ import time
 from datetime import datetime,timedelta,date
 from crontab import CronTab
 import multiprocessing
-import api
 
 def readconfig(configdir):
     global bad_files
