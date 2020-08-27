@@ -1,0 +1,13 @@
+[Unit]
+Description=Saltpeter distributed scheduled execution tool
+
+[Service]
+User=root
+#WorkingDirectory=/opt/saltpeter/
+ExecStart=/usr/local/bin/saltpeter -a -p 8888
+Restart=on-failure
+KillSignal=SIGTERM
+SyslogIdentifier=saltpeter
+
+[Install]
+WantedBy=multi-user.target
