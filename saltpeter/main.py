@@ -177,7 +177,7 @@ def log(what, cron, instance, time, machine='', code=0, out='', status=''):
         index_name = 'saltpeter-%s' % date.today().strftime('%Y.%m.%d')
         try:
             #es.indices.create(index=index_name, ignore=400)
-            es.index(index=index_name, doc_type='saltpeter', body=doc, request_timeout=20)
+            es.index(index=index_name, doc_type='_doc', body=doc, request_timeout=20)
         except Exception as e:
             print("Can't write to elasticsearch", doc)
             print(e)
