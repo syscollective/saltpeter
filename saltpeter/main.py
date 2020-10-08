@@ -19,7 +19,7 @@ def readconfig(configdir):
             continue
         try:
             config_string = open(configdir+'/'+f,'r').read()
-            config.update(yaml.load(config_string))
+            config.update(yaml.load(config_string, Loader=yaml.FullLoader))
             if f in bad_crons:
                 bad_files.remove(f)
         except Exception as e:
