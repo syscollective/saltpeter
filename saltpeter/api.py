@@ -61,6 +61,7 @@ class WSHandler(tornado.websocket.WebSocketHandler):
 
     def on_message(self, message):
         print('message received %s' % message)
+        #self.write_message('received: ' % message)
         try:
             msg = json.loads(message)
         except Exception as e:
@@ -84,25 +85,42 @@ def get_details(cron):
         return {}
 
 def ws_update():
+    global cfgserial
+    cfgupdate = False
+    if cfgserial != cfg['serial']:
+        cfgserial = cfg['serial']
+        cfgupdate = True
+
     if len(wsconnections) > 0:
         for con in wsconnections:
             con.write_message((json.dumps(dict({'running': dict(rng)}))))
+            if cfgupdate:
+                con.write_message(json.dumps(dict({'config': dict(cfg)})))
+            for cron in cfg['crons']:
+                 con.write_message(json.dumps(dict({cron: dict(st[cron])})))
+
+
     tornado.ioloop.IOLoop.instance().add_timeout(timedelta(seconds=2), ws_update)
 
-def start(port, config, running):
+def start(port, config, running, state):
     global cfg
     cfg = config
     global wsconnections
+    wsconnections = []
     global rng
     rng = running
+    global cfgserial
+    cfgserial = ''
+    global st
+    st = state
 
-    wsconnections = []
     application = tornado.web.Application([
         (r"/ws", WSHandler, dict(cfg=config)),
         (r"/version", VersionHandler),
         (r"/config", DictReturner, dict(content=config)),
         (r"/running", DictReturner, dict(content=running))
     ])
+
     application.listen(port)
     tornado.ioloop.IOLoop.instance().add_timeout(timedelta(seconds=2),
                                                  ws_update)
