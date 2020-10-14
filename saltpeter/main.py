@@ -36,6 +36,10 @@ def parsecron(name,data):
         mon = data['mon']
         hour = data['hour']
         minute = data['min']
+        if 'utc' in data:
+            utc = data['utc']
+        else:
+            utc = False
     except KeyError as e:
         if name not in bad_crons:
             print('Missing required %s property from "%s"' % (e,name))
@@ -66,7 +70,12 @@ def parsecron(name,data):
 
     if name in bad_crons:
         bad_crons.remove(name)
-    ret['nextrun'] = entry.next(now=datetime.utcnow()-timedelta(seconds=1),default_utc=True)
+
+    if utc:
+        ret['nextrun'] = entry.next(now=datetime.utcnow()-timedelta(seconds=1),default_utc=True)
+    else:
+        ret['nextrun'] = entry.next(now=datetime.now()-timedelta(seconds=1),default_utc=False)
+
     return ret
 
 
