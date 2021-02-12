@@ -5,6 +5,38 @@ Saltpeter is a distributed cron implementation using salt as the remote executio
 It reads configuration from yaml files in a folder specified by -c (default /etc/saltpeter).
 
 
+### Installation:
+
+Pip install the git repository:
+```
+python3 -m pip install git+https://github.com/syscollective/saltpeter.git
+```
+Create a new service with `vim /etc/systemd/system/saltpeter` and add the following lines:
+```
+[Unit]
+Description=Saltpeter distributed scheduled execution tool
+
+[Service]
+User=root
+#WorkingDirectory=/opt/saltpeter/
+ExecStart=/usr/local/bin/saltpeter -a -p 8888
+Restart=on-failure
+KillSignal=SIGTERM
+SyslogIdentifier=saltpeter
+
+[Install]
+WantedBy=multi-user.target
+```
+Create the following folders:
+```
+mkdir /etc/saltpeter
+mkdir /var/log/saltpeter
+```
+Start the service:
+```
+service saltpeter start
+```
+
 
 ### Developing using Docker:
 
