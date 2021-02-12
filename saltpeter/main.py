@@ -19,7 +19,7 @@ def readconfig(configdir):
             continue
         try:
             config_string = open(configdir+'/'+f,'r').read()
-            config.update(yaml.load(config_string))
+            config.update(yaml.load(config_string, Loader=yaml.FullLoader))
             if f in bad_crons:
                 bad_files.remove(f)
         except Exception as e:
@@ -36,6 +36,10 @@ def parsecron(name,data):
         mon = data['mon']
         hour = data['hour']
         minute = data['min']
+        if 'utc' in data:
+            utc = data['utc']
+        else:
+            utc = False
     except KeyError as e:
         if name not in bad_crons:
             print('Missing required %s property from "%s"' % (e,name))
@@ -66,11 +70,16 @@ def parsecron(name,data):
 
     if name in bad_crons:
         bad_crons.remove(name)
-    ret['nextrun'] = entry.next(now=datetime.utcnow()-timedelta(seconds=1),default_utc=True)
+
+    if utc:
+        ret['nextrun'] = entry.next(now=datetime.utcnow()-timedelta(seconds=1),default_utc=True)
+    else:
+        ret['nextrun'] = entry.next(now=datetime.now()-timedelta(seconds=1),default_utc=False)
+
     return ret
 
 
-def run(name,data,procname,running):
+def run(name,data,procname,running,mystate):
     import salt.client
     salt = salt.client.LocalClient()
     targets = data['targets']
@@ -84,13 +93,16 @@ def run(name,data,procname,running):
         cmdargs.append('timeout='+str(data['hard_timeout']))
 
     now = datetime.utcnow()
+    mystate['last_run'] = now.isoformat()
     log(cron=name, what='start', instance=procname, time=now)
     minion_ret = salt.cmd(targets, 'test.ping', tgt_type=target_type)
     minions = list(minion_ret)
     targets_list = minions
+    mystate['targets'] = targets_list
 
     if 'number_of_targets' in data and data['number_of_targets'] != 0:
         import random
+        #targets chosen at random
         random.shuffle(minions)
         targets_list = minions[:data['number_of_targets']]
 
@@ -128,6 +140,15 @@ def run(name,data,procname,running):
                 o = i[m]['ret']
                 results[m] = { 'ret': o, 'retcode': r, 'endtime': datetime.utcnow() }
                 running[procname]['machines'].remove(m)
+
+            tmpresults = results.copy()
+            for item in tmpresults:
+                if 'endtime' in tmpresults[item]:
+                    tmpresults[item]['endtime'] =  tmpresults[item]['endtime'].isoformat()
+            #do this crap to propagate changes; this is somewhat acceptable since this object is not modified anywhere else
+            #tmpstate = mystate
+            mystate['results'] = tmpresults
+            #mystate = tmpstate
         except Exception as e:
             print('Exception triggered in run()', e)
 
@@ -143,7 +164,7 @@ def run(name,data,procname,running):
                         code=results[machine]['retcode'], out=results[machine]['ret'],
                         time=results[machine]['endtime'])
     else:
-        log(cron=name, what='no_machines', instance=procname, time=datetime.now())
+        log(cron=name, what='no_machines', instance=procname, time=datetime.utcnow())
 
 def debuglog(content):
     logfile = open(args.logdir+'/'+'debug.log','a')
@@ -232,10 +253,11 @@ def main():
     manager = multiprocessing.Manager()
     running = manager.dict()
     config = manager.dict()
+    state = manager.dict()
     
     #start the api
     if args.api:
-        a = multiprocessing.Process(target=api.start, args=(args.port,config,running,), name='api')
+        a = multiprocessing.Process(target=api.start, args=(args.port,config,running,state,), name='api')
         a.start()
 
     if args.elasticsearch != '':
@@ -247,9 +269,17 @@ def main():
     #main loop
     while True:
         
-        config['crons'] = readconfig(args.configdir)
+        newconfig = readconfig(args.configdir)
+        if 'crons' not in config or config['crons'] != newconfig:
+            config['crons'] = newconfig
+            config['serial'] = datetime.utcnow().timestamp()
+
         for name in config['crons']:
+            if name not in state:
+                state[name] = manager.dict()
             result = parsecron(name,config['crons'][name])
+            nextrun = datetime.utcnow()+timedelta(seconds=result['nextrun'])
+            state[name]['next_run'] = nextrun.isoformat()
             if result == False:
                 continue
             if result['nextrun'] < 1:
@@ -258,10 +288,11 @@ def main():
                     last_run[name] = datetime.utcnow()
                     procname = name+'_'+str(int(time.time()))
                     print('Firing %s!' % procname)
+                    print(state[name])
 
                     #running[procname] = {'empty': True}
                     p = multiprocessing.Process(target=run,\
-                            args=(name,config['crons'][name],procname,running), name=procname)
+                            args=(name,config['crons'][name],procname,running, state[name]), name=procname)
                     processlist[procname] = {}
                     if 'soft_timeout' in result:
                         processlist[procname]['soft_timeout'] = \
