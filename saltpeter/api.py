@@ -42,6 +42,8 @@ class DictReturner(tornado.web.RequestHandler):
 class WSHandler(tornado.websocket.WebSocketHandler):
     def initialize(self, cfg):
         self.config = cfg
+        self.subscriptions = []
+
     def set_default_headers(self):
         self.set_header("Access-Control-Allow-Origin", "*")
         self.set_header("Access-Control-Allow-Headers", "DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range")
@@ -69,20 +71,17 @@ class WSHandler(tornado.websocket.WebSocketHandler):
             print(e)
             return
 
-        if 'get_details' in msg:
-            cron = msg['get_details']
-            self.write_message(json.dumps(get_details(cron)))
- 
+        if 'subscribe' in msg:
+            cron = msg['subscribe']
+            self.subscriptions.append(cron)
+        if 'unsubscribe' in msg:
+            cron = msg['unsubscribe']
+            self.subscriptions.remove(cron)
+
     def on_close(self):
         print('connection closed')
         wsconnections.remove(self)
 
-
-def get_details(cron):
-    try:
-        return cfg['crons'][cron]
-    except:
-        return {}
 
 def ws_update():
     global cfgserial
@@ -97,7 +96,8 @@ def ws_update():
             if cfgupdate:
                 con.write_message(json.dumps(dict({'config': dict(cfg)})))
             for cron in cfg['crons']:
-                 con.write_message(json.dumps(dict({cron: dict(st[cron])})))
+                if cron in con.subscriptions:
+                    con.write_message(json.dumps(dict({cron: dict(st[cron])})))
 
 
     tornado.ioloop.IOLoop.instance().add_timeout(timedelta(seconds=2), ws_update)
