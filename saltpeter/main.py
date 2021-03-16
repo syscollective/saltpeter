@@ -125,6 +125,7 @@ def run(name,data,procname,running,mystate):
                         o = i[m]['ret']
                         results[m] = { 'ret': o, 'retcode': r, 'endtime': datetime.utcnow() }
                         running[procname]['machines'].remove(m)
+                    chunk = []
                 except Exception as e:
                     print('Exception triggered in run() at "batch_size" condition', e)
                     chunk = []
