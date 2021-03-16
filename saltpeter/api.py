@@ -84,6 +84,9 @@ class WSHandler(tornado.websocket.WebSocketHandler):
 
 
 def ws_update():
+
+    tornado.ioloop.IOLoop.current().add_timeout(timedelta(seconds=2), ws_update)
+
     global cfgserial
     cfgupdate = False
     if cfgserial != cfg['serial']:
@@ -100,7 +103,6 @@ def ws_update():
                     con.write_message(json.dumps(dict({cron: dict(st[cron])})))
 
 
-    tornado.ioloop.IOLoop.instance().add_timeout(timedelta(seconds=2), ws_update)
 
 def start(port, config, running, state):
     global cfg
@@ -122,6 +124,6 @@ def start(port, config, running, state):
     ])
 
     application.listen(port)
-    tornado.ioloop.IOLoop.instance().add_timeout(timedelta(seconds=2),
-                                                 ws_update)
-    tornado.ioloop.IOLoop.instance().start()
+    ioloop =  tornado.ioloop.IOLoop.current()
+    ioloop.add_timeout(timedelta(seconds=2), ws_update)
+    ioloop.start()

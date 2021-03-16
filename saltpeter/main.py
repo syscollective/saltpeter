@@ -7,7 +7,7 @@ import argparse
 import re
 import yaml
 import time
-from datetime import datetime,timedelta,date
+from datetime import datetime,timedelta,date,timezone
 from crontab import CronTab
 import multiprocessing
 
@@ -72,7 +72,7 @@ def parsecron(name,data):
         bad_crons.remove(name)
 
     if utc:
-        ret['nextrun'] = entry.next(now=datetime.utcnow()-timedelta(seconds=1),default_utc=True)
+        ret['nextrun'] = entry.next(now=datetime.now(timezone.utc)-timedelta(seconds=1),default_utc=True)
     else:
         ret['nextrun'] = entry.next(now=datetime.now()-timedelta(seconds=1),default_utc=False)
 
@@ -92,7 +92,7 @@ def run(name,data,procname,running,mystate):
     if 'hard_timeout' in data:
         cmdargs.append('timeout='+str(data['hard_timeout']))
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     mystate['last_run'] = now.isoformat()
     log(cron=name, what='start', instance=procname, time=now)
     minion_ret = salt.cmd(targets, 'test.ping', tgt_type=target_type)
@@ -123,8 +123,19 @@ def run(name,data,procname,running,mystate):
                         m = list(i)[0]
                         r = i[m]['retcode']
                         o = i[m]['ret']
-                        results[m] = { 'ret': o, 'retcode': r, 'endtime': datetime.utcnow() }
-                        running[procname]['machines'].remove(m)
+                        results[m] = { 'ret': o, 'retcode': r, 'endtime': datetime.now(timezone.utc) }
+                        tmpresult = results[m].copy()
+                        if 'endtime' in tmpresult:
+                            tmpresult['endtime'] =  tmpresult['endtime'].isoformat()
+                        #do this crap to propagate changes; this is somewhat acceptable since this object is not modified anywhere else
+                        print("wtf")
+                        if 'results' in mystate:
+                            tmpresults = mystate['results'].copy()
+                        else:
+                            tmpresults = {}
+                        tmpresults[m] = tmpresult
+                        mystate['results'] = tmpresults
+
                     chunk = []
                 except Exception as e:
                     print('Exception triggered in run() at "batch_size" condition', e)
@@ -139,7 +150,7 @@ def run(name,data,procname,running,mystate):
                 m = list(i)[0]
                 r = i[m]['retcode']
                 o = i[m]['ret']
-                results[m] = { 'ret': o, 'retcode': r, 'endtime': datetime.utcnow() }
+                results[m] = { 'ret': o, 'retcode': r, 'endtime': datetime.now(timezone.utc) }
                 running[procname]['machines'].remove(m)
 
             tmpresults = results.copy()
@@ -165,7 +176,7 @@ def run(name,data,procname,running,mystate):
                         code=results[machine]['retcode'], out=results[machine]['ret'],
                         time=results[machine]['endtime'])
     else:
-        log(cron=name, what='no_machines', instance=procname, time=datetime.utcnow())
+        log(cron=name, what='no_machines', instance=procname, time=datetime.now(timezone.utc))
 
 def debuglog(content):
     logfile = open(args.logdir+'/'+'debug.log','a')
@@ -273,20 +284,20 @@ def main():
         newconfig = readconfig(args.configdir)
         if 'crons' not in config or config['crons'] != newconfig:
             config['crons'] = newconfig
-            config['serial'] = datetime.utcnow().timestamp()
+            config['serial'] = datetime.now(timezone.utc).timestamp()
 
         for name in config['crons']:
             if name not in state:
                 state[name] = manager.dict()
             result = parsecron(name,config['crons'][name])
-            nextrun = datetime.utcnow()+timedelta(seconds=result['nextrun'])
+            nextrun = datetime.now(timezone.utc)+timedelta(seconds=result['nextrun'])
             state[name]['next_run'] = nextrun.isoformat()
             if result == False:
                 continue
             if result['nextrun'] < 1:
                 if name not in last_run or \
-                        datetime.utcnow() - last_run[name] > timedelta(seconds=1):
-                    last_run[name] = datetime.utcnow()
+                        datetime.now(timezone.utc) - last_run[name] > timedelta(seconds=1):
+                    last_run[name] = datetime.now(timezone.utc)
                     procname = name+'_'+str(int(time.time()))
                     print('Firing %s!' % procname)
                     print(state[name])
@@ -297,10 +308,10 @@ def main():
                     processlist[procname] = {}
                     if 'soft_timeout' in result:
                         processlist[procname]['soft_timeout'] = \
-                                datetime.utcnow()+timedelta(seconds = result['soft_timeout'])
+                                datetime.now(timezone.utc)+timedelta(seconds = result['soft_timeout'])
                     if 'hard_timeout' in result:
                         processlist[procname]['hard_timeout'] = \
-                                datetime.utcnow()+timedelta(seconds = result['hard_timeout']-1)
+                                datetime.now(timezone.utc)+timedelta(seconds = result['hard_timeout']-1)
                     p.start()
         time.sleep(0.5)
 
@@ -312,15 +323,15 @@ def main():
                 if entry == process.name:
                     found = True
                     if 'soft_timeout' in processlist[entry]  and \
-                            processlist[entry]['soft_timeout'] < datetime.utcnow():
+                            processlist[entry]['soft_timeout'] < datetime.now(timezone.utc):
                         timeout('soft',process)
                     if 'hard_timeout' in processlist[entry] and \
-                            processlist[entry]['hard_timeout'] < datetime.utcnow():
+                            processlist[entry]['hard_timeout'] < datetime.now(timezone.utc):
                         timeout('hard',process)
             if found == False:
                 print('Deleting process %s as it must have finished' % entry)
                 name = entry.split('_')[0]
-                log(cron=name, what='end', instance=entry, time=datetime.utcnow())
+                log(cron=name, what='end', instance=entry, time=datetime.now(timezone.utc))
 
                 del(processlist[entry])
                 if entry in running:
