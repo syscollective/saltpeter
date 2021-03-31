@@ -115,6 +115,9 @@ def run(name,data,procname,running,mystate):
             chunk.append(t)
             if len(chunk) == data['batch_size'] or count == len(targets_list):
                 running[procname]=  { 'started': str(now), 'name': name, 'machines': chunk }
+                starttime = datetime.now(timezone.utc)
+                for target in chunk:
+                    log(cron=name, what='machine_start', instance=procname, time=starttime, machine=target)
                 try:
                     generator = salt.cmd_iter(chunk, 'cmd.run', cmdargs,
                             tgt_type='list', full_return=True)
@@ -123,10 +126,12 @@ def run(name,data,procname,running,mystate):
                         m = list(i)[0]
                         r = i[m]['retcode']
                         o = i[m]['ret']
-                        results[m] = { 'ret': o, 'retcode': r, 'endtime': datetime.now(timezone.utc) }
+                        results[m] = { 'ret': o, 'retcode': r, 'starttime': starttime, 'endtime': datetime.now(timezone.utc) }
                         tmpresult = results[m].copy()
                         if 'endtime' in tmpresult:
                             tmpresult['endtime'] =  tmpresult['endtime'].isoformat()
+                        if 'starttime' in tmpresult:
+                            tmpresult['starttime'] =  tmpresult['starttime'].isoformat()
                         #do this crap to propagate changes; this is somewhat acceptable since this object is not modified anywhere else
                         print("wtf")
                         if 'results' in mystate:
@@ -142,6 +147,9 @@ def run(name,data,procname,running,mystate):
                     chunk = []
     else:
         running[procname]=  { 'started': str(now), 'name': name, 'machines': targets_list }
+        starttime = datetime.now(timezone.utc)
+        for target in targets_list:
+           log(cron=name, what='machine_start', instance=procname, time=starttime, machine=target)
         try:
             generator = salt.cmd_iter(targets_list, 'cmd.run', cmdargs,
                     tgt_type='list', full_return=True)
@@ -150,13 +158,15 @@ def run(name,data,procname,running,mystate):
                 m = list(i)[0]
                 r = i[m]['retcode']
                 o = i[m]['ret']
-                results[m] = { 'ret': o, 'retcode': r, 'endtime': datetime.now(timezone.utc) }
+                results[m] = { 'ret': o, 'retcode': r, 'starttime':starttime, 'endtime': datetime.now(timezone.utc) }
                 running[procname]['machines'].remove(m)
 
             tmpresults = results.copy()
             for item in tmpresults:
                 if 'endtime' in tmpresults[item]:
                     tmpresults[item]['endtime'] =  tmpresults[item]['endtime'].isoformat()
+                if 'starttime' in tmpresults[item]:
+                    tmpresults[item]['starttime'] =  tmpresults[item]['starttime'].isoformat()
             #do this crap to propagate changes; this is somewhat acceptable since this object is not modified anywhere else
             #tmpstate = mystate
             mystate['results'] = tmpresults
@@ -189,6 +199,8 @@ def log(what, cron, instance, time, machine='', code=0, out='', status=''):
     logfile = open(args.logdir+'/'+cron+'.log','a')
     if what == 'start':
         content = "###### Starting %s at %s ################\n" % (instance, time)
+    elif what == 'machine_start':
+        content = "###### Starting %s on %s at %s ################\n" % (instance, machine, time)
     elif what == 'no_machines':
         content = "!!!!!! No targets matched for %s !!!!!!\n" % instance
     elif what == 'end':
