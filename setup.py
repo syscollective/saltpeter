@@ -1,7 +1,7 @@
 from setuptools import setup
 
 setup(name='saltpeter',
-      version='0.2.5',
+      version='0.2.6',
       description='Distributed cron based on salt',
       url='http://github.com/syscollective/saltpeter',
       author='Marin Vintila',
