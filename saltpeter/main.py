@@ -93,12 +93,16 @@ def run(name,data,procname,running,state):
         cmdargs.append('timeout='+str(data['hard_timeout']))
 
     now = datetime.now(timezone.utc)
-    state[name]['last_run'] = now.isoformat()
+    tmpstate = state[name].copy()
+    tmpstate['last_run'] = now.isoformat()
+    state[name] = tmpstate
     log(cron=name, what='start', instance=procname, time=now)
     minion_ret = salt.cmd(targets, 'test.ping', tgt_type=target_type)
     minions = list(minion_ret)
     targets_list = minions
-    state[name]['targets'] = targets_list
+    tmpstate = state[name]
+    tmpstate['targets'] = targets_list
+    state[name] = tmpstate
 
     if 'number_of_targets' in data and data['number_of_targets'] != 0:
         import random
@@ -135,7 +139,9 @@ def run(name,data,procname,running,state):
                         else:
                             tmpresults = {}
                         tmpresults[target] = tmpresult
-                        state[name]['results'] = tmpresults
+                        tmpstate = state[name].copy()
+                        tmpstate['results'] = tmpresults
+                        state[name] = tmpstate
 
                     #this should be blocking
                     for i in generator:
@@ -155,7 +161,9 @@ def run(name,data,procname,running,state):
                         else:
                             tmpresults = {}
                         tmpresults[m] = tmpresult
-                        state[name]['results'] = tmpresults
+                        tmpstate = state[name].copy()
+                        tmpstate['results'] = tmpresults
+                        state[name] = tmpstate
 
                     chunk = []
                 except Exception as e:
@@ -185,7 +193,9 @@ def run(name,data,procname,running,state):
                     tmpresults[item]['starttime'] =  tmpresults[item]['starttime'].isoformat()
             #do this crap to propagate changes; this is somewhat acceptable since this object is not modified anywhere else
             #tmpstate = mystate
-            state[name]['results'] = tmpresults
+            tmpstate = state[name]
+            tmpstate['results'] = tmpresults
+            state[name] = tmpstate
             #mystate = tmpstate
         except Exception as e:
             print('Exception triggered in run()', e)
@@ -319,7 +329,9 @@ def main():
                 state[name] = {}
             result = parsecron(name,config['crons'][name])
             nextrun = datetime.now(timezone.utc)+timedelta(seconds=result['nextrun'])
-            state[name]['next_run'] = nextrun.isoformat()
+            tmpstate = state[name].copy()
+            tmpstate['next_run'] = nextrun.isoformat()
+            state[name] = tmpstate
             if result == False:
                 continue
             if result['nextrun'] < 1:
