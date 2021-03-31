@@ -79,7 +79,7 @@ def parsecron(name,data):
     return ret
 
 
-def run(name,data,procname,running,mystate):
+def run(name,data,procname,running,state):
     import salt.client
     salt = salt.client.LocalClient()
     targets = data['targets']
@@ -93,12 +93,12 @@ def run(name,data,procname,running,mystate):
         cmdargs.append('timeout='+str(data['hard_timeout']))
 
     now = datetime.now(timezone.utc)
-    mystate['last_run'] = now.isoformat()
+    state[name]['last_run'] = now.isoformat()
     log(cron=name, what='start', instance=procname, time=now)
     minion_ret = salt.cmd(targets, 'test.ping', tgt_type=target_type)
     minions = list(minion_ret)
     targets_list = minions
-    mystate['targets'] = targets_list
+    state[name]['targets'] = targets_list
 
     if 'number_of_targets' in data and data['number_of_targets'] != 0:
         import random
@@ -130,12 +130,12 @@ def run(name,data,procname,running,mystate):
                         if 'starttime' in tmpresult:
                             tmpresult['starttime'] =  tmpresult['starttime'].isoformat()
                         #do this crap to propagate changes; this is somewhat acceptable since this object is not modified anywhere else
-                        if 'results' in mystate:
-                            tmpresults = mystate['results'].copy()
+                        if 'results' in state[name]:
+                            tmpresults = state[name]['results'].copy()
                         else:
                             tmpresults = {}
                         tmpresults[target] = tmpresult
-                        mystate['results'] = tmpresults
+                        state[name]['results'] = tmpresults
 
                     #this should be blocking
                     for i in generator:
@@ -150,12 +150,12 @@ def run(name,data,procname,running,mystate):
                         if 'starttime' in tmpresult:
                             tmpresult['starttime'] =  tmpresult['starttime'].isoformat()
                         #do this crap to propagate changes; this is somewhat acceptable since this object is not modified anywhere else
-                        if 'results' in mystate:
-                            tmpresults = mystate['results'].copy()
+                        if 'results' in state[name]:
+                            tmpresults = state[name]['results'].copy()
                         else:
                             tmpresults = {}
                         tmpresults[m] = tmpresult
-                        mystate['results'] = tmpresults
+                        state[name]['results'] = tmpresults
 
                     chunk = []
                 except Exception as e:
@@ -185,7 +185,7 @@ def run(name,data,procname,running,mystate):
                     tmpresults[item]['starttime'] =  tmpresults[item]['starttime'].isoformat()
             #do this crap to propagate changes; this is somewhat acceptable since this object is not modified anywhere else
             #tmpstate = mystate
-            mystate['results'] = tmpresults
+            state[name]['results'] = tmpresults
             #mystate = tmpstate
         except Exception as e:
             print('Exception triggered in run()', e)
@@ -316,7 +316,7 @@ def main():
 
         for name in config['crons']:
             if name not in state:
-                state[name] = manager.dict()
+                state[name] = {}
             result = parsecron(name,config['crons'][name])
             nextrun = datetime.now(timezone.utc)+timedelta(seconds=result['nextrun'])
             state[name]['next_run'] = nextrun.isoformat()
@@ -332,7 +332,7 @@ def main():
 
                     #running[procname] = {'empty': True}
                     p = multiprocessing.Process(target=run,\
-                            args=(name,config['crons'][name],procname,running, state[name]), name=procname)
+                            args=(name,config['crons'][name],procname,running, state), name=procname)
                     processlist[procname] = {}
                     if 'soft_timeout' in result:
                         processlist[procname]['soft_timeout'] = \
