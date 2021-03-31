@@ -115,9 +115,22 @@ def run(name,data,procname,running,mystate):
             chunk.append(t)
             if len(chunk) == data['batch_size'] or count == len(targets_list):
                 running[procname]=  { 'started': str(now), 'name': name, 'machines': chunk }
-                starttime = datetime.now(timezone.utc)
+
                 for target in chunk:
+                    starttime = datetime.now(timezone.utc)
                     log(cron=name, what='machine_start', instance=procname, time=starttime, machine=target)
+                    results[target] = { 'ret': '', 'retcode': '', 'starttime': starttime, 'endtime': ''}
+                    tmpresult = results[target].copy()
+                    if 'starttime' in tmpresult:
+                        tmpresult['starttime'] =  tmpresult['starttime'].isoformat()
+                    #do this crap to propagate changes; this is somewhat acceptable since this object is not modified anywhere else
+                    if 'results' in mystate:
+                        tmpresults = mystate['results'].copy()
+                    else:
+                        tmpresults = {}
+                    tmpresults[target] = tmpresult
+                    mystate['results'] = tmpresults
+
                 try:
                     generator = salt.cmd_iter(chunk, 'cmd.run', cmdargs,
                             tgt_type='list', full_return=True)
@@ -133,7 +146,6 @@ def run(name,data,procname,running,mystate):
                         if 'starttime' in tmpresult:
                             tmpresult['starttime'] =  tmpresult['starttime'].isoformat()
                         #do this crap to propagate changes; this is somewhat acceptable since this object is not modified anywhere else
-                        print("wtf")
                         if 'results' in mystate:
                             tmpresults = mystate['results'].copy()
                         else:
