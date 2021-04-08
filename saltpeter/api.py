@@ -95,12 +95,29 @@ def ws_update():
 
     if len(wsconnections) > 0:
         for con in wsconnections:
-            con.write_message((json.dumps(dict({'running': dict(rng)}))))
+            srrng = rng.copy()
+            for cron in srrng:
+                if 'started' in srrng[cron]:
+                    srrng[cron]['started'] = srrng[cron]['started'].isoformat()
+            con.write_message((json.dumps(dict({'running': srrng}))))
             if cfgupdate:
                 con.write_message(json.dumps(dict({'config': dict(cfg)})))
             for cron in cfg['crons']:
                 if cron in con.subscriptions:
-                    con.write_message(json.dumps(dict({cron: dict(st[cron])})))
+                    srcron = st[cron].copy()
+                    if 'next_run' in srcron:
+                        srcron['next_run'] = srcron['next_run'].isoformat()
+                    if 'last_run' in srcron:
+                        srcron['last_run'] = srcron['last_run'].isoformat()
+
+                    if 'results' in srcron:
+                        for m in srcron['results']:
+                            if 'starttime' in srcron['results'][m] and srcron['results'][m]['starttime'] != '':
+                                srcron['results'][m]['starttime'] = srcron['results'][m]['starttime'].isoformat()
+                            if 'endtime' in srcron['results'][m] and srcron['results'][m]['endtime'] != '':
+                                srcron['results'][m]['endtime'] = srcron['results'][m]['endtime'].isoformat()
+
+                    con.write_message(json.dumps(dict({cron: srcron})))
 
 
 
