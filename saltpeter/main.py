@@ -83,7 +83,6 @@ def parsecron(name,data):
     return ret
 
 def processstart(chunk,name,procname,running,state):
-
     results = {}
 
     for target in chunk:
@@ -308,10 +307,11 @@ def main():
     running = manager.dict()
     config = manager.dict()
     state = manager.dict()
+    commands = manager.list()
     
     #start the api
     if args.api:
-        a = multiprocessing.Process(target=api.start, args=(args.port,config,running,state,), name='api')
+        a = multiprocessing.Process(target=api.start, args=(args.port,config,running,state,commands,), name='api')
         a.start()
 
     if args.elasticsearch != '':
@@ -336,9 +336,16 @@ def main():
             tmpstate = state[name].copy()
             tmpstate['next_run'] = nextrun
             state[name] = tmpstate
-            if result == False:
-                continue
-            if result['nextrun'] < 1:
+            #check if there are any start commands
+            runnow = False
+            for cmd in commands:
+                print('COMMAND: ',cmd)
+                if 'runnow' in cmd:
+                    if cmd['runnow'] == name:
+                        runnow = True
+                        commands.remove(cmd)
+
+            if (result != False and result['nextrun'] < 1) or runnow:
                 if name not in last_run or \
                         datetime.now(timezone.utc) - last_run[name] > timedelta(seconds=1):
                     last_run[name] = datetime.now(timezone.utc)

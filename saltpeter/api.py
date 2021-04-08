@@ -40,8 +40,9 @@ class DictReturner(tornado.web.RequestHandler):
         self.write(response)
 
 class WSHandler(tornado.websocket.WebSocketHandler):
-    def initialize(self, cfg):
+    def initialize(self, cfg, cmds):
         self.config = cfg
+        self.cmds = cmds
         self.subscriptions = []
 
     def set_default_headers(self):
@@ -77,6 +78,10 @@ class WSHandler(tornado.websocket.WebSocketHandler):
         if 'unsubscribe' in msg:
             cron = msg['unsubscribe']
             self.subscriptions.remove(cron)
+        if 'run' in msg:
+            cron = msg['run']
+            self.cmds.append(dict({'runnow': cron}))
+
 
     def on_close(self):
         print('connection closed')
@@ -121,7 +126,7 @@ def ws_update():
 
 
 
-def start(port, config, running, state):
+def start(port, config, running, state, commands):
     global cfg
     cfg = config
     global wsconnections
@@ -134,7 +139,7 @@ def start(port, config, running, state):
     st = state
 
     application = tornado.web.Application([
-        (r"/ws", WSHandler, dict(cfg=config)),
+        (r"/ws", WSHandler, dict(cfg=config,cmds=commands)),
         (r"/version", VersionHandler),
         (r"/config", DictReturner, dict(content=config)),
         (r"/running", DictReturner, dict(content=running))
