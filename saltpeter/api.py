@@ -40,8 +40,9 @@ class DictReturner(tornado.web.RequestHandler):
         self.write(response)
 
 class WSHandler(tornado.websocket.WebSocketHandler):
-    def initialize(self, cfg):
+    def initialize(self, cfg, cmds):
         self.config = cfg
+        self.cmds = cmds
         self.subscriptions = []
 
     def set_default_headers(self):
@@ -77,6 +78,10 @@ class WSHandler(tornado.websocket.WebSocketHandler):
         if 'unsubscribe' in msg:
             cron = msg['unsubscribe']
             self.subscriptions.remove(cron)
+        if 'run' in msg:
+            cron = msg['run']
+            self.cmds.append(dict({'runnow': cron}))
+
 
     def on_close(self):
         print('connection closed')
@@ -95,16 +100,33 @@ def ws_update():
 
     if len(wsconnections) > 0:
         for con in wsconnections:
-            con.write_message((json.dumps(dict({'running': dict(rng)}))))
+            srrng = rng.copy()
+            for cron in srrng:
+                if 'started' in srrng[cron]:
+                    srrng[cron]['started'] = srrng[cron]['started'].isoformat()
+            con.write_message((json.dumps(dict({'running': srrng}))))
             if cfgupdate:
                 con.write_message(json.dumps(dict({'config': dict(cfg)})))
             for cron in cfg['crons']:
                 if cron in con.subscriptions:
-                    con.write_message(json.dumps(dict({cron: dict(st[cron])})))
+                    srcron = st[cron].copy()
+                    if 'next_run' in srcron:
+                        srcron['next_run'] = srcron['next_run'].isoformat()
+                    if 'last_run' in srcron:
+                        srcron['last_run'] = srcron['last_run'].isoformat()
+
+                    if 'results' in srcron:
+                        for m in srcron['results']:
+                            if 'starttime' in srcron['results'][m] and srcron['results'][m]['starttime'] != '':
+                                srcron['results'][m]['starttime'] = srcron['results'][m]['starttime'].isoformat()
+                            if 'endtime' in srcron['results'][m] and srcron['results'][m]['endtime'] != '':
+                                srcron['results'][m]['endtime'] = srcron['results'][m]['endtime'].isoformat()
+
+                    con.write_message(json.dumps(dict({cron: srcron})))
 
 
 
-def start(port, config, running, state):
+def start(port, config, running, state, commands):
     global cfg
     cfg = config
     global wsconnections
@@ -117,7 +139,7 @@ def start(port, config, running, state):
     st = state
 
     application = tornado.web.Application([
-        (r"/ws", WSHandler, dict(cfg=config)),
+        (r"/ws", WSHandler, dict(cfg=config,cmds=commands)),
         (r"/version", VersionHandler),
         (r"/config", DictReturner, dict(content=config)),
         (r"/running", DictReturner, dict(content=running))

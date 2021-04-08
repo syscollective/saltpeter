@@ -19,7 +19,11 @@ def readconfig(configdir):
             continue
         try:
             config_string = open(configdir+'/'+f,'r').read()
-            config.update(yaml.load(config_string, Loader=yaml.FullLoader))
+            group = f[0:-5]
+            loaded_config = yaml.load(config_string, Loader=yaml.FullLoader)
+            for cron in loaded_config:
+                loaded_config[cron]['group'] = group 
+            config.update(loaded_config)
             if f in bad_crons:
                 bad_files.remove(f)
         except Exception as e:
@@ -78,8 +82,65 @@ def parsecron(name,data):
 
     return ret
 
+def processstart(chunk,name,procname,running,state):
+    results = {}
+
+    for target in chunk:
+        starttime = datetime.now(timezone.utc)
+        result = { 'ret': '', 'retcode': '',
+            'starttime': starttime, 'endtime': ''}
+        #do this crap to propagate changes; this is somewhat acceptable since this object is not modified anywhere else
+        if 'results' in state[name]:
+            tmpresults = state[name]['results'].copy()
+        else:
+            tmpresults = {}
+        tmpresults[target] = result
+        tmpstate = state[name].copy()
+        tmpstate['results'] = tmpresults
+        state[name] = tmpstate
+
+        log(cron=name, what='machine_start', instance=procname,
+                time=starttime, machine=target)
+
+
+def processresults(generator,name,procname,running,state):
+
+    for i in generator:
+        
+        m = list(i)[0]
+        r = i[m]['retcode']
+        o = i[m]['ret']
+        result = { 'ret': o, 'retcode': r, 'starttime': state[name]['results'][m]['starttime'], 'endtime': datetime.now(timezone.utc) }
+        if 'results' in state[name]:
+            tmpresults = state[name]['results'].copy()
+        else:
+            tmpresults = {}
+        tmpresults[m] = result
+        tmpstate = state[name].copy()
+        tmpstate['results'] = tmpresults
+        state[name] = tmpstate
+        tmprunning = running[procname]
+        tmprunning['machines'].remove(m)
+        running[procname] = tmprunning
+
+        log(what='machine_result',cron=name, instance=procname, machine=m,
+            code=r, out=o, time=result['endtime'])
+
+
+
 
 def run(name,data,procname,running,state):
+    #do this check here for the purpose of avoiding sync logging in the main program
+    for instance in running.keys():
+        if name == running[instance]['name']:
+            log(what='overlap', cron=name, instance=instance,
+                 time=datetime.now(timezone.utc))
+            tmpstate = state[name]
+            tmpstate['overlap'] = True
+            state[name] = tmpstate
+            if 'allow_overlap' not in data or data['allow_overlap'] != 'i know what i am doing!':
+                return
+
     import salt.client
     salt = salt.client.LocalClient()
     targets = data['targets']
@@ -94,7 +155,8 @@ def run(name,data,procname,running,state):
 
     now = datetime.now(timezone.utc)
     tmpstate = state[name].copy()
-    tmpstate['last_run'] = now.isoformat()
+    tmpstate['last_run'] = now
+    tmpstate['overlap'] = False
     state[name] = tmpstate
     log(cron=name, what='start', instance=procname, time=now)
     minion_ret = salt.cmd(targets, 'test.ping', tgt_type=target_type)
@@ -102,7 +164,12 @@ def run(name,data,procname,running,state):
     targets_list = minions
     tmpstate = state[name]
     tmpstate['targets'] = targets_list
+    tmpstate['results'] = {}
     state[name] = tmpstate
+    if len(targets_list) == 0:
+        log(cron=name, what='no_machines', instance=procname, time=datetime.now(timezone.utc))
+        log(cron=name, what='end', instance=procname, time=datetime.now(timezone.utc))
+        return
 
     if 'number_of_targets' in data and data['number_of_targets'] != 0:
         import random
@@ -113,7 +180,6 @@ def run(name,data,procname,running,state):
     if 'batch_size' in data and data['batch_size'] != 0:
         chunk = []
         count = 0
-        results = {}
         for t in targets_list:
             count += 1
             chunk.append(t)
@@ -125,94 +191,29 @@ def run(name,data,procname,running,state):
                             tgt_type='list', full_return=True)
 
                     # update running list and state
-                    running[procname]=  { 'started': str(now), 'name': name, 'machines': chunk }
-                    for target in chunk:
-                        starttime = datetime.now(timezone.utc)
-                        log(cron=name, what='machine_start', instance=procname, time=starttime, machine=target)
-                        results[target] = { 'ret': '', 'retcode': '', 'starttime': starttime, 'endtime': ''}
-                        tmpresult = results[target].copy()
-                        if 'starttime' in tmpresult:
-                            tmpresult['starttime'] =  tmpresult['starttime'].isoformat()
-                        #do this crap to propagate changes; this is somewhat acceptable since this object is not modified anywhere else
-                        if 'results' in state[name]:
-                            tmpresults = state[name]['results'].copy()
-                        else:
-                            tmpresults = {}
-                        tmpresults[target] = tmpresult
-                        tmpstate = state[name].copy()
-                        tmpstate['results'] = tmpresults
-                        state[name] = tmpstate
-
+                    running[procname]=  { 'started': now, 'name': name, 'machines': chunk }
+                    processstart(chunk,name,procname,running,state)
                     #this should be blocking
-                    for i in generator:
-                        #print "Generator item: ", chunk, i
-                        m = list(i)[0]
-                        r = i[m]['retcode']
-                        o = i[m]['ret']
-                        results[m] = { 'ret': o, 'retcode': r, 'starttime': starttime, 'endtime': datetime.now(timezone.utc) }
-                        tmpresult = results[m].copy()
-                        if 'endtime' in tmpresult:
-                            tmpresult['endtime'] =  tmpresult['endtime'].isoformat()
-                        if 'starttime' in tmpresult:
-                            tmpresult['starttime'] =  tmpresult['starttime'].isoformat()
-                        #do this crap to propagate changes; this is somewhat acceptable since this object is not modified anywhere else
-                        if 'results' in state[name]:
-                            tmpresults = state[name]['results'].copy()
-                        else:
-                            tmpresults = {}
-                        tmpresults[m] = tmpresult
-                        tmpstate = state[name].copy()
-                        tmpstate['results'] = tmpresults
-                        state[name] = tmpstate
-
+                    processresults(generator,name,procname,running,state)
                     chunk = []
                 except Exception as e:
                     print('Exception triggered in run() at "batch_size" condition', e)
                     chunk = []
     else:
-        running[procname]=  { 'started': str(now), 'name': name, 'machines': targets_list }
+        running[procname]=  { 'started': now, 'name': name, 'machines': targets_list }
         starttime = datetime.now(timezone.utc)
-        for target in targets_list:
-           log(cron=name, what='machine_start', instance=procname, time=starttime, machine=target)
+
         try:
             generator = salt.cmd_iter(targets_list, 'cmd.run', cmdargs,
                     tgt_type='list', full_return=True)
-            results = {}
-            for i in generator:
-                m = list(i)[0]
-                r = i[m]['retcode']
-                o = i[m]['ret']
-                results[m] = { 'ret': o, 'retcode': r, 'starttime':starttime, 'endtime': datetime.now(timezone.utc) }
-                running[procname]['machines'].remove(m)
+            processstart(targets_list,name,procname,running,state)
+            #this should be blocking
+            processresults(generator,name,procname,running,state)
 
-            tmpresults = results.copy()
-            for item in tmpresults:
-                if 'endtime' in tmpresults[item]:
-                    tmpresults[item]['endtime'] =  tmpresults[item]['endtime'].isoformat()
-                if 'starttime' in tmpresults[item]:
-                    tmpresults[item]['starttime'] =  tmpresults[item]['starttime'].isoformat()
-            #do this crap to propagate changes; this is somewhat acceptable since this object is not modified anywhere else
-            #tmpstate = mystate
-            tmpstate = state[name]
-            tmpstate['results'] = tmpresults
-            state[name] = tmpstate
-            #mystate = tmpstate
         except Exception as e:
             print('Exception triggered in run()', e)
 
-    if len(results) > 0:
-        for machine in results:
-            #check if result is Bool in a probably retarded way
-            if type(results[machine]) == type(True):
-                log(what='machine_result',cron=name, instance=procname, machine=machine,
-                        code=1, out='Bool output: %r' % results[machine],
-                        time=results[machine]['endtime'])
-            else:
-                log(what='machine_result',cron=name, instance=procname, machine=machine,
-                        code=results[machine]['retcode'], out=results[machine]['ret'],
-                        time=results[machine]['endtime'])
-    else:
-        log(cron=name, what='no_machines', instance=procname, time=datetime.now(timezone.utc))
+    log(cron=name, what='end', instance=procname, time=datetime.now(timezone.utc))
 
 def debuglog(content):
     logfile = open(args.logdir+'/'+'debug.log','a')
@@ -231,6 +232,8 @@ def log(what, cron, instance, time, machine='', code=0, out='', status=''):
         content = "!!!!!! No targets matched for %s !!!!!!\n" % instance
     elif what == 'end':
         content = "###### Finished %s at %s ################\n" % (instance, time)
+    elif what == 'overlap':
+        content = "###### Overlap detected on %s at %s ################\n" % (instance, time)
     else:
         content = """########## %s from %s ################
 **** Exit Code %d ******
@@ -304,10 +307,11 @@ def main():
     running = manager.dict()
     config = manager.dict()
     state = manager.dict()
+    commands = manager.list()
     
     #start the api
     if args.api:
-        a = multiprocessing.Process(target=api.start, args=(args.port,config,running,state,), name='api')
+        a = multiprocessing.Process(target=api.start, args=(args.port,config,running,state,commands,), name='api')
         a.start()
 
     if args.elasticsearch != '':
@@ -330,11 +334,18 @@ def main():
             result = parsecron(name,config['crons'][name])
             nextrun = datetime.now(timezone.utc)+timedelta(seconds=result['nextrun'])
             tmpstate = state[name].copy()
-            tmpstate['next_run'] = nextrun.isoformat()
+            tmpstate['next_run'] = nextrun
             state[name] = tmpstate
-            if result == False:
-                continue
-            if result['nextrun'] < 1:
+            #check if there are any start commands
+            runnow = False
+            for cmd in commands:
+                print('COMMAND: ',cmd)
+                if 'runnow' in cmd:
+                    if cmd['runnow'] == name:
+                        runnow = True
+                        commands.remove(cmd)
+
+            if (result != False and result['nextrun'] < 1) or runnow:
                 if name not in last_run or \
                         datetime.now(timezone.utc) - last_run[name] > timedelta(seconds=1):
                     last_run[name] = datetime.now(timezone.utc)
@@ -346,6 +357,7 @@ def main():
                     p = multiprocessing.Process(target=run,\
                             args=(name,config['crons'][name],procname,running, state), name=procname)
                     processlist[procname] = {}
+                    # this is wrong on multiple levels, to be fixed
                     if 'soft_timeout' in result:
                         processlist[procname]['soft_timeout'] = \
                                 datetime.now(timezone.utc)+timedelta(seconds = result['soft_timeout'])
@@ -362,6 +374,7 @@ def main():
             for process in processes:
                 if entry == process.name:
                     found = True
+                    # this is wrong on multiple levels, to be fixed:
                     if 'soft_timeout' in processlist[entry]  and \
                             processlist[entry]['soft_timeout'] < datetime.now(timezone.utc):
                         timeout('soft',process)
@@ -370,9 +383,6 @@ def main():
                         timeout('hard',process)
             if found == False:
                 print('Deleting process %s as it must have finished' % entry)
-                name = entry.split('_')[0]
-                log(cron=name, what='end', instance=entry, time=datetime.now(timezone.utc))
-
                 del(processlist[entry])
                 if entry in running:
                     del(running[entry])
