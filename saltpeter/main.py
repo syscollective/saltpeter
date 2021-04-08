@@ -19,7 +19,11 @@ def readconfig(configdir):
             continue
         try:
             config_string = open(configdir+'/'+f,'r').read()
-            config.update(yaml.load(config_string, Loader=yaml.FullLoader))
+            group = f[0:-5]
+            loaded_config = yaml.load(config_string, Loader=yaml.FullLoader)
+            for cron in loaded_config:
+                loaded_config[cron]['group'] = group 
+            config.update(loaded_config)
             if f in bad_crons:
                 bad_files.remove(f)
         except Exception as e:
@@ -80,6 +84,14 @@ def parsecron(name,data):
 
 
 def run(name,data,procname,running,state):
+    #do this check here for the purpose of avoiding sync logging in the main program
+    for instance in running.keys():
+        if name == running[instance]['name']:
+            log(what='overlap', cron=name, instance=instance, \
+                 time=datetime.now(timezone.utc))
+            if 'allow_overlap' not in data or data['allow_overlap'] != 'i know what i am doing!':
+                return
+
     import salt.client
     salt = salt.client.LocalClient()
     targets = data['targets']
@@ -128,7 +140,8 @@ def run(name,data,procname,running,state):
                     running[procname]=  { 'started': str(now), 'name': name, 'machines': chunk }
                     for target in chunk:
                         starttime = datetime.now(timezone.utc)
-                        log(cron=name, what='machine_start', instance=procname, time=starttime, machine=target)
+                        log(cron=name, what='machine_start', instance=procname, \
+                                time=starttime, machine=target)
                         results[target] = { 'ret': '', 'retcode': '', 'starttime': starttime, 'endtime': ''}
                         tmpresult = results[target].copy()
                         if 'starttime' in tmpresult:
@@ -172,12 +185,29 @@ def run(name,data,procname,running,state):
     else:
         running[procname]=  { 'started': str(now), 'name': name, 'machines': targets_list }
         starttime = datetime.now(timezone.utc)
-        for target in targets_list:
-           log(cron=name, what='machine_start', instance=procname, time=starttime, machine=target)
+
         try:
             generator = salt.cmd_iter(targets_list, 'cmd.run', cmdargs,
                     tgt_type='list', full_return=True)
             results = {}
+            for target in targets_list:
+                starttime = datetime.now(timezone.utc)
+                log(cron=name, what='machine_start', instance=procname, time=starttime, machine=target)
+                results[target] = { 'ret': '', 'retcode': '', 'starttime': starttime, 'endtime': ''}
+                tmpresult = results[target].copy()
+                if 'starttime' in tmpresult:
+                    tmpresult['starttime'] =  tmpresult['starttime'].isoformat()
+                #do this crap to propagate changes; this is somewhat acceptable since this object is not modified anywhere else
+                if 'results' in state[name]:
+                    tmpresults = state[name]['results'].copy()
+                else:
+                    tmpresults = {}
+                tmpresults[target] = tmpresult
+                tmpstate = state[name].copy()
+                tmpstate['results'] = tmpresults
+                state[name] = tmpstate
+
+
             for i in generator:
                 m = list(i)[0]
                 r = i[m]['retcode']
@@ -213,6 +243,7 @@ def run(name,data,procname,running,state):
                         time=results[machine]['endtime'])
     else:
         log(cron=name, what='no_machines', instance=procname, time=datetime.now(timezone.utc))
+    log(cron=name, what='end', instance=procname, time=datetime.now(timezone.utc))
 
 def debuglog(content):
     logfile = open(args.logdir+'/'+'debug.log','a')
@@ -231,6 +262,8 @@ def log(what, cron, instance, time, machine='', code=0, out='', status=''):
         content = "!!!!!! No targets matched for %s !!!!!!\n" % instance
     elif what == 'end':
         content = "###### Finished %s at %s ################\n" % (instance, time)
+    elif what == 'overlap':
+        content = "###### Overlap detected on %s at %s ################\n" % (instance, time)
     else:
         content = """########## %s from %s ################
 **** Exit Code %d ******
@@ -346,6 +379,7 @@ def main():
                     p = multiprocessing.Process(target=run,\
                             args=(name,config['crons'][name],procname,running, state), name=procname)
                     processlist[procname] = {}
+                    # this is wrong on multiple levels, to be fixed
                     if 'soft_timeout' in result:
                         processlist[procname]['soft_timeout'] = \
                                 datetime.now(timezone.utc)+timedelta(seconds = result['soft_timeout'])
@@ -362,6 +396,7 @@ def main():
             for process in processes:
                 if entry == process.name:
                     found = True
+                    # this is wrong on multiple levels, to be fixed:
                     if 'soft_timeout' in processlist[entry]  and \
                             processlist[entry]['soft_timeout'] < datetime.now(timezone.utc):
                         timeout('soft',process)
@@ -370,9 +405,6 @@ def main():
                         timeout('hard',process)
             if found == False:
                 print('Deleting process %s as it must have finished' % entry)
-                name = entry.split('_')[0]
-                log(cron=name, what='end', instance=entry, time=datetime.now(timezone.utc))
-
                 del(processlist[entry])
                 if entry in running:
                     del(running[entry])
