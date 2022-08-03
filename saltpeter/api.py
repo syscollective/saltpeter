@@ -116,10 +116,6 @@ def ws_update():
                             lastst[cron]['result_ok'] = True
                         else:
                             lastst[cron]['result_ok'] = False
-                        for instance in rng:
-                            if cron == rng[instance][name]:
-                                lastst[cron]['running_on'] = rng[instance][machines]
-                                break
             con.write_message((json.dumps(dict({'running': srrng, 'last_state': lastst}))))
             if cfgupdate:
                 con.write_message(json.dumps(dict({'config': dict(cfg), 'sp_version': __version__})))
