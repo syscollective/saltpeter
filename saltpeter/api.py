@@ -115,7 +115,7 @@ def ws_update():
                     if 'results' in srst[cron]:
                         for tgt_key in srst[cron]['results']:
                             tgt = srst[cron]['results'][tgt_key]
-                            if 'retcode' in tgt and tgt['retcode'] == 0:
+                            if 'retcode' in tgt and (tgt['retcode'] == 0 or tgt['retcode'] == "0"):
                                 lastst[cron]['result_ok'] = True
             con.write_message((json.dumps(dict({'running': srrng, 'last_state': lastst}))))
             if cfgupdate:
