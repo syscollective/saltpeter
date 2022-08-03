@@ -106,6 +106,7 @@ def ws_update():
                 if 'started' in srrng[cron]:
                     srrng[cron]['started'] = srrng[cron]['started'].isoformat()
             srst = st.copy()
+            lastst = {}
             for cron in srst:
                 if 'last_run' in srst[cron]:
                     lastst[cron] = {}
