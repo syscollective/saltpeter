@@ -108,15 +108,15 @@ def ws_update():
             srst = st.copy()
             lastst = {}
             for cron in srst:
-                if 'last_run' in srst[cron]:
+                if 'last_run' in srst[cron] and srst[cron]['last_run'] != '':
                     lastst[cron] = {}
                     lastst[cron]['last_run'] = srst[cron]['last_run'].isoformat()
-                    for tgt_key in st[cron]['results']:
-                        tgt = srst[cron]['results'][tgt_key]
-                        if 'retcode' in tgt and tgt['retcode'] == 0:
-                            lastst[cron]['result_ok'] = True
-                        else:
-                            lastst[cron]['result_ok'] = False
+                    lastst[cron]['result_ok'] = False
+                    if 'results' in srst[cron]:
+                        for tgt_key in srst[cron]['results']:
+                            tgt = srst[cron]['results'][tgt_key]
+                            if 'retcode' in tgt and tgt['retcode'] == 0:
+                                lastst[cron]['result_ok'] = True
             con.write_message((json.dumps(dict({'running': srrng, 'last_state': lastst}))))
             if cfgupdate:
                 con.write_message(json.dumps(dict({'config': dict(cfg), 'sp_version': __version__})))
