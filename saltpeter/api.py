@@ -61,7 +61,7 @@ class WSHandler(tornado.websocket.WebSocketHandler):
     def open(self):
         print('new connection')
         wsconnections.append(self)
-        self.write_message(json.dumps(dict({'config': dict(self.config)})))
+        self.write_message(json.dumps(dict({'config': dict(self.config), 'sp_version': __version__})))
 
     def on_message(self, message):
         print('message received %s' % message)
