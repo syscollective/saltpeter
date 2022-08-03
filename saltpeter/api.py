@@ -110,7 +110,7 @@ def ws_update():
             for cron in srst:
                 if 'last_run' in srst[cron]:
                     lastst[cron] = {}
-                    lastst[cron]['last_run'] = srst[cron]['last_run']
+                    lastst[cron]['last_run'] = srst[cron]['last_run'].isoformat()
                     for tgt_key in st[cron]['results']:
                         tgt = srst[cron]['results'][tgt_key]
                         if 'retcode' in tgt and tgt['retcode'] == 0:
