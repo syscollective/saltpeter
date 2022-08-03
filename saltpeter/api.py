@@ -6,6 +6,7 @@ import tornado.websocket
 import json
 from datetime import timedelta
 from multiprocessing import Manager
+from .version import __version__
  
 class VersionHandler(tornado.web.RequestHandler):
     def set_default_headers(self):
@@ -104,9 +105,24 @@ def ws_update():
             for cron in srrng:
                 if 'started' in srrng[cron]:
                     srrng[cron]['started'] = srrng[cron]['started'].isoformat()
-            con.write_message((json.dumps(dict({'running': srrng}))))
+            srst = state.copy()
+            for cron in srst:
+                if 'last_run' in srst[cron]:
+                    lastst[cron] = {}
+                    lastst[cron]['last_run'] = srst[cron]['last_run']
+                    for tgt_key in st[cron]['results']:
+                        tgt = srst[cron]['results'][tgt_key]
+                        if 'retcode' in tgt and tgt['retcode'] == 0:
+                            lastst[cron]['result_ok'] = True
+                        else:
+                            lastst[cron]['result_ok'] = False
+                        for instance in rng:
+                            if cron == rng[instance][name]:
+                                lastst[cron]['running_on'] = rng[instance][machines]
+                                break
+            con.write_message((json.dumps(dict({'running': srrng, 'last_state': lastst}))))
             if cfgupdate:
-                con.write_message(json.dumps(dict({'config': dict(cfg)})))
+                con.write_message(json.dumps(dict({'config': dict(cfg), 'sp_version': __version__})))
             for cron in cfg['crons']:
                 if cron in con.subscriptions:
                     srcron = st[cron].copy()
