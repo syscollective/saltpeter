@@ -1,4 +1,4 @@
-from ubuntu:focal
+from debian:bullseye
 
 MAINTAINER Syscollective SRL 
 
