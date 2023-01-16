@@ -1,32 +1,29 @@
-from ubuntu:focal
+from debian:bullseye
 
 MAINTAINER Syscollective SRL 
 
 COPY ./ /opt/saltpeter/
 
-# Add the Salt repo and install basic tools
+# Install basic tools
 RUN apt-get update && \
+    apt-get install -y curl && \
     apt-get install -y -o DPkg::Options::=--force-confold wget vim net-tools htop apt-utils apt-transport-https gnupg
-
-#RUN wget -O - https://repo.saltstack.com/apt/ubuntu/16.04/amd64/2019.2/SALTSTACK-GPG-KEY.pub | apt-key add - &&\
-#    echo 'deb http://repo.saltstack.com/apt/ubuntu/16.04/amd64/2019.2 xenial main' > /etc/apt/sources.list.d/saltstack.list && \
-#    apt-get update
-
-RUN wget -O - https://repo.saltstack.com/py3/ubuntu/20.04/amd64/latest/SALTSTACK-GPG-KEY.pub | apt-key add - && \
-    echo 'deb http://repo.saltstack.com/py3/ubuntu/20.04/amd64/latest focal main' > /etc/apt/sources.list.d/saltstack.list && \
-    apt-get update
-
-# Install Salt master and minion
-RUN DEBIAN_FRONTEND=noninteractive \
-    TZ=UTC \
-    apt-get install -y -o DPkg::Options::=--force-confold \
-	salt-master salt-minion
 
 # Install pip and python-dev
 RUN apt-get install -y -o DPkg::Options::=--force-confold \
-	python3-dev python3-pip
+    python3-dev python3-pip
+
+#RUN curl -fsSL -o /usr/share/keyrings/salt-archive-keyring.gpg https://repo.saltproject.io/py3/debian/11/amd64/latest/salt-archive-keyring.gpg
+#RUN echo "deb [signed-by=/usr/share/keyrings/salt-archive-keyring.gpg arch=amd64] https://repo.saltproject.io/py3/debian/11/amd64/latest bullseye main" | tee /etc/apt/sources.list.d/salt.list
+RUN pip3 install salt
+
+#RUN apt-get update && \
+#    apt-get install -y salt-master && \
+#    apt-get install -y salt-minion 
 
 # Configure salt master
+RUN mkdir -p /etc/salt/master.d
+RUN mkdir /etc/salt/minion.d
 RUN echo "auto_accept: True" > /etc/salt/master.d/auto_accept.conf
 #RUN echo "master: saltpeter-master" > /etc/salt/minion.d/masters.conf
 RUN echo "master: sp-master" > /etc/salt/minion.d/masters.conf

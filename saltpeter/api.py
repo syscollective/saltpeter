@@ -6,6 +6,7 @@ import tornado.websocket
 import json
 from datetime import timedelta
 from multiprocessing import Manager
+from .version import __version__
  
 class VersionHandler(tornado.web.RequestHandler):
     def set_default_headers(self):
@@ -60,7 +61,7 @@ class WSHandler(tornado.websocket.WebSocketHandler):
     def open(self):
         print('new connection')
         wsconnections.append(self)
-        self.write_message(json.dumps(dict({'config': dict(self.config)})))
+        self.write_message(json.dumps(dict({'config': dict(self.config), 'sp_version': __version__})))
 
     def on_message(self, message):
         print('message received %s' % message)
@@ -104,9 +105,21 @@ def ws_update():
             for cron in srrng:
                 if 'started' in srrng[cron]:
                     srrng[cron]['started'] = srrng[cron]['started'].isoformat()
-            con.write_message((json.dumps(dict({'running': srrng}))))
+            srst = st.copy()
+            lastst = {}
+            for cron in srst:
+                if 'last_run' in srst[cron] and srst[cron]['last_run'] != '':
+                    lastst[cron] = {}
+                    lastst[cron]['last_run'] = srst[cron]['last_run'].isoformat()
+                    lastst[cron]['result_ok'] = False
+                    if 'results' in srst[cron]:
+                        for tgt_key in srst[cron]['results']:
+                            tgt = srst[cron]['results'][tgt_key]
+                            if 'retcode' in tgt and (tgt['retcode'] == 0 or tgt['retcode'] == "0"):
+                                lastst[cron]['result_ok'] = True
+            con.write_message((json.dumps(dict({'running': srrng, 'last_state': lastst}))))
             if cfgupdate:
-                con.write_message(json.dumps(dict({'config': dict(cfg)})))
+                con.write_message(json.dumps(dict({'config': dict(cfg), 'sp_version': __version__})))
             for cron in cfg['crons']:
                 if cron in con.subscriptions:
                     srcron = st[cron].copy()
