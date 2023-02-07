@@ -24,7 +24,7 @@ def readconfig(configdir):
             for cron in loaded_config:
                 loaded_config[cron]['group'] = group 
             config.update(loaded_config)
-            if f in bad_crons:
+            if f in bad_files:
                 bad_files.remove(f)
         except Exception as e:
             if f not in bad_files:
@@ -67,7 +67,7 @@ def parsecron(name,data):
         entry = CronTab('%s %s %s %s %s %s %s' % (sec, minute, hour, dom, mon, dow, year))
     except Exception as e:
         if name not in bad_crons:
-            print('Could not parse executin time in "%s":' % name)
+            print('Could not parse execution time in "%s":' % name)
             print(e)
             bad_crons.append(name)
         return False
@@ -329,9 +329,11 @@ def main():
             config['serial'] = datetime.now(timezone.utc).timestamp()
 
         for name in config['crons']:
+            result = parsecron(name,config['crons'][name])
+            if name in bad_crons:
+                continue
             if name not in state:
                 state[name] = {}
-            result = parsecron(name,config['crons'][name])
             nextrun = datetime.now(timezone.utc)+timedelta(seconds=result['nextrun'])
             tmpstate = state[name].copy()
             tmpstate['next_run'] = nextrun
