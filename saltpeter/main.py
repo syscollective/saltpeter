@@ -21,9 +21,12 @@ def readconfig(configdir):
             config_string = open(configdir+'/'+f,'r').read()
             group = f[0:-5]
             loaded_config = yaml.load(config_string, Loader=yaml.FullLoader)
+            add_config = {}
             for cron in loaded_config:
-                loaded_config[cron]['group'] = group 
-            config.update(loaded_config)
+                if parsecron(cron,loaded_config[cron]) is not False:
+                    add_config[cron] = loaded_config[cron]
+                    add_config[cron]['group'] = group 
+            config.update(add_config)
             if f in bad_files:
                 bad_files.remove(f)
         except Exception as e:
@@ -298,7 +301,6 @@ def main():
     global processlist
     global use_es
     use_es = False
-    bad_crons = []
     bad_files = []
     last_run = {}
     processlist = {}
@@ -308,10 +310,11 @@ def main():
     config = manager.dict()
     state = manager.dict()
     commands = manager.list()
+    bad_crons = manager.list()
     
     #start the api
     if args.api:
-        a = multiprocessing.Process(target=api.start, args=(args.port,config,running,state,commands,), name='api')
+        a = multiprocessing.Process(target=api.start, args=(args.port,config,running,state,commands,bad_crons,), name='api')
         a.start()
 
     if args.elasticsearch != '':
@@ -328,10 +331,8 @@ def main():
             config['crons'] = newconfig
             config['serial'] = datetime.now(timezone.utc).timestamp()
 
-        for name in config['crons']:
+        for name in config['crons'].copy():
             result = parsecron(name,config['crons'][name])
-            if name in bad_crons:
-                continue
             if name not in state:
                 state[name] = {}
             nextrun = datetime.now(timezone.utc)+timedelta(seconds=result['nextrun'])
