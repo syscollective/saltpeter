@@ -111,12 +111,12 @@ def ws_update():
                 if 'last_run' in srst[cron] and srst[cron]['last_run'] != '':
                     lastst[cron] = {}
                     lastst[cron]['last_run'] = srst[cron]['last_run'].isoformat()
-                    lastst[cron]['result_ok'] = False
-                    if 'results' in srst[cron]:
+                    if 'results' in srst[cron] and len(srst[cron]['results']) > 0:
+                        lastst[cron]['result_ok'] = True
                         for tgt_key in srst[cron]['results']:
                             tgt = srst[cron]['results'][tgt_key]
-                            if 'retcode' in tgt and (tgt['retcode'] == 0 or tgt['retcode'] == "0"):
-                                lastst[cron]['result_ok'] = True
+                            if 'retcode' not in tgt or (tgt['retcode'] != 0 and tgt['retcode'] != "0"):
+                                lastst[cron]['result_ok'] = False
             con.write_message((json.dumps(dict({'running': srrng, 'last_state': lastst}))))
             if cfgupdate:
                 con.write_message(json.dumps(dict({'config': dict(cfg), 'sp_version': __version__})))
@@ -139,7 +139,7 @@ def ws_update():
 
 
 
-def start(port, config, running, state, commands):
+def start(port, config, running, state, commands, bad_crons, ):
     global cfg
     cfg = config
     global wsconnections

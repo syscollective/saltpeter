@@ -21,10 +21,13 @@ def readconfig(configdir):
             config_string = open(configdir+'/'+f,'r').read()
             group = f[0:-5]
             loaded_config = yaml.load(config_string, Loader=yaml.FullLoader)
+            add_config = {}
             for cron in loaded_config:
-                loaded_config[cron]['group'] = group 
-            config.update(loaded_config)
-            if f in bad_crons:
+                if parsecron(cron,loaded_config[cron]) is not False:
+                    add_config[cron] = loaded_config[cron]
+                    add_config[cron]['group'] = group 
+            config.update(add_config)
+            if f in bad_files:
                 bad_files.remove(f)
         except Exception as e:
             if f not in bad_files:
@@ -67,7 +70,7 @@ def parsecron(name,data):
         entry = CronTab('%s %s %s %s %s %s %s' % (sec, minute, hour, dom, mon, dow, year))
     except Exception as e:
         if name not in bad_crons:
-            print('Could not parse executin time in "%s":' % name)
+            print('Could not parse execution time in "%s":' % name)
             print(e)
             bad_crons.append(name)
         return False
@@ -82,7 +85,7 @@ def parsecron(name,data):
 
     return ret
 
-def processstart(chunk,name,procname,running,state):
+def processstart(chunk,name,procname,state):
     results = {}
 
     for target in chunk:
@@ -103,30 +106,50 @@ def processstart(chunk,name,procname,running,state):
                 time=starttime, machine=target)
 
 
-def processresults(generator,name,procname,running,state):
+def processresults(generator,name,procname,running,state,targets):
 
+    returns = []
     for i in generator:
-        
-        m = list(i)[0]
-        r = i[m]['retcode']
-        o = i[m]['ret']
-        result = { 'ret': o, 'retcode': r, 'starttime': state[name]['results'][m]['starttime'], 'endtime': datetime.now(timezone.utc) }
-        if 'results' in state[name]:
+        if i is not None:
+            m = list(i)[0]
+            returns.append(m)
+            r = i[m]['retcode']
+            o = i[m]['ret']
+            result = { 'ret': o, 'retcode': r, 'starttime': state[name]['results'][m]['starttime'], 'endtime': datetime.now(timezone.utc) }
+            if 'results' in state[name]:
+                tmpresults = state[name]['results'].copy()
+            else:
+                tmpresults = {}
+            tmpresults[m] = result
+            tmpstate = state[name].copy()
+            tmpstate['results'] = tmpresults
+            state[name] = tmpstate
+            tmprunning = running[procname]
+            tmprunning['machines'].remove(m)
+            running[procname] = tmprunning
+            print(i)
+
+            log(what='machine_result',cron=name, instance=procname, machine=m,
+                code=r, out=o, time=result['endtime'])
+
+    for tgt in targets:
+        if tgt not in returns:
+            now = datetime.now(timezone.utc)
+            log(what='machine_result',cron=name, instance=procname, machine=tgt,
+                code=255, out="Target did not return anything", time=now)
+
             tmpresults = state[name]['results'].copy()
-        else:
-            tmpresults = {}
-        tmpresults[m] = result
-        tmpstate = state[name].copy()
-        tmpstate['results'] = tmpresults
-        state[name] = tmpstate
-        tmprunning = running[procname]
-        tmprunning['machines'].remove(m)
-        running[procname] = tmprunning
+            tmpresults[tgt] = { 'ret': "Target did not return anything",
+                    'retcode': 255,
+                    'starttime': state[name]['results'][tgt]['starttime'],
+                    'endtime': now }
 
-        log(what='machine_result',cron=name, instance=procname, machine=m,
-            code=r, out=o, time=result['endtime'])
-
-
+            tmpstate = state[name].copy()
+            tmpstate['results'] = tmpresults
+            state[name] = tmpstate
+            tmprunning = running[procname]
+            tmprunning['machines'].remove(m)
+            running[procname] = tmprunning
 
 
 def run(name,data,procname,running,state):
@@ -154,23 +177,34 @@ def run(name,data,procname,running,state):
         cmdargs.append('timeout='+str(data['hard_timeout']))
 
     now = datetime.now(timezone.utc)
+    running[procname]=  { 'started': now, 'name': name , 'machines': []}
     tmpstate = state[name].copy()
     tmpstate['last_run'] = now
     tmpstate['overlap'] = False
     state[name] = tmpstate
     log(cron=name, what='start', instance=procname, time=now)
     minion_ret = salt.cmd(targets, 'test.ping', tgt_type=target_type)
-    minions = list(minion_ret)
-    targets_list = minions
+    targets_list = list(minion_ret)
+    dead_targets = []
     tmpstate = state[name]
-    tmpstate['targets'] = targets_list
+    tmpstate['targets'] = targets_list.copy()
     tmpstate['results'] = {}
+
+    for tgt in targets_list.copy():
+        if minion_ret[tgt] == False:
+            targets_list.remove(tgt)
+            print("Fail: ",tgt)
+            tmpstate['results'][tgt] = { 'ret': "Target did not respond",
+                    'retcode': 255,
+                    'starttime': now,
+                    'endtime': datetime.now(timezone.utc) }
+
     state[name] = tmpstate
+    print(state[name])
     if len(targets_list) == 0:
         log(cron=name, what='no_machines', instance=procname, time=datetime.now(timezone.utc))
         log(cron=name, what='end', instance=procname, time=datetime.now(timezone.utc))
         return
-
     if 'number_of_targets' in data and data['number_of_targets'] != 0:
         import random
         #targets chosen at random
@@ -187,14 +221,14 @@ def run(name,data,procname,running,state):
 
                 try:
                     # this should be nonblocking
-                    generator = salt.cmd_iter(chunk, 'cmd.run', cmdargs,
+                    generator = salt.cmd_iter_no_block(chunk, 'cmd.run', cmdargs,
                             tgt_type='list', full_return=True)
 
                     # update running list and state
                     running[procname]=  { 'started': now, 'name': name, 'machines': chunk }
-                    processstart(chunk,name,procname,running,state)
+                    processstart(chunk,name,procname,state)
                     #this should be blocking
-                    processresults(generator,name,procname,running,state)
+                    processresults(generator,name,procname,running,state,chunk)
                     chunk = []
                 except Exception as e:
                     print('Exception triggered in run() at "batch_size" condition', e)
@@ -204,11 +238,11 @@ def run(name,data,procname,running,state):
         starttime = datetime.now(timezone.utc)
 
         try:
-            generator = salt.cmd_iter(targets_list, 'cmd.run', cmdargs,
+            generator = salt.cmd_iter_no_block(targets_list, 'cmd.run', cmdargs,
                     tgt_type='list', full_return=True)
-            processstart(targets_list,name,procname,running,state)
+            processstart(targets_list,name,procname,state)
             #this should be blocking
-            processresults(generator,name,procname,running,state)
+            processresults(generator,name,procname,running,state,targets_list)
 
         except Exception as e:
             print('Exception triggered in run()', e)
@@ -298,7 +332,6 @@ def main():
     global processlist
     global use_es
     use_es = False
-    bad_crons = []
     bad_files = []
     last_run = {}
     processlist = {}
@@ -308,10 +341,11 @@ def main():
     config = manager.dict()
     state = manager.dict()
     commands = manager.list()
+    bad_crons = manager.list()
     
     #start the api
     if args.api:
-        a = multiprocessing.Process(target=api.start, args=(args.port,config,running,state,commands,), name='api')
+        a = multiprocessing.Process(target=api.start, args=(args.port,config,running,state,commands,bad_crons,), name='api')
         a.start()
 
     if args.elasticsearch != '':
@@ -328,10 +362,10 @@ def main():
             config['crons'] = newconfig
             config['serial'] = datetime.now(timezone.utc).timestamp()
 
-        for name in config['crons']:
+        for name in config['crons'].copy():
+            result = parsecron(name,config['crons'][name])
             if name not in state:
                 state[name] = {}
-            result = parsecron(name,config['crons'][name])
             nextrun = datetime.now(timezone.utc)+timedelta(seconds=result['nextrun'])
             tmpstate = state[name].copy()
             tmpstate['next_run'] = nextrun
