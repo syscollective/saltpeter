@@ -82,6 +82,10 @@ class WSHandler(tornado.websocket.WebSocketHandler):
         if 'run' in msg:
             cron = msg['run']
             self.cmds.append(dict({'runnow': cron}))
+        if 'killCron' in msg:
+            cron = msg['killCron']
+            self.cmds.append(dict({'killcron': cron}))
+
 
 
     def on_close(self):

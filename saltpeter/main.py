@@ -10,6 +10,7 @@ import time
 from datetime import datetime,timedelta,date,timezone
 from crontab import CronTab
 import multiprocessing
+from pprint import pprint
 
 def readconfig(configdir):
     global bad_files
@@ -106,15 +107,27 @@ def processstart(chunk,name,procname,state):
                 time=starttime, machine=target)
 
 
-def processresults(generator,name,procname,running,state,targets):
+def processresults(client,commands,job,name,procname,running,state,targets):
 
-    returns = []
-    for i in generator:
+
+
+    jid = job['jid']
+    minions = job['minions']
+
+
+    rets = client.get_iter_returns(jid, minions, block=False, expect_minions=True,timeout=1)
+    keepgoing = True
+
+    for i in rets:
         if i is not None:
+            print(i)
             m = list(i)[0]
-            returns.append(m)
-            r = i[m]['retcode']
-            o = i[m]['ret']
+            if 'failed' in i[m] and i[m]['failed'] == True:
+                r = 255
+                o = "Target failed"
+            else:
+                r = i[m]['retcode']
+                o = i[m]['ret']
             result = { 'ret': o, 'retcode': r, 'starttime': state[name]['results'][m]['starttime'], 'endtime': datetime.now(timezone.utc) }
             if 'results' in state[name]:
                 tmpresults = state[name]['results'].copy()
@@ -131,9 +144,20 @@ def processresults(generator,name,procname,running,state,targets):
 
             log(what='machine_result',cron=name, instance=procname, machine=m,
                 code=r, out=o, time=result['endtime'])
+        #time.sleep(1)
+        for cmd in commands:
+            print('COMMAND: ',cmd)
+            if 'killcron' in cmd:
+                if cmd['killcron'] == name:
+                    commands.remove(cmd)
+                    client.run_job(minions, 'saltutil.term_job', [jid], tgt_type='list')
+
+
+        print("iterating")
+    print("END")
 
     for tgt in targets:
-        if tgt not in returns:
+        if tgt not in minions:
             now = datetime.now(timezone.utc)
             log(what='machine_result',cron=name, instance=procname, machine=tgt,
                 code=255, out="Target did not return anything", time=now)
@@ -152,7 +176,8 @@ def processresults(generator,name,procname,running,state,targets):
             running[procname] = tmprunning
 
 
-def run(name,data,procname,running,state):
+
+def run(name,data,procname,running,state,commands):
     #do this check here for the purpose of avoiding sync logging in the main program
     for instance in running.keys():
         if name == running[instance]['name']:
@@ -221,14 +246,16 @@ def run(name,data,procname,running,state):
 
                 try:
                     # this should be nonblocking
-                    generator = salt.cmd_iter_no_block(chunk, 'cmd.run', cmdargs,
-                            tgt_type='list', full_return=True)
+                    job = salt.run_job(chunk, 'cmd.run', cmdargs,
+                            tgt_type='list', listen=True)
 
                     # update running list and state
                     running[procname]=  { 'started': now, 'name': name, 'machines': chunk }
                     processstart(chunk,name,procname,state)
+                    print("run_job return:")
+                    print(job)
                     #this should be blocking
-                    processresults(generator,name,procname,running,state,chunk)
+                    processresults(salt,commands,job,name,procname,running,state,chunk)
                     chunk = []
                 except Exception as e:
                     print('Exception triggered in run() at "batch_size" condition', e)
@@ -238,11 +265,13 @@ def run(name,data,procname,running,state):
         starttime = datetime.now(timezone.utc)
 
         try:
-            generator = salt.cmd_iter_no_block(targets_list, 'cmd.run', cmdargs,
-                    tgt_type='list', full_return=True)
+            job = salt.run_job(targets_list, 'cmd.run', cmdargs,
+                    tgt_type='list', listen=True)
             processstart(targets_list,name,procname,state)
+            print("run_job return:")
+            print(job)
             #this should be blocking
-            processresults(generator,name,procname,running,state,targets_list)
+            processresults(salt,commands,job,name,procname,running,state,targets_list)
 
         except Exception as e:
             print('Exception triggered in run()', e)
@@ -389,7 +418,7 @@ def main():
 
                     #running[procname] = {'empty': True}
                     p = multiprocessing.Process(target=run,\
-                            args=(name,config['crons'][name],procname,running, state), name=procname)
+                            args=(name,config['crons'][name],procname,running, state, commands), name=procname)
                     processlist[procname] = {}
                     # this is wrong on multiple levels, to be fixed
                     if 'soft_timeout' in result:
