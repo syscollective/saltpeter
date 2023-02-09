@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 
-from saltpeter import api
+from saltpeter import api, version
 import json
 import os
 import argparse
 import re
 import yaml
 import time
+from sys import exit
 from datetime import datetime,timedelta,date,timezone
 from crontab import CronTab
 import multiprocessing
@@ -342,9 +343,16 @@ def main():
     parser.add_argument('-i', '--index', default='saltpeter',\
             help='Elasticsearch index name')
 
+    parser.add_argument('-v', '--version', action='store_true' ,\
+            help='Print version and exit')
 
     global args
     args = parser.parse_args()
+
+    if args.version:
+        print("Saltpeter version ", version.__version__)
+        exit(0)
+
 
     global bad_crons
     global bad_files
