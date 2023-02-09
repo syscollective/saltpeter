@@ -59,23 +59,24 @@ class WSHandler(tornado.websocket.WebSocketHandler):
 
 
     def open(self):
-        print('new connection')
+        print('New WS connection')
         wsconnections.append(self)
         self.write_message(json.dumps(dict({'config': dict(self.config), 'sp_version': __version__})))
 
     def on_message(self, message):
-        print('message received %s' % message)
+        print('Message received %s' % message)
         #self.write_message('received: ' % message)
         try:
             msg = json.loads(message)
         except Exception as e:
-            print('could not parse messageas json')
+            print('Could not parse message as json')
             print(e)
             return
 
         if 'subscribe' in msg:
             cron = msg['subscribe']
             self.subscriptions.append(cron)
+            send_data(self,False)
         if 'unsubscribe' in msg:
             cron = msg['unsubscribe']
             self.subscriptions.remove(cron)
@@ -89,8 +90,46 @@ class WSHandler(tornado.websocket.WebSocketHandler):
 
 
     def on_close(self):
-        print('connection closed')
+        print('WS connection closed')
         wsconnections.remove(self)
+
+def send_data(con, cfgupdate):
+    srrng = rng.copy()
+    for cron in srrng:
+        if 'started' in srrng[cron]:
+            srrng[cron]['started'] = srrng[cron]['started'].isoformat()
+    srst = st.copy()
+    lastst = {}
+    for cron in srst:
+        if 'last_run' in srst[cron] and srst[cron]['last_run'] != '':
+            lastst[cron] = {}
+            lastst[cron]['last_run'] = srst[cron]['last_run'].isoformat()
+            if 'results' in srst[cron] and len(srst[cron]['results']) > 0:
+                lastst[cron]['result_ok'] = True
+                for tgt_key in srst[cron]['results']:
+                    tgt = srst[cron]['results'][tgt_key]
+                    if 'retcode' not in tgt or (tgt['retcode'] != 0 and tgt['retcode'] != "0"):
+                        lastst[cron]['result_ok'] = False
+    con.write_message((json.dumps(dict({'running': srrng, 'last_state': lastst}))))
+    if cfgupdate:
+        con.write_message(json.dumps(dict({'config': dict(cfg), 'sp_version': __version__})))
+    for cron in cfg['crons']:
+        if cron in con.subscriptions:
+            srcron = st[cron].copy()
+            if 'next_run' in srcron:
+                srcron['next_run'] = srcron['next_run'].isoformat()
+            if 'last_run' in srcron:
+                srcron['last_run'] = srcron['last_run'].isoformat()
+
+            if 'results' in srcron:
+                for m in srcron['results']:
+                    if 'starttime' in srcron['results'][m] and srcron['results'][m]['starttime'] != '':
+                        srcron['results'][m]['starttime'] = srcron['results'][m]['starttime'].isoformat()
+                    if 'endtime' in srcron['results'][m] and srcron['results'][m]['endtime'] != '':
+                        srcron['results'][m]['endtime'] = srcron['results'][m]['endtime'].isoformat()
+
+            con.write_message(json.dumps(dict({cron: srcron})))
+
 
 
 def ws_update():
@@ -105,42 +144,7 @@ def ws_update():
 
     if len(wsconnections) > 0:
         for con in wsconnections:
-            srrng = rng.copy()
-            for cron in srrng:
-                if 'started' in srrng[cron]:
-                    srrng[cron]['started'] = srrng[cron]['started'].isoformat()
-            srst = st.copy()
-            lastst = {}
-            for cron in srst:
-                if 'last_run' in srst[cron] and srst[cron]['last_run'] != '':
-                    lastst[cron] = {}
-                    lastst[cron]['last_run'] = srst[cron]['last_run'].isoformat()
-                    if 'results' in srst[cron] and len(srst[cron]['results']) > 0:
-                        lastst[cron]['result_ok'] = True
-                        for tgt_key in srst[cron]['results']:
-                            tgt = srst[cron]['results'][tgt_key]
-                            if 'retcode' not in tgt or (tgt['retcode'] != 0 and tgt['retcode'] != "0"):
-                                lastst[cron]['result_ok'] = False
-            con.write_message((json.dumps(dict({'running': srrng, 'last_state': lastst}))))
-            if cfgupdate:
-                con.write_message(json.dumps(dict({'config': dict(cfg), 'sp_version': __version__})))
-            for cron in cfg['crons']:
-                if cron in con.subscriptions:
-                    srcron = st[cron].copy()
-                    if 'next_run' in srcron:
-                        srcron['next_run'] = srcron['next_run'].isoformat()
-                    if 'last_run' in srcron:
-                        srcron['last_run'] = srcron['last_run'].isoformat()
-
-                    if 'results' in srcron:
-                        for m in srcron['results']:
-                            if 'starttime' in srcron['results'][m] and srcron['results'][m]['starttime'] != '':
-                                srcron['results'][m]['starttime'] = srcron['results'][m]['starttime'].isoformat()
-                            if 'endtime' in srcron['results'][m] and srcron['results'][m]['endtime'] != '':
-                                srcron['results'][m]['endtime'] = srcron['results'][m]['endtime'].isoformat()
-
-                    con.write_message(json.dumps(dict({cron: srcron})))
-
+            send_data(con, cfgupdate)
 
 
 def start(port, config, running, state, commands, bad_crons, ):

@@ -10,7 +10,7 @@ import time
 from datetime import datetime,timedelta,date,timezone
 from crontab import CronTab
 import multiprocessing
-from pprint import pprint
+#from pprint import pprint
 
 def readconfig(configdir):
     global bad_files
@@ -120,7 +120,6 @@ def processresults(client,commands,job,name,procname,running,state,targets):
 
     for i in rets:
         if i is not None:
-            print(i)
             m = list(i)[0]
             if 'failed' in i[m] and i[m]['failed'] == True:
                 r = 255
@@ -140,7 +139,6 @@ def processresults(client,commands,job,name,procname,running,state,targets):
             tmprunning = running[procname]
             tmprunning['machines'].remove(m)
             running[procname] = tmprunning
-            print(i)
 
             log(what='machine_result',cron=name, instance=procname, machine=m,
                 code=r, out=o, time=result['endtime'])
@@ -153,8 +151,6 @@ def processresults(client,commands,job,name,procname,running,state,targets):
                     client.run_job(minions, 'saltutil.term_job', [jid], tgt_type='list')
 
 
-        print("iterating")
-    print("END")
 
     for tgt in targets:
         if tgt not in minions:
@@ -218,14 +214,12 @@ def run(name,data,procname,running,state,commands):
     for tgt in targets_list.copy():
         if minion_ret[tgt] == False:
             targets_list.remove(tgt)
-            print("Fail: ",tgt)
             tmpstate['results'][tgt] = { 'ret': "Target did not respond",
                     'retcode': 255,
                     'starttime': now,
                     'endtime': datetime.now(timezone.utc) }
 
     state[name] = tmpstate
-    print(state[name])
     if len(targets_list) == 0:
         log(cron=name, what='no_machines', instance=procname, time=datetime.now(timezone.utc))
         log(cron=name, what='end', instance=procname, time=datetime.now(timezone.utc))
@@ -252,8 +246,6 @@ def run(name,data,procname,running,state,commands):
                     # update running list and state
                     running[procname]=  { 'started': now, 'name': name, 'machines': chunk }
                     processstart(chunk,name,procname,state)
-                    print("run_job return:")
-                    print(job)
                     #this should be blocking
                     processresults(salt,commands,job,name,procname,running,state,chunk)
                     chunk = []
@@ -268,8 +260,6 @@ def run(name,data,procname,running,state,commands):
             job = salt.run_job(targets_list, 'cmd.run', cmdargs,
                     tgt_type='list', listen=True)
             processstart(targets_list,name,procname,state)
-            print("run_job return:")
-            print(job)
             #this should be blocking
             processresults(salt,commands,job,name,procname,running,state,targets_list)
 
@@ -449,7 +439,6 @@ def main():
                 del(processlist[entry])
                 if entry in running:
                     del(running[entry])
-        #print running
 
 
 if __name__ == "__main__":
