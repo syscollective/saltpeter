@@ -61,7 +61,7 @@ class WSHandler(tornado.websocket.WebSocketHandler):
     def open(self):
         print('New WS connection')
         wsconnections.append(self)
-        self.write_message(json.dumps(dict({'config': dict(self.config), 'sp_version': __version__})))
+        send_data(self,True)
 
     def on_message(self, message):
         print('Message received %s' % message)
@@ -94,6 +94,8 @@ class WSHandler(tornado.websocket.WebSocketHandler):
         wsconnections.remove(self)
 
 def send_data(con, cfgupdate):
+    if cfgupdate:
+        con.write_message(json.dumps(dict({'config': dict(cfg), 'sp_version': __version__})))
     srrng = rng.copy()
     for cron in srrng:
         if 'started' in srrng[cron]:
@@ -111,8 +113,6 @@ def send_data(con, cfgupdate):
                     if 'retcode' not in tgt or (tgt['retcode'] != 0 and tgt['retcode'] != "0"):
                         lastst[cron]['result_ok'] = False
     con.write_message((json.dumps(dict({'running': srrng, 'last_state': lastst}))))
-    if cfgupdate:
-        con.write_message(json.dumps(dict({'config': dict(cfg), 'sp_version': __version__})))
     for cron in cfg['crons']:
         if cron in con.subscriptions:
             srcron = st[cron].copy()

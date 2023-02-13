@@ -1,5 +1,6 @@
 /sp-env/
 /dist/
+/build/
 *.pyc
 *.egg-info
 /examples/logs
