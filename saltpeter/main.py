@@ -419,7 +419,6 @@ def main():
                     last_run[name] = now 
                     procname = name+'_'+str(int(time.time()))
                     print('Firing %s!' % procname)
-                    print(state[name])
 
                     #running[procname] = {'empty': True}
                     p = multiprocessing.Process(target=run,\

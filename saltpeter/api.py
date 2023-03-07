@@ -97,7 +97,9 @@ def send_data(con, cfgupdate):
     if cfgupdate:
         con.write_message(json.dumps(dict({'config': dict(cfg), 'sp_version': __version__})))
     srrng = rng.copy()
+    rng_names = []
     for cron in srrng:
+        rng_names.append(srrng[cron]['name'])
         if 'started' in srrng[cron]:
             srrng[cron]['started'] = srrng[cron]['started'].isoformat()
     srst = st.copy()
@@ -110,8 +112,12 @@ def send_data(con, cfgupdate):
                 lastst[cron]['result_ok'] = True
                 for tgt_key in srst[cron]['results']:
                     tgt = srst[cron]['results'][tgt_key]
-                    if 'retcode' not in tgt or (tgt['retcode'] != 0 and tgt['retcode'] != "0"):
-                        lastst[cron]['result_ok'] = False
+                    if cron not in rng_names:
+                        if 'retcode' not in tgt or (tgt['retcode'] != 0 and tgt['retcode'] != "0"):
+                            lastst[cron]['result_ok'] = False
+            else:
+                lastst[cron]['result_ok'] = False
+
     con.write_message((json.dumps(dict({'running': srrng, 'last_state': lastst}))))
     for cron in cfg['crons']:
         if cron in con.subscriptions:
