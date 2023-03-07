@@ -127,7 +127,7 @@ def processresults(client,commands,job,name,procname,running,state,targets):
             m = list(i)[0]
             if 'failed' in i[m] and i[m]['failed'] == True:
                 r = 255
-                o = "Target failed"
+                o = "Target did not return data" 
             else:
                 r = i[m]['retcode']
                 o = i[m]['ret']
@@ -280,7 +280,13 @@ def debuglog(content):
 
 
 def log(what, cron, instance, time, machine='', code=0, out='', status=''):
-    logfile = open(args.logdir+'/'+cron+'.log','a')
+    try:
+        logfile_name = args.logdir+'/'+cron+'.log'
+        logfile = open(logfile_name,'a')
+    except Exception as e:
+        print(f"Could not open logfile {logfile_name}: ", e)
+        return
+
     if what == 'start':
         content = "###### Starting %s at %s ################\n" % (instance, time)
     elif what == 'machine_start':
