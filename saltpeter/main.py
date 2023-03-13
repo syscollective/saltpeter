@@ -38,13 +38,15 @@ def readconfig(configdir):
     return config
 
 
-def parsecron(name,data):
+def parsecron(name, data, time=datetime.now(timezone.utc)):
     try:
         dow = data['dow']
         dom = data['dom']
         mon = data['mon']
         hour = data['hour']
         minute = data['min']
+
+        ### TODO: replace this with a timezone specification
         if 'utc' in data:
             utc = data['utc']
         else:
@@ -81,9 +83,10 @@ def parsecron(name,data):
         bad_crons.remove(name)
 
     if utc:
-        ret['nextrun'] = entry.next(now=datetime.now(timezone.utc)-timedelta(seconds=1),default_utc=True)
+        ret['nextrun'] = entry.next(now=time,default_utc=True)
     else:
-        ret['nextrun'] = entry.next(now=datetime.now()-timedelta(seconds=1),default_utc=False)
+        ### TODO: replace this with a timezone specification
+        ret['nextrun'] = entry.next(now=time,default_utc=False)
 
     return ret
 
@@ -124,7 +127,7 @@ def processresults(client,commands,job,name,procname,running,state,targets):
             m = list(i)[0]
             if 'failed' in i[m] and i[m]['failed'] == True:
                 r = 255
-                o = "Target failed"
+                o = "Target did not return data" 
             else:
                 r = i[m]['retcode']
                 o = i[m]['ret']
@@ -277,7 +280,13 @@ def debuglog(content):
 
 
 def log(what, cron, instance, time, machine='', code=0, out='', status=''):
-    logfile = open(args.logdir+'/'+cron+'.log','a')
+    try:
+        logfile_name = args.logdir+'/'+cron+'.log'
+        logfile = open(logfile_name,'a')
+    except Exception as e:
+        print(f"Could not open logfile {logfile_name}: ", e)
+        return
+
     if what == 'start':
         content = "###### Starting %s at %s ################\n" % (instance, time)
     elif what == 'machine_start':
@@ -382,18 +391,23 @@ def main():
         es = Elasticsearch(args.elasticsearch,maxsize=50)
 
     #main loop
+    prev = datetime.now(timezone.utc)
+
     while True:
         
+        now = datetime.now(timezone.utc)
+
         newconfig = readconfig(args.configdir)
         if 'crons' not in config or config['crons'] != newconfig:
             config['crons'] = newconfig
-            config['serial'] = datetime.now(timezone.utc).timestamp()
+            config['serial'] = now.timestamp()
 
         for name in config['crons'].copy():
-            result = parsecron(name,config['crons'][name])
+            #determine next run based on the the last time the loop ran, not the current time
+            result = parsecron(name, config['crons'][name], prev)
             if name not in state:
                 state[name] = {}
-            nextrun = datetime.now(timezone.utc)+timedelta(seconds=result['nextrun'])
+            nextrun = prev + timedelta(seconds=result['nextrun'])
             tmpstate = state[name].copy()
             tmpstate['next_run'] = nextrun
             state[name] = tmpstate
@@ -406,27 +420,28 @@ def main():
                         runnow = True
                         commands.remove(cmd)
 
-            if (result != False and result['nextrun'] < 1) or runnow:
-                if name not in last_run or \
-                        datetime.now(timezone.utc) - last_run[name] > timedelta(seconds=1):
-                    last_run[name] = datetime.now(timezone.utc)
+            if (result != False and now >= nextrun) or runnow:
+                if name not in last_run or last_run[name] < prev:
+                    last_run[name] = now 
                     procname = name+'_'+str(int(time.time()))
                     print('Firing %s!' % procname)
-                    print(state[name])
 
                     #running[procname] = {'empty': True}
                     p = multiprocessing.Process(target=run,\
                             args=(name,config['crons'][name],procname,running, state, commands), name=procname)
+
                     processlist[procname] = {}
+
                     # this is wrong on multiple levels, to be fixed
                     if 'soft_timeout' in result:
                         processlist[procname]['soft_timeout'] = \
-                                datetime.now(timezone.utc)+timedelta(seconds = result['soft_timeout'])
+                                now+timedelta(seconds = result['soft_timeout'])
                     if 'hard_timeout' in result:
                         processlist[procname]['hard_timeout'] = \
-                                datetime.now(timezone.utc)+timedelta(seconds = result['hard_timeout']-1)
+                                now+timedelta(seconds = result['hard_timeout']-1)
                     p.start()
-        time.sleep(0.5)
+        prev = now
+        time.sleep(0.05)
 
         #process cleanup and timeout enforcing
         processes = multiprocessing.active_children()
