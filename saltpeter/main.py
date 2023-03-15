@@ -231,8 +231,8 @@ def run(name,data,procname,running,state,commands):
     if 'number_of_targets' in data and data['number_of_targets'] != 0:
         import random
         #targets chosen at random
-        random.shuffle(minions)
-        targets_list = minions[:data['number_of_targets']]
+        random.shuffle(targets_list)
+        targets_list = targets_list[:data['number_of_targets']]
 
     if 'batch_size' in data and data['batch_size'] != 0:
         chunk = []
