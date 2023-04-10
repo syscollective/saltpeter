@@ -325,9 +325,9 @@ def log(what, cron, instance, time, machine='', code=0, out='', status=''):
         index_name = 'saltpeter-%s' % date.today().strftime('%Y.%m.%d')
         try:
             #es.indices.create(index=index_name, ignore=400)
-            opensearch.index(index=index_name, doc_type='_doc', body=doc, request_timeout=20)
+            opensearch.index(index=index_name, body=doc, request_timeout=20)
         except Exception as e:
-            print("Can't write to opensearch", doc)
+            #print("Can't write to opensearch", doc)
             print(e)
 
 
@@ -361,8 +361,11 @@ def main():
     parser.add_argument('-e', '--elasticsearch', default='',\
             help='Elasticsearch host')
 
+    parser.add_argument('-o', '--opensearch', default='',\
+            help='Opensearch host')
+
     parser.add_argument('-i', '--index', default='saltpeter',\
-            help='Elasticsearch index name')
+            help='Elasticsearch/Opensearch index name')
 
     parser.add_argument('-v', '--version', action='store_true' ,\
             help='Print version and exit')
@@ -408,7 +411,7 @@ def main():
         from opensearchpy import OpenSearch
         use_opensearch = True
         global opensearch
-        opensearch = OpenSearch(args.opensearch,maxsize=50,useSSL=False,verify_certs=False)
+        opensearch = OpenSearch(args.opensearch,maxsize=50,useSSL=False,verify_certs=False,ssl_assert_hostname = False,ssl_show_warn = False,)
 
 
     #main loop
