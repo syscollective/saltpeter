@@ -319,6 +319,18 @@ def log(what, cron, instance, time, machine='', code=0, out='', status=''):
             print("Can't write to elasticsearch", doc)
             print(e)
 
+    if use_opensearch:
+        doc = { 'job_name': cron, "job_instance": instance, '@timestamp': time,
+                'return_code': code, 'machine': machine, 'output': out, 'msg_type': what } 
+        index_name = 'saltpeter-%s' % date.today().strftime('%Y.%m.%d')
+        try:
+            #es.indices.create(index=index_name, ignore=400)
+            opensearch.index(index=index_name, body=doc, request_timeout=20)
+        except Exception as e:
+            #print("Can't write to opensearch", doc)
+            print(e)
+
+
 
 def timeout(which, process):
     global processlist
@@ -349,8 +361,11 @@ def main():
     parser.add_argument('-e', '--elasticsearch', default='',\
             help='Elasticsearch host')
 
+    parser.add_argument('-o', '--opensearch', default='',\
+            help='Opensearch host')
+
     parser.add_argument('-i', '--index', default='saltpeter',\
-            help='Elasticsearch index name')
+            help='Elasticsearch/Opensearch index name')
 
     parser.add_argument('-v', '--version', action='store_true' ,\
             help='Print version and exit')
@@ -368,6 +383,8 @@ def main():
     global processlist
     global use_es
     use_es = False
+    global use_opensearch
+    use_opensearch = False
     bad_files = []
     last_run = {}
     processlist = {}
@@ -389,6 +406,13 @@ def main():
         use_es = True
         global es
         es = Elasticsearch(args.elasticsearch,maxsize=50)
+
+    if args.opensearch != '':
+        from opensearchpy import OpenSearch
+        use_opensearch = True
+        global opensearch
+        opensearch = OpenSearch(args.opensearch,maxsize=50,useSSL=False,verify_certs=False)
+
 
     #main loop
     prev = datetime.now(timezone.utc)

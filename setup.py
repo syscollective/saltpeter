@@ -17,6 +17,7 @@ setup(name='saltpeter',
           'crontab',
           'pyyaml',
           'tornado',
-          'elasticsearch'
+          'elasticsearch',
+          'opensearch-py',
       ],
       zip_safe=False)
