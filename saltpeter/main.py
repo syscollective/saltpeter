@@ -411,7 +411,7 @@ def main():
         from opensearchpy import OpenSearch
         use_opensearch = True
         global opensearch
-        opensearch = OpenSearch(args.opensearch,maxsize=50,useSSL=False,verify_certs=False,ssl_assert_hostname = False,ssl_show_warn = False,)
+        opensearch = OpenSearch(args.opensearch,maxsize=50,useSSL=False,verify_certs=False)
 
 
     #main loop
