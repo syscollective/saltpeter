@@ -18,6 +18,6 @@ setup(name='saltpeter',
           'pyyaml',
           'tornado',
           'elasticsearch',
-          'opensearchpy',
+          'opensearch-py',
       ],
       zip_safe=False)
