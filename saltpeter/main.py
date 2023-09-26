@@ -114,6 +114,10 @@ def processstart(chunk,name,procname,state):
 def processresults(client,commands,job,name,procname,running,state,targets):
 
 
+    print("We here")
+    import salt.runner
+    opts = salt.config.master_config('/etc/salt/master')
+    runner = salt.runner.RunnerClient(opts)
 
     jid = job['jid']
     minions = job['minions']
@@ -122,12 +126,24 @@ def processresults(client,commands,job,name,procname,running,state,targets):
     rets = client.get_iter_returns(jid, minions, block=False, expect_minions=True,timeout=1)
     keepgoing = True
 
+
     for i in rets:
         if i is not None:
             m = list(i)[0]
             if 'failed' in i[m] and i[m]['failed'] == True:
-                r = 255
-                o = "Target did not return data" 
+                print(f"Getting info about job {name} jid: {jid} every 10 seconds")
+                #r = 255
+                #o = "Target did not return data" 
+                while True:
+                    job = runner.cmd('jobs.lookup_jid', [jid])
+                    print(f"Result about jid {jid}: {result}")
+                    if job != {} and m in job:
+                        job_listing = runner.cmd("jobs.list_job",[jid])
+                        o = job_listing['Result'][m]['return']
+                        r = job_listing['Result'][m]['retcode']
+                        break
+                    time.sleep(10)
+
             else:
                 r = i[m]['retcode']
                 o = i[m]['ret']
