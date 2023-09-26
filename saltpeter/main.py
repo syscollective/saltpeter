@@ -114,7 +114,6 @@ def processstart(chunk,name,procname,state):
 def processresults(client,commands,job,name,procname,running,state,targets):
 
 
-    print("We here")
     import salt.runner
     opts = salt.config.master_config('/etc/salt/master')
     runner = salt.runner.RunnerClient(opts)
@@ -136,7 +135,7 @@ def processresults(client,commands,job,name,procname,running,state,targets):
                 #o = "Target did not return data" 
                 while True:
                     job = runner.cmd('jobs.lookup_jid', [jid])
-                    print(f"Result about jid {jid}: {result}")
+                    print(f"Result about job {name}, jid {jid}: {result}")
                     if job != {} and m in job:
                         job_listing = runner.cmd("jobs.list_job",[jid])
                         o = job_listing['Result'][m]['return']
