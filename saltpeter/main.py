@@ -135,7 +135,7 @@ def processresults(client,commands,job,name,procname,running,state,targets):
                 #o = "Target did not return data" 
                 while True:
                     job = runner.cmd('jobs.lookup_jid', [jid])
-                    print(f"Result about job {name}, jid {jid}: {result}")
+                    print(f"Job {name}, jid {jid}: {job}")
                     if m in job:
                         job_listing = runner.cmd("jobs.list_job",[jid])
                         o = job_listing['Result'][m]['return']
