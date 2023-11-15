@@ -1,4 +1,4 @@
-from debian:bullseye
+from debian:bookworm
 
 MAINTAINER Syscollective SRL 
 
