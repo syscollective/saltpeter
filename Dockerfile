@@ -1,4 +1,4 @@
-from debian:bullseye
+from debian:bookworm
 
 MAINTAINER Syscollective SRL 
 
@@ -15,7 +15,7 @@ RUN apt-get install -y -o DPkg::Options::=--force-confold \
 
 #RUN curl -fsSL -o /usr/share/keyrings/salt-archive-keyring.gpg https://repo.saltproject.io/py3/debian/11/amd64/latest/salt-archive-keyring.gpg
 #RUN echo "deb [signed-by=/usr/share/keyrings/salt-archive-keyring.gpg arch=amd64] https://repo.saltproject.io/py3/debian/11/amd64/latest bullseye main" | tee /etc/apt/sources.list.d/salt.list
-RUN pip3 install salt
+RUN pip3 install salt --break-system-packages
 
 #RUN apt-get update && \
 #    apt-get install -y salt-master && \
@@ -29,7 +29,7 @@ RUN echo "auto_accept: True" > /etc/salt/master.d/auto_accept.conf
 RUN echo "master: sp-master" > /etc/salt/minion.d/masters.conf
 
 # Install Saltperer's dependencies
-RUN pip3 install -r /opt/saltpeter/requirements.txt
+RUN pip3 install -r /opt/saltpeter/requirements.txt --break-system-packages
 
 EXPOSE 4505 4506
 
