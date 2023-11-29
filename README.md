@@ -1,5 +1,3 @@
-### Description:
-
 Saltpeter is a distributed cron implementation using salt as the remote execution layer.
 
 It reads configuration from yaml files in a folder specified by -c (default /etc/saltpeter).
