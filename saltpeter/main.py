@@ -395,10 +395,11 @@ def main():
     state = manager.dict()
     commands = manager.list()
     bad_crons = manager.list()
+    timeline = manager.dict()
     
     #start the api
     if args.api:
-        a = multiprocessing.Process(target=api.start, args=(args.port,config,running,state,commands,bad_crons,), name='api')
+        a = multiprocessing.Process(target=api.start, args=(args.port,config,running,state,commands,bad_crons,timeline,), name='api')
         a.start()
 
     if args.elasticsearch != '':
@@ -425,6 +426,13 @@ def main():
         if 'crons' not in config or config['crons'] != newconfig:
             config['crons'] = newconfig
             config['serial'] = now.timestamp()
+
+        # timeline
+        if use_es or use_opensearch:
+           for cmd in commands:
+                if 'subscribeTimeline' in cmd:
+                    subscribeTimeline = True
+                    commands.remove(cmd)
 
         for name in config['crons'].copy():
             #determine next run based on the the last time the loop ran, not the current time
