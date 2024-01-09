@@ -34,8 +34,8 @@ if args.opensearch != '':
 # Specify the index and define the date range filter
 index_name = 'saltpeter-*'
 end_time = datetime.now()
-start_time = end_time - timedelta(minutes=15)
-
+start_time = end_time - timedelta(hours=5)
+print(start_time, end_time)
 
 # Build the query with a date range filter
 query= {
@@ -45,14 +45,14 @@ query= {
                 {
                     "range": {
                         "@timestamp": {
-                            "gte": 'now-15m',
-                            "lte": 'now'
+                            "gte": start_time,
+                            "lte": end_time
                         }
                     }
                 },
                 ]
             }
-        }
+        },
     }
 
 # Perform the search

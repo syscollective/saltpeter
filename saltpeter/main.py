@@ -346,6 +346,8 @@ def gettimeline(client, last, timeline, index_name):
     # Build the query with a date range filter
     gte = f'now-{last}'
     lte = 'now'
+    end_time = datetime.now()
+    start_time = end_time - timedelta(hours=5)
     query= {
         "query": {
             "bool" : {
@@ -353,8 +355,8 @@ def gettimeline(client, last, timeline, index_name):
                     {
                         "range": {
                             "@timestamp": {
-                                "gte": gte,
-                                "lte": lte
+                                "gte": start_time,
+                                "lte": end_time
                             }
                         }
                     },
@@ -367,6 +369,7 @@ def gettimeline(client, last, timeline, index_name):
     if 'hits' in result:
         result = result['hits']['hits']
         for hit in result:
+            print(hit)
             cron = hit['_source']['job_name']
             timestamp = hit['_source']['@timestamp']
             ret_code = hit['_source']['return_code']
