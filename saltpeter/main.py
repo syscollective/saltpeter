@@ -344,6 +344,8 @@ def timeout(which, process):
 
 def gettimeline(client, last, timeline, index_name):
     # Build the query with a date range filter
+    gte = f'now-{last}'
+    lte = 'now'
     query= {
         "query": {
             "bool" : {
@@ -351,8 +353,8 @@ def gettimeline(client, last, timeline, index_name):
                     {
                         "range": {
                             "@timestamp": {
-                                "gte": f'now-{last["time"]}',
-                                "lte": 'now'
+                                "gte": gte,
+                                "lte": lte
                             }
                         }
                     },
@@ -370,8 +372,9 @@ def gettimeline(client, last, timeline, index_name):
             ret_code = hit['_source']['return_code']
             msg_type = hit['_source']['msg_type']
             new_timeline_content.append({'cron': cron, 'timestamp': timestamp, 'ret_code': ret_code, 'msg_type': msg_type })
-    
-    if  'content' not in timeline or new_timeline_content != timeline['content']:
+   
+    if new_timeline_content != timeline['content']:
+        print("updated")
         timeline['content'] = new_timeline_content
         timeline['serial'] = datetime.now(timezone.utc).timestamp()
 
@@ -430,7 +433,7 @@ def main():
     bad_crons = manager.list()
     timeline = manager.dict()
 
-    timeline['content'] = {}
+    timeline['content'] = []
     timeline['serial'] = datetime.now(timezone.utc).timestamp()
     
     #start the api
@@ -465,7 +468,6 @@ def main():
         # timeline
         for cmd in commands:
             if 'get_timeline' in cmd:
-                print('COMMAND: ',cmd)
                 last = cmd['get_timeline']['last']
                 index_name = 'saltpeter-*'
                 if use_es:

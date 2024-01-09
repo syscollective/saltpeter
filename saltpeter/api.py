@@ -87,7 +87,7 @@ class WSHandler(tornado.websocket.WebSocketHandler):
         if 'killCron' in msg:
             cron = msg['killCron']
             self.cmds.append(dict({'killcron': cron}))
-        if 'subscribeTimeline' in msg:
+        if 'getTimeline' in msg:
             timeline_params = msg['getTimeline']
             self.cmds.append(dict({'get_timeline': timeline_params}))
 
