@@ -32,9 +32,9 @@ if args.opensearch != '':
     opensearch = OpenSearch(args.opensearch,maxsize=50,useSSL=False,verify_certs=False)
 
 # Specify the index and define the date range filter
-index_name = 'saltpeter-2024.01.08'
+index_name = 'saltpeter-*'
 end_time = datetime.now()
-start_time = end_time - timedelta(hours=10)
+start_time = end_time - timedelta(minutes=15)
 
 
 # Build the query with a date range filter
@@ -45,8 +45,8 @@ query= {
                 {
                     "range": {
                         "@timestamp": {
-                            "gte": start_time,
-                            "lte": end_time
+                            "gte": 'now-15m',
+                            "lte": 'now'
                         }
                     }
                 },

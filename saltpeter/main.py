@@ -342,6 +342,39 @@ def timeout(which, process):
         print('Process %s reached soft timeout!' % process.name)
         processlist[process.name]['soft_timeout'] += timedelta(minutes=5)
 
+def gettimeline(client, last, timeline, index_name):
+    # Build the query with a date range filter
+    query= {
+        "query": {
+            "bool" : {
+                "must" : [
+                    {
+                        "range": {
+                            "@timestamp": {
+                                "gte": f'now-{last["time"]}',
+                                "lte": 'now'
+                            }
+                        }
+                    },
+                    ]
+                }
+            }
+        }
+    result = client.search(index=index_name, body=query)
+    new_timeline_content = []
+    if 'hits' in result:
+        result = result['hits']['hits']
+        for hit in result:
+            cron = hit['_source']['job_name']
+            timestamp = hit['_source']['@timestamp']
+            ret_code = hit['_source']['return_code']
+            msg_type = hit['_source']['msg_type']
+            new_timeline_content.append({'cron': cron, 'timestamp': timestamp, 'ret_code': ret_code, 'msg_type': msg_type })
+    
+    if  'content' not in timeline or new_timeline_content != timeline['content']:
+        timeline['content'] = new_timeline_content
+        timeline['serial'] = datetime.now(timezone.utc).timestamp()
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -396,10 +429,13 @@ def main():
     commands = manager.list()
     bad_crons = manager.list()
     timeline = manager.dict()
+
+    timeline['content'] = {}
+    timeline['serial'] = datetime.now(timezone.utc).timestamp()
     
     #start the api
     if args.api:
-        a = multiprocessing.Process(target=api.start, args=(args.port,config,running,state,commands,bad_crons,timeline,), name='api')
+        a = multiprocessing.Process(target=api.start, args=(args.port,config,running,state,commands,bad_crons,timeline), name='api')
         a.start()
 
     if args.elasticsearch != '':
@@ -417,22 +453,26 @@ def main():
 
     #main loop
     prev = datetime.now(timezone.utc)
-
+    
     while True:
-        
         now = datetime.now(timezone.utc)
-
+        
         newconfig = readconfig(args.configdir)
         if 'crons' not in config or config['crons'] != newconfig:
             config['crons'] = newconfig
             config['serial'] = now.timestamp()
-
+        
         # timeline
-        if use_es or use_opensearch:
-           for cmd in commands:
-                if 'subscribeTimeline' in cmd:
-                    subscribeTimeline = True
-                    commands.remove(cmd)
+        for cmd in commands:
+            if 'get_timeline' in cmd:
+                print('COMMAND: ',cmd)
+                last = cmd['get_timeline']['last']
+                index_name = 'saltpeter-*'
+                if use_es:
+                    gettimeline(es, last, timeline, index_name)
+                if use_opensearch:
+                    gettimeline(opensearch, last, timeline, index_name)
+                commands.remove(cmd)
 
         for name in config['crons'].copy():
             #determine next run based on the the last time the loop ran, not the current time
@@ -451,7 +491,6 @@ def main():
                     if cmd['runnow'] == name:
                         runnow = True
                         commands.remove(cmd)
-
             if (result != False and now >= nextrun) or runnow:
                 if name not in last_run or last_run[name] < prev:
                     last_run[name] = now 
