@@ -32,38 +32,39 @@ if args.opensearch != '':
     opensearch = OpenSearch(args.opensearch,maxsize=50,useSSL=False,verify_certs=False)
 
 # Specify the index and define the date range filter
-index_name = 'saltpeter-*'
+index_name = 'saltpeter-2024.01.10'
 end_time = datetime.now()
-start_time = end_time - timedelta(hours=5)
+start_time = end_time - timedelta(minutes=5)
 print(start_time, end_time)
 
 # Build the query with a date range filter
 query= {
     "query": {
-        "bool" : {
-            "must" : [
-                {
-                    "range": {
-                        "@timestamp": {
-                            "gte": start_time,
-                            "lte": end_time
-                        }
-                    }
-                },
-                ]
+            "range": {
+                "@timestamp": {
+                    "gte": 'now-1h',
+                    "lte": 'now'
+                }
             }
-        },
+        }
     }
 
 # Perform the search
 if use_es:
     result = es.search(index=index_name, body=query)
 if use_opensearch: 
-    result = opensearch.search(index=index_name, body=query)
+    result = opensearch.search(index=index_name, body=query, size=10000, scroll='1m')
 
-print(result)
-if result:
-    # Extract and print the documents
-    for hit in result['hits']['hits']:
-        print(hit['_source'])
 
+#print(result)
+
+# Use the scroll API to fetch all documents
+while True:
+    scroll_id = result['_scroll_id']
+    hits = result['hits']['hits']
+    if not hits:
+        break  # Break out of the loop when no more documents are returned
+
+    for hit in hits:
+        print(hit)
+    result = opensearch.scroll(scroll_id=scroll_id, scroll='1m')

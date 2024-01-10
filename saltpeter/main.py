@@ -346,8 +346,6 @@ def gettimeline(client, last, timeline, index_name):
     # Build the query with a date range filter
     gte = f'now-{last}'
     lte = 'now'
-    end_time = datetime.now()
-    start_time = end_time - timedelta(hours=5)
     query= {
         "query": {
             "bool" : {
@@ -355,8 +353,8 @@ def gettimeline(client, last, timeline, index_name):
                     {
                         "range": {
                             "@timestamp": {
-                                "gte": start_time,
-                                "lte": end_time
+                                "gte": gte,
+                                "lte": lte
                             }
                         }
                     },
@@ -364,18 +362,24 @@ def gettimeline(client, last, timeline, index_name):
                 }
             }
         }
-    result = client.search(index=index_name, body=query)
+    result = client.search(index=index_name, body=query, scroll='1m')
     new_timeline_content = []
     if 'hits' in result:
-        result = result['hits']['hits']
-        for hit in result:
-            print(hit)
-            cron = hit['_source']['job_name']
-            timestamp = hit['_source']['@timestamp']
-            ret_code = hit['_source']['return_code']
-            msg_type = hit['_source']['msg_type']
-            new_timeline_content.append({'cron': cron, 'timestamp': timestamp, 'ret_code': ret_code, 'msg_type': msg_type })
-   
+        # Use the scroll API to fetch all documents
+        while True:
+            scroll_id = result['_scroll_id']
+            hits = result['hits']['hits']
+            if not hits:
+                break  # Break out of the loop when no more documents are returned
+
+            for hit in hits:
+                cron = hit['_source']['job_name']
+                timestamp = hit['_source']['@timestamp']
+                ret_code = hit['_source']['return_code']
+                msg_type = hit['_source']['msg_type']
+                new_timeline_content.append({'cron': cron, 'timestamp': timestamp, 'ret_code': ret_code, 'msg_type': msg_type })
+            result = opensearch.scroll(scroll_id=scroll_id, scroll='1m')
+
     if new_timeline_content != timeline['content']:
         print("updated")
         timeline['content'] = new_timeline_content
@@ -471,12 +475,16 @@ def main():
         # timeline
         for cmd in commands:
             if 'get_timeline' in cmd:
-                last = cmd['get_timeline']['last']
-                index_name = 'saltpeter-*'
+                timeline_last = cmd['get_timeline']['last']
+                index_name = 'saltpeter*'
                 if use_es:
-                    gettimeline(es, last, timeline, index_name)
+                    p_timeline = multiprocessing.Process(target=gettimeline,\
+                            args=(es,timeline_last, timeline, index_name), name=procname)
+                    p_timeline.start()
                 if use_opensearch:
-                    gettimeline(opensearch, last, timeline, index_name)
+                    p_timeline = multiprocessing.Process(target=gettimeline,\
+                            args=(opensearch,timeline_last, timeline, index_name), name=procname)
+                    p_timeline.start()
                 commands.remove(cmd)
 
         for name in config['crons'].copy():
