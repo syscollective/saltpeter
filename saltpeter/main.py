@@ -112,12 +112,8 @@ def processstart(chunk,name,procname,state):
 
 
 def processresults(client,commands,job,name,procname,running,state,targets):
-
-
-
     jid = job['jid']
     minions = job['minions']
-
 
     rets = client.get_iter_returns(jid, minions, block=False, expect_minions=True,timeout=1)
     keepgoing = True
@@ -358,30 +354,45 @@ def gettimeline(client, last, timeline, index_name):
                             }
                         }
                     },
+                    {
+                        "terms": {
+                            "msg_type": ["start", "end"]
+                         }
+                    }  
                     ]
                 }
             }
         }
     result = client.search(index=index_name, body=query, scroll='1m')
     new_timeline_content = []
-    if 'hits' in result:
-        # Use the scroll API to fetch all documents
-        while True:
-            scroll_id = result['_scroll_id']
-            hits = result['hits']['hits']
-            if not hits:
-                break  # Break out of the loop when no more documents are returned
+    scroll_id = None
+    try:
+        if 'hits' in result:
+            # Use the scroll API to fetch all documents
+            while True:
+                scroll_id = result['_scroll_id']
+                hits = result['hits']['hits']
+                if not hits:
+                    break  # Break out of the loop when no more documents are returned
 
-            for hit in hits:
-                cron = hit['_source']['job_name']
-                timestamp = hit['_source']['@timestamp']
-                ret_code = hit['_source']['return_code']
-                msg_type = hit['_source']['msg_type']
-                new_timeline_content.append({'cron': cron, 'timestamp': timestamp, 'ret_code': ret_code, 'msg_type': msg_type })
-            result = opensearch.scroll(scroll_id=scroll_id, scroll='1m')
+                for hit in hits:
+                    cron = hit['_source']['job_name']
+                    timestamp = hit['_source']['@timestamp']
+                    ret_code = hit['_source']['return_code']
+                    msg_type = hit['_source']['msg_type']
+                    new_timeline_content.append({'cron': cron, 'timestamp': timestamp, 'ret_code': ret_code, 'msg_type': msg_type })
+                result = client.scroll(scroll_id=scroll_id, scroll='1m')
 
+    except TransportError as e:
+        # Handle the transport error
+        print(f"TransportError occurred: {e}")
+    finally:
+        if scroll_id:
+            # Clear the scroll context when done
+            client.clear_scroll(scroll_id=scroll_id)
+    
+    new_timeline_content = sorted(new_timeline_content, key=lambda x: x['timestamp'])
     if new_timeline_content != timeline['content']:
-        print("updated")
         timeline['content'] = new_timeline_content
         timeline['serial'] = datetime.now(timezone.utc).timestamp()
 
@@ -477,6 +488,7 @@ def main():
             if 'get_timeline' in cmd:
                 timeline_last = cmd['get_timeline']['last']
                 index_name = 'saltpeter*'
+                procname = 'timeline'
                 if use_es:
                     p_timeline = multiprocessing.Process(target=gettimeline,\
                             args=(es,timeline_last, timeline, index_name), name=procname)
