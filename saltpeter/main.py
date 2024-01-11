@@ -356,7 +356,7 @@ def gettimeline(client, last, timeline, index_name):
                     },
                     {
                         "terms": {
-                            "msg_type": ["start", "end"]
+                            "msg_type": ["machine_start", "machine_result"]
                          }
                     }  
                     ]
