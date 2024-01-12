@@ -377,10 +377,11 @@ def gettimeline(client, last, timeline, index_name):
 
                 for hit in hits:
                     cron = hit['_source']['job_name']
+                    job_instance = hit['_source']['job_instance']
                     timestamp = hit['_source']['@timestamp']
                     ret_code = hit['_source']['return_code']
                     msg_type = hit['_source']['msg_type']
-                    new_timeline_content.append({'cron': cron, 'timestamp': timestamp, 'ret_code': ret_code, 'msg_type': msg_type })
+                    new_timeline_content.append({'cron': cron, 'timestamp': timestamp, 'ret_code': ret_code, 'msg_type': msg_type, 'job_instance':job_instance })
                 result = client.scroll(scroll_id=scroll_id, scroll='1m')
 
     except TransportError as e:
@@ -392,6 +393,7 @@ def gettimeline(client, last, timeline, index_name):
             client.clear_scroll(scroll_id=scroll_id)
     
     new_timeline_content = sorted(new_timeline_content, key=lambda x: x['timestamp'])
+
     if new_timeline_content != timeline['content']:
         timeline['content'] = new_timeline_content
         timeline['serial'] = datetime.now(timezone.utc).timestamp()
