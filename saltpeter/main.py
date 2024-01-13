@@ -338,7 +338,7 @@ def timeout(which, process):
         print('Process %s reached soft timeout!' % process.name)
         processlist[process.name]['soft_timeout'] += timedelta(minutes=5)
 
-def gettimeline(client, last, timeline, index_name):
+def gettimeline(client, last, req_id, timeline, index_name):
     # Build the query with a date range filter
     gte = f'now-{last}'
     lte = 'now'
@@ -396,6 +396,7 @@ def gettimeline(client, last, timeline, index_name):
 
     if new_timeline_content != timeline['content']:
         timeline['content'] = new_timeline_content
+        timeline['id'] = req_id
         timeline['serial'] = datetime.now(timezone.utc).timestamp()
 
 
@@ -489,15 +490,16 @@ def main():
         for cmd in commands:
             if 'get_timeline' in cmd:
                 timeline_last = cmd['get_timeline']['last']
+                timeline_id = cmd['get_timeline']['id']
                 index_name = 'saltpeter*'
                 procname = 'timeline'
                 if use_es:
                     p_timeline = multiprocessing.Process(target=gettimeline,\
-                            args=(es,timeline_last, timeline, index_name), name=procname)
+                            args=(es,timeline_last, timeline_id, timeline, index_name), name=procname)
                     p_timeline.start()
                 if use_opensearch:
                     p_timeline = multiprocessing.Process(target=gettimeline,\
-                            args=(opensearch,timeline_last, timeline, index_name), name=procname)
+                            args=(opensearch,timeline_last, timeline_id, timeline, index_name), name=procname)
                     p_timeline.start()
                 commands.remove(cmd)
 
