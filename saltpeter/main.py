@@ -338,10 +338,8 @@ def timeout(which, process):
         print('Process %s reached soft timeout!' % process.name)
         processlist[process.name]['soft_timeout'] += timedelta(minutes=5)
 
-def gettimeline(client, last, req_id, timeline, index_name):
+def gettimeline(client, start_date, end_date, req_id, timeline, index_name):
     # Build the query with a date range filter
-    gte = f'now-{last}'
-    lte = 'now'
     query= {
         "query": {
             "bool" : {
@@ -349,8 +347,8 @@ def gettimeline(client, last, req_id, timeline, index_name):
                     {
                         "range": {
                             "@timestamp": {
-                                "gte": gte,
-                                "lte": lte
+                                "gte": start_date,
+                                "lte": end_date
                             }
                         }
                     },
@@ -489,17 +487,18 @@ def main():
         # timeline
         for cmd in commands:
             if 'get_timeline' in cmd:
-                timeline_last = cmd['get_timeline']['last']
+                timeline_start_date = cmd['get_timeline']['start_date']
+                timeline_end_date = cmd['get_timeline']['end_date']
                 timeline_id = cmd['get_timeline']['id']
                 index_name = 'saltpeter*'
                 procname = 'timeline'
                 if use_es:
                     p_timeline = multiprocessing.Process(target=gettimeline,\
-                            args=(es,timeline_last, timeline_id, timeline, index_name), name=procname)
+                            args=(es,timeline_start_date, timeline_end_date, timeline_id, timeline, index_name), name=procname)
                     p_timeline.start()
                 if use_opensearch:
                     p_timeline = multiprocessing.Process(target=gettimeline,\
-                            args=(opensearch,timeline_last, timeline_id, timeline, index_name), name=procname)
+                            args=(opensearch,timeline_start_date, timeline_end_date, timeline_id, timeline, index_name), name=procname)
                     p_timeline.start()
                 commands.remove(cmd)
 

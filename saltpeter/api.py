@@ -156,10 +156,11 @@ def ws_update():
 
 
     global tmlserial
-    tmlupdate = False
-    if tmlserial != tml['serial']:
-        tmlserial = tml['serial']
-        tmlupdate = True
+    #tmlupdate = False
+    tmlupdate = True
+    #if tmlserial != tml['serial']:
+    #    tmlserial = tml['serial']
+    #    tmlupdate = True
 
     if len(wsconnections) > 0:
         for con in wsconnections:
