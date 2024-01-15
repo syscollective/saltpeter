@@ -392,7 +392,7 @@ def gettimeline(client, start_date, end_date, req_id, timeline, index_name):
     
     new_timeline_content = sorted(new_timeline_content, key=lambda x: x['timestamp'])
 
-    if new_timeline_content != timeline['content']:
+    if ('content' not in timeline) or (new_timeline_content != timeline['content']):
         timeline['content'] = new_timeline_content
         timeline['id'] = req_id
         timeline['serial'] = datetime.now(timezone.utc).timestamp()
@@ -452,8 +452,9 @@ def main():
     bad_crons = manager.list()
     timeline = manager.dict()
 
-    timeline['content'] = []
-    timeline['serial'] = datetime.now(timezone.utc).timestamp()
+    #timeline['content'] = []
+    #timeline['serial'] = datetime.now(timezone.utc).timestamp()
+    #timeline['id'] = ''
     
     #start the api
     if args.api:
