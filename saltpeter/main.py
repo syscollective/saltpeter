@@ -90,7 +90,7 @@ def parsecron(name, data, time=datetime.now(timezone.utc)):
 
     return ret
 
-def processstart(chunk,name,procname,state):
+def processstart(chunk,name,group,procname,state):
     results = {}
 
     for target in chunk:
@@ -107,11 +107,11 @@ def processstart(chunk,name,procname,state):
         tmpstate['results'] = tmpresults
         state[name] = tmpstate
 
-        log(cron=name, what='machine_start', instance=procname,
+        log(cron=name, group=group, what='machine_start', instance=procname,
                 time=starttime, machine=target)
 
 
-def processresults(client,commands,job,name,procname,running,state,targets):
+def processresults(client,commands,job,name,group,procname,running,state,targets):
 
 
 
@@ -144,7 +144,7 @@ def processresults(client,commands,job,name,procname,running,state,targets):
             tmprunning['machines'].remove(m)
             running[procname] = tmprunning
 
-            log(what='machine_result',cron=name, instance=procname, machine=m,
+            log(what='machine_result',cron=name, group=group, instance=procname, machine=m,
                 code=r, out=o, time=result['endtime'])
         #time.sleep(1)
         for cmd in commands:
@@ -159,7 +159,7 @@ def processresults(client,commands,job,name,procname,running,state,targets):
     for tgt in targets:
         if tgt not in minions:
             now = datetime.now(timezone.utc)
-            log(what='machine_result',cron=name, instance=procname, machine=tgt,
+            log(what='machine_result',cron=name, group=group, instance=procname, machine=tgt,
                 code=255, out="Target did not return anything", time=now)
 
             tmpresults = state[name]['results'].copy()
@@ -181,7 +181,7 @@ def run(name,data,procname,running,state,commands):
     #do this check here for the purpose of avoiding sync logging in the main program
     for instance in running.keys():
         if name == running[instance]['name']:
-            log(what='overlap', cron=name, instance=instance,
+            log(what='overlap', cron=name, group=data['group'], instance=instance,
                  time=datetime.now(timezone.utc))
             tmpstate = state[name]
             tmpstate['overlap'] = True
@@ -207,7 +207,7 @@ def run(name,data,procname,running,state,commands):
     tmpstate['last_run'] = now
     tmpstate['overlap'] = False
     state[name] = tmpstate
-    log(cron=name, what='start', instance=procname, time=now)
+    log(cron=name, group=data['group'], what='start', instance=procname, time=now)
     minion_ret = salt.cmd(targets, 'test.ping', tgt_type=target_type)
     targets_list = list(minion_ret)
     dead_targets = []
@@ -225,8 +225,8 @@ def run(name,data,procname,running,state,commands):
 
     state[name] = tmpstate
     if len(targets_list) == 0:
-        log(cron=name, what='no_machines', instance=procname, time=datetime.now(timezone.utc))
-        log(cron=name, what='end', instance=procname, time=datetime.now(timezone.utc))
+        log(cron=name, group=data['group'], what='no_machines', instance=procname, time=datetime.now(timezone.utc))
+        log(cron=name, group=data['group'], what='end', instance=procname, time=datetime.now(timezone.utc))
         return
     if 'number_of_targets' in data and data['number_of_targets'] != 0:
         import random
@@ -249,9 +249,9 @@ def run(name,data,procname,running,state,commands):
 
                     # update running list and state
                     running[procname]=  { 'started': now, 'name': name, 'machines': chunk }
-                    processstart(chunk,name,procname,state)
+                    processstart(chunk,name,data['group'],procname,state)
                     #this should be blocking
-                    processresults(salt,commands,job,name,procname,running,state,chunk)
+                    processresults(salt,commands,job,name,data['group'],procname,running,state,chunk)
                     chunk = []
                 except Exception as e:
                     print('Exception triggered in run() at "batch_size" condition', e)
@@ -263,14 +263,14 @@ def run(name,data,procname,running,state,commands):
         try:
             job = salt.run_job(targets_list, 'cmd.run', cmdargs,
                     tgt_type='list', listen=True)
-            processstart(targets_list,name,procname,state)
+            processstart(targets_list,name,data['group'],procname,state)
             #this should be blocking
-            processresults(salt,commands,job,name,procname,running,state,targets_list)
+            processresults(salt,commands,job,name,data['group'],procname,running,state,targets_list)
 
         except Exception as e:
             print('Exception triggered in run()', e)
 
-    log(cron=name, what='end', instance=procname, time=datetime.now(timezone.utc))
+    log(cron=name, group=data['group'], what='end', instance=procname, time=datetime.now(timezone.utc))
 
 def debuglog(content):
     logfile = open(args.logdir+'/'+'debug.log','a')
@@ -279,7 +279,7 @@ def debuglog(content):
     logfile.close()
 
 
-def log(what, cron, instance, time, machine='', code=0, out='', status=''):
+def log(what, cron, group, instance, time, machine='', code=0, out='', status=''):
     try:
         logfile_name = args.logdir+'/'+cron+'.log'
         logfile = open(logfile_name,'a')
@@ -309,7 +309,7 @@ def log(what, cron, instance, time, machine='', code=0, out='', status=''):
     logfile.close()
 
     if use_es:
-        doc = { 'job_name': cron, "job_instance": instance, '@timestamp': time,
+        doc = { 'job_name': cron, "group": group, "job_instance": instance, '@timestamp': time,
                 'return_code': code, 'machine': machine, 'output': out, 'msg_type': what } 
         index_name = 'saltpeter-%s' % date.today().strftime('%Y.%m.%d')
         try:
@@ -320,7 +320,7 @@ def log(what, cron, instance, time, machine='', code=0, out='', status=''):
             print(e)
 
     if use_opensearch:
-        doc = { 'job_name': cron, "job_instance": instance, '@timestamp': time,
+        doc = { 'job_name': cron, "group": group, "job_instance": instance, '@timestamp': time,
                 'return_code': code, 'machine': machine, 'output': out, 'msg_type': what } 
         index_name = 'saltpeter-%s' % date.today().strftime('%Y.%m.%d')
         try:
