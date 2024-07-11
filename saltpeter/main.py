@@ -343,7 +343,7 @@ def timeout(which, process, state, running):
         print('Process %s is about to reach hard timeout! It will be killed soon!'\
                 % process.name)
         processlist[process.name]['timeout_reached'] = 'soft'
-        log(what='hard_timeout', cron=cron_name, group=processlist[process.name]['cron_group'], instance=process.name,
+        log(what='hard_timeout', cron=cron_name, group=processlist[process.name]['group'], instance=process.name,
             time=datetime.now(timezone.utc))
         tmpstate['timeout_reached'] = 'hard'
         state[cron_name] = tmpstate
@@ -354,7 +354,7 @@ def timeout(which, process, state, running):
     if which == 'soft' and processlist[process.name]['timeout_reached'] != 'soft':
         print('Process %s reached soft timeout!' % process.name)
         processlist[process.name]['timeout_reached'] = 'hard'
-        log(what='soft_timeout', cron=cron_name, group=processlist[process.name]['cron_group'], instance=process.name,
+        log(what='soft_timeout', cron=cron_name, group=processlist[process.name]['group'], instance=process.name,
             time=datetime.now(timezone.utc))
         tmpstate['timeout_reached'] = 'soft'
         state[cron_name] = tmpstate
