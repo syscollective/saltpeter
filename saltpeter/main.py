@@ -476,7 +476,6 @@ def main():
                     p = multiprocessing.Process(target=run,\
                             args=(name,config['crons'][name],procname,running, state, commands), name=procname)
 
-                    print(config['crons'][name])
                     processlist[procname] = {}
                     processlist[procname]['cron_name'] = name
                     processlist[procname]['cron_group'] = config['crons'][name]['group']
