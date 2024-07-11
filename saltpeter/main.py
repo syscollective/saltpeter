@@ -65,9 +65,9 @@ def parsecron(name, data, time=datetime.now(timezone.utc)):
         year = data['year']
     else:
         year = '*'
-    if 'soft_timeout' in data:
+    if 'soft_timeout' in data and data['soft_timeout'] != 0:
         ret['soft_timeout'] = data['soft_timeout']
-    if 'hard_timeout' in data:
+    if 'hard_timeout' in data and data['hard_timeout'] != 0:
         ret['hard_timeout'] = data['hard_timeout']
 
     try:
