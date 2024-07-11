@@ -202,7 +202,7 @@ def run(name,data,procname,running,state,commands):
         cmdargs.append('timeout='+str(data['hard_timeout']))
 
     now = datetime.now(timezone.utc)
-    running[procname]=  { 'started': now, 'name': name , 'machines': []}
+    running[procname]=  { 'started': now, 'name': name , 'machines': [], 'timeout_reached': ''}
     tmpstate = state[name].copy()
     tmpstate['last_run'] = now
     tmpstate['overlap'] = False
@@ -248,7 +248,7 @@ def run(name,data,procname,running,state,commands):
                             tgt_type='list', listen=True)
 
                     # update running list and state
-                    running[procname]=  { 'started': now, 'name': name, 'machines': chunk }
+                    running[procname]=  { 'started': now, 'name': name, 'machines': chunk , 'timeout_reached': ''}
                     processstart(chunk,name,data['group'],procname,state)
                     #this should be blocking
                     processresults(salt,commands,job,name,data['group'],procname,running,state,chunk)
@@ -257,7 +257,7 @@ def run(name,data,procname,running,state,commands):
                     print('Exception triggered in run() at "batch_size" condition', e)
                     chunk = []
     else:
-        running[procname]=  { 'started': now, 'name': name, 'machines': targets_list }
+        running[procname]=  { 'started': now, 'name': name, 'machines': targets_list, 'timeout_reached': ''}
         starttime = datetime.now(timezone.utc)
 
         try:
@@ -332,10 +332,12 @@ def log(what, cron, group, instance, time, machine='', code=0, out='', status=''
 
 
 
-def timeout(which, process, state):
+def timeout(which, process, state, running):
     global processlist
     cron_name = processlist[process.name]['cron_name']
     tmpstate = state[cron_name].copy()
+    if process.name om running.keys():
+        tmprunning = running[process.name].copy()
 
     if which == 'hard' and processlist[process.name]['timeout_reached'] =! 'hard':
         print('Process %s is about to reach hard timeout! It will be killed soon!'\
@@ -345,6 +347,9 @@ def timeout(which, process, state):
             time=datetime.now(timezone.utc))
         tmpstate['timeout_reached'] = 'hard'
         state[cron_name] = tmpstate
+        if tmprunning:
+            tmprunning['timeout_reached'] = 'hard'
+            running[process.name] = tmprunning
 
     if which == 'soft' and processlist[process.name]['timeout_reached'] =! 'soft':
         print('Process %s reached soft timeout!' % process.name)
@@ -353,6 +358,10 @@ def timeout(which, process, state):
             time=datetime.now(timezone.utc))
         tmpstate['timeout_reached'] = 'soft'
         state[cron_name] = tmpstate
+        if tmprunning:
+            tmprunning['timeout_reached'] = 'soft'
+            running[process.name] = tmprunning
+
 
 
 def main():
@@ -445,6 +454,7 @@ def main():
                 state[name] = {}
             nextrun = prev + timedelta(seconds=result['nextrun'])
             tmpstate = state[name].copy()
+            tmpstate['timeout_reached'] = ''
             tmpstate['next_run'] = nextrun
             state[name] = tmpstate
             #check if there are any start commands
