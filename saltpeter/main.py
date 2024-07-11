@@ -476,10 +476,10 @@ def main():
                     p = multiprocessing.Process(target=run,\
                             args=(name,config['crons'][name],procname,running, state, commands), name=procname)
 
-                    print(type(config))
+                    print(config[name])
                     processlist[procname] = {}
                     processlist[procname]['cron_name'] = name
-                    processlist[procname]['cron_group'] = config[name]['group']
+                    processlist[procname]['cron_group'] = 'test'
                     processlist[procname]['timeout_reached'] = ''
 
                     # this is wrong on multiple levels, to be fixed
