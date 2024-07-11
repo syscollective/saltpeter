@@ -332,15 +332,27 @@ def log(what, cron, group, instance, time, machine='', code=0, out='', status=''
 
 
 
-def timeout(which, process):
+def timeout(which, process, state):
     global processlist
-    if which == 'hard':
+    cron_name = processlist[process.name]['cron_name']
+    tmpstate = state[cron_name].copy()
+
+    if which == 'hard' and processlist[process.name]['timeout_reached'] =! 'hard':
         print('Process %s is about to reach hard timeout! It will be killed soon!'\
                 % process.name)
-        processlist[process.name]['hard_timeout'] += timedelta(minutes=5)
-    if which == 'soft':
+        processlist[process.name]['timeout_reached'] = 'soft'
+        log(what='hard_timeout', cron=cron_name, group=processlist[process.name]['cron_group'], instance=process.name,
+            time=datetime.now(timezone.utc))
+        tmpstate['timeout_reached'] = 'hard'
+        state[cron_name] = tmpstate
+
+    if which == 'soft' and processlist[process.name]['timeout_reached'] =! 'soft':
         print('Process %s reached soft timeout!' % process.name)
-        processlist[process.name]['soft_timeout'] += timedelta(minutes=5)
+        processlist[process.name]['timeout_reached'] = 'hard'
+        log(what='soft_timeout', cron=cron_name, group=processlist[process.name]['cron_group'], instance=process.name,
+            time=datetime.now(timezone.utc))
+        tmpstate['timeout_reached'] = 'soft'
+        state[cron_name] = tmpstate
 
 
 def main():
@@ -455,6 +467,9 @@ def main():
                             args=(name,config['crons'][name],procname,running, state, commands), name=procname)
 
                     processlist[procname] = {}
+                    processlist[procname]['cron_name'] = name
+                    processlist[procname]['cron_name'] = name
+                    processlist[procname]['timeout_reached'] = ''
 
                     # this is wrong on multiple levels, to be fixed
                     if 'soft_timeout' in result:
@@ -477,7 +492,7 @@ def main():
                     # this is wrong on multiple levels, to be fixed:
                     if 'soft_timeout' in processlist[entry]  and \
                             processlist[entry]['soft_timeout'] < datetime.now(timezone.utc):
-                        timeout('soft',process)
+                        timeout('soft', process, state)
                     if 'hard_timeout' in processlist[entry] and \
                             processlist[entry]['hard_timeout'] < datetime.now(timezone.utc):
                         timeout('hard',process)
