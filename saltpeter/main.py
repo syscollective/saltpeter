@@ -502,10 +502,10 @@ def main():
                     # this is wrong on multiple levels, to be fixed:
                     if 'soft_timeout' in processlist[entry]  and \
                             processlist[entry]['soft_timeout'] < datetime.now(timezone.utc):
-                        timeout('soft', process, state)
+                        timeout('soft', process, state, running)
                     if 'hard_timeout' in processlist[entry] and \
                             processlist[entry]['hard_timeout'] < datetime.now(timezone.utc):
-                        timeout('hard',process)
+                        timeout('hard',process, state, running)
             if found == False:
                 print('Deleting process %s as it must have finished' % entry)
                 del(processlist[entry])
