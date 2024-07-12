@@ -108,7 +108,7 @@ def send_data(con, cfgupdate):
         if 'last_run' in srst[cron] and srst[cron]['last_run'] != '':
             lastst[cron] = {}
             lastst[cron]['last_run'] = srst[cron]['last_run'].isoformat()
-            print(srst[cron])
+            lastst[cron]['timeout_reached'] = srst[cron]['timeout_reached']
             if 'results' in srst[cron] and len(srst[cron]['results']) > 0:
                 lastst[cron]['result_ok'] = True
                 for tgt_key in srst[cron]['results']:
