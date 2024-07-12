@@ -479,6 +479,7 @@ def main():
 
                     processlist[procname] = {}
                     processlist[procname]['cron_name'] = name
+                    processlist[procname]['timeout_reached'] = ''
                     processlist[procname]['cron_group'] = config['crons'][name]['group']
 
                     # this is wrong on multiple levels, to be fixed
