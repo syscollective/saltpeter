@@ -65,9 +65,9 @@ def parsecron(name, data, time=datetime.now(timezone.utc)):
         year = data['year']
     else:
         year = '*'
-    if 'soft_timeout' in data:
+    if 'soft_timeout' in data and data['soft_timeout'] != 0:
         ret['soft_timeout'] = data['soft_timeout']
-    if 'hard_timeout' in data:
+    if 'hard_timeout' in data and data['hard_timeout'] != 0:
         ret['hard_timeout'] = data['hard_timeout']
 
     try:
@@ -90,7 +90,7 @@ def parsecron(name, data, time=datetime.now(timezone.utc)):
 
     return ret
 
-def processstart(chunk,name,procname,state):
+def processstart(chunk,name,group,procname,state):
     results = {}
 
     for target in chunk:
@@ -107,11 +107,12 @@ def processstart(chunk,name,procname,state):
         tmpstate['results'] = tmpresults
         state[name] = tmpstate
 
-        log(cron=name, what='machine_start', instance=procname,
+        log(cron=name, group=group, what='machine_start', instance=procname,
                 time=starttime, machine=target)
 
 
-def processresults(client,commands,job,name,procname,running,state,targets):
+def processresults(client,commands,job,name,group,procname,running,state,targets):
+
     jid = job['jid']
     minions = job['minions']
 
@@ -140,7 +141,7 @@ def processresults(client,commands,job,name,procname,running,state,targets):
             tmprunning['machines'].remove(m)
             running[procname] = tmprunning
 
-            log(what='machine_result',cron=name, instance=procname, machine=m,
+            log(what='machine_result',cron=name, group=group, instance=procname, machine=m,
                 code=r, out=o, time=result['endtime'])
         #time.sleep(1)
         for cmd in commands:
@@ -155,7 +156,7 @@ def processresults(client,commands,job,name,procname,running,state,targets):
     for tgt in targets:
         if tgt not in minions:
             now = datetime.now(timezone.utc)
-            log(what='machine_result',cron=name, instance=procname, machine=tgt,
+            log(what='machine_result',cron=name, group=group, instance=procname, machine=tgt,
                 code=255, out="Target did not return anything", time=now)
 
             tmpresults = state[name]['results'].copy()
@@ -177,7 +178,7 @@ def run(name,data,procname,running,state,commands):
     #do this check here for the purpose of avoiding sync logging in the main program
     for instance in running.keys():
         if name == running[instance]['name']:
-            log(what='overlap', cron=name, instance=instance,
+            log(what='overlap', cron=name, group=data['group'], instance=instance,
                  time=datetime.now(timezone.utc))
             tmpstate = state[name]
             tmpstate['overlap'] = True
@@ -198,12 +199,13 @@ def run(name,data,procname,running,state,commands):
         cmdargs.append('timeout='+str(data['hard_timeout']))
 
     now = datetime.now(timezone.utc)
-    running[procname]=  { 'started': now, 'name': name , 'machines': []}
+    running[procname]=  { 'started': now, 'name': name , 'machines': [], 'timeout_reached': ''}
     tmpstate = state[name].copy()
     tmpstate['last_run'] = now
     tmpstate['overlap'] = False
+    tmpstate['timeout_reached'] = ""
     state[name] = tmpstate
-    log(cron=name, what='start', instance=procname, time=now)
+    log(cron=name, group=data['group'], what='start', instance=procname, time=now)
     minion_ret = salt.cmd(targets, 'test.ping', tgt_type=target_type)
     targets_list = list(minion_ret)
     dead_targets = []
@@ -221,8 +223,8 @@ def run(name,data,procname,running,state,commands):
 
     state[name] = tmpstate
     if len(targets_list) == 0:
-        log(cron=name, what='no_machines', instance=procname, time=datetime.now(timezone.utc))
-        log(cron=name, what='end', instance=procname, time=datetime.now(timezone.utc))
+        log(cron=name, group=data['group'], what='no_machines', instance=procname, time=datetime.now(timezone.utc))
+        log(cron=name, group=data['group'], what='end', instance=procname, time=datetime.now(timezone.utc))
         return
     if 'number_of_targets' in data and data['number_of_targets'] != 0:
         import random
@@ -244,29 +246,29 @@ def run(name,data,procname,running,state,commands):
                             tgt_type='list', listen=True)
 
                     # update running list and state
-                    running[procname]=  { 'started': now, 'name': name, 'machines': chunk }
-                    processstart(chunk,name,procname,state)
+                    running[procname]=  { 'started': now, 'name': name, 'machines': chunk , 'timeout_reached': ''}
+                    processstart(chunk,name,data['group'],procname,state)
                     #this should be blocking
-                    processresults(salt,commands,job,name,procname,running,state,chunk)
+                    processresults(salt,commands,job,name,data['group'],procname,running,state,chunk)
                     chunk = []
                 except Exception as e:
                     print('Exception triggered in run() at "batch_size" condition', e)
                     chunk = []
     else:
-        running[procname]=  { 'started': now, 'name': name, 'machines': targets_list }
+        running[procname]=  { 'started': now, 'name': name, 'machines': targets_list, 'timeout_reached': ''}
         starttime = datetime.now(timezone.utc)
 
         try:
             job = salt.run_job(targets_list, 'cmd.run', cmdargs,
                     tgt_type='list', listen=True)
-            processstart(targets_list,name,procname,state)
+            processstart(targets_list,name,data['group'],procname,state)
             #this should be blocking
-            processresults(salt,commands,job,name,procname,running,state,targets_list)
+            processresults(salt,commands,job,name,data['group'],procname,running,state,targets_list)
 
         except Exception as e:
             print('Exception triggered in run()', e)
 
-    log(cron=name, what='end', instance=procname, time=datetime.now(timezone.utc))
+    log(cron=name, group=data['group'], what='end', instance=procname, time=datetime.now(timezone.utc))
 
 def debuglog(content):
     logfile = open(args.logdir+'/'+'debug.log','a')
@@ -275,7 +277,7 @@ def debuglog(content):
     logfile.close()
 
 
-def log(what, cron, instance, time, machine='', code=0, out='', status=''):
+def log(what, cron, group, instance, time, machine='', code=0, out='', status=''):
     try:
         logfile_name = args.logdir+'/'+cron+'.log'
         logfile = open(logfile_name,'a')
@@ -305,7 +307,7 @@ def log(what, cron, instance, time, machine='', code=0, out='', status=''):
     logfile.close()
 
     if use_es:
-        doc = { 'job_name': cron, "job_instance": instance, '@timestamp': time,
+        doc = { 'job_name': cron, "group": group, "job_instance": instance, '@timestamp': time,
                 'return_code': code, 'machine': machine, 'output': out, 'msg_type': what } 
         index_name = 'saltpeter-%s' % date.today().strftime('%Y.%m.%d')
         try:
@@ -316,7 +318,7 @@ def log(what, cron, instance, time, machine='', code=0, out='', status=''):
             print(e)
 
     if use_opensearch:
-        doc = { 'job_name': cron, "job_instance": instance, '@timestamp': time,
+        doc = { 'job_name': cron, "group": group, "job_instance": instance, '@timestamp': time,
                 'return_code': code, 'machine': machine, 'output': out, 'msg_type': what } 
         index_name = 'saltpeter-%s' % date.today().strftime('%Y.%m.%d')
         try:
@@ -328,15 +330,36 @@ def log(what, cron, instance, time, machine='', code=0, out='', status=''):
 
 
 
-def timeout(which, process):
+def timeout(which, process, state, running):
     global processlist
-    if which == 'hard':
+    cron_name = processlist[process.name]['cron_name']
+    tmpstate = state[cron_name].copy()
+    tmprunning = {}
+    if process.name in running.keys():
+        tmprunning = running[process.name].copy()
+    if which == 'hard' and ('timeout_reached' not in processlist[process.name] or processlist[process.name]['timeout_reached'] != 'hard'):
         print('Process %s is about to reach hard timeout! It will be killed soon!'\
                 % process.name)
-        processlist[process.name]['hard_timeout'] += timedelta(minutes=5)
-    if which == 'soft':
+        processlist[process.name]['timeout_reached'] = 'soft'
+        log(what='hard_timeout', cron=cron_name, group=processlist[process.name]['cron_group'], instance=process.name,
+            time=datetime.now(timezone.utc))
+        tmpstate['timeout_reached'] = 'hard'
+        state[cron_name] = tmpstate
+        if tmprunning:
+            tmprunning['timeout_reached'] = 'hard'
+            running[process.name] = tmprunning
+            
+    if which == 'soft' and ('timeout_reached' not in processlist[process.name] or processlist[process.name]['timeout_reached'] != 'soft'):
         print('Process %s reached soft timeout!' % process.name)
-        processlist[process.name]['soft_timeout'] += timedelta(minutes=5)
+        processlist[process.name]['timeout_reached'] = 'hard'
+        log(what='soft_timeout', cron=cron_name, group=processlist[process.name]['cron_group'], instance=process.name,
+            time=datetime.now(timezone.utc))
+        tmpstate['timeout_reached'] = 'soft'
+        state[cron_name] = tmpstate
+        if tmprunning:
+            tmprunning['timeout_reached'] = 'soft'
+            running[process.name] = tmprunning
+
 
 def gettimeline(client, start_date, end_date, req_id, timeline, index_name):
     # Build the query with a date range filter
@@ -531,6 +554,8 @@ def main():
                             args=(name,config['crons'][name],procname,running, state, commands), name=procname)
 
                     processlist[procname] = {}
+                    processlist[procname]['cron_name'] = name
+                    processlist[procname]['cron_group'] = config['crons'][name]['group']
 
                     # this is wrong on multiple levels, to be fixed
                     if 'soft_timeout' in result:
@@ -553,10 +578,10 @@ def main():
                     # this is wrong on multiple levels, to be fixed:
                     if 'soft_timeout' in processlist[entry]  and \
                             processlist[entry]['soft_timeout'] < datetime.now(timezone.utc):
-                        timeout('soft',process)
+                        timeout('soft', process, state, running)
                     if 'hard_timeout' in processlist[entry] and \
                             processlist[entry]['hard_timeout'] < datetime.now(timezone.utc):
-                        timeout('hard',process)
+                        timeout('hard',process, state, running)
             if found == False:
                 print('Deleting process %s as it must have finished' % entry)
                 del(processlist[entry])
