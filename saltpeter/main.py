@@ -336,6 +336,7 @@ def timeout(which, process, state, running):
     global processlist
     cron_name = processlist[process.name]['cron_name']
     tmpstate = state[cron_name].copy()
+    tmprunning = {}
     if process.name in running.keys():
         tmprunning = running[process.name].copy()
 
