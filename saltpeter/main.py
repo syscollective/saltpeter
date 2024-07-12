@@ -206,6 +206,7 @@ def run(name,data,procname,running,state,commands):
     tmpstate = state[name].copy()
     tmpstate['last_run'] = now
     tmpstate['overlap'] = False
+    tmpstate['timeout_reached'] = ""
     state[name] = tmpstate
     log(cron=name, group=data['group'], what='start', instance=procname, time=now)
     minion_ret = salt.cmd(targets, 'test.ping', tgt_type=target_type)
@@ -340,8 +341,7 @@ def timeout(which, process, state, running):
     tmprunning = {}
     if process.name in running.keys():
         tmprunning = running[process.name].copy()
-
-    if which == 'hard' and processlist[process.name]['timeout_reached'] != 'hard':
+    if which == 'hard' and ('timeout_reached' not in processlist[process.name] or processlist[process.name]['timeout_reached'] != 'hard'):
         print('Process %s is about to reach hard timeout! It will be killed soon!'\
                 % process.name)
         processlist[process.name]['timeout_reached'] = 'soft'
@@ -352,8 +352,8 @@ def timeout(which, process, state, running):
         if tmprunning:
             tmprunning['timeout_reached'] = 'hard'
             running[process.name] = tmprunning
-
-    if which == 'soft' and processlist[process.name]['timeout_reached'] != 'soft':
+            
+    if which == 'soft' and ('timeout_reached' not in processlist[process.name] or processlist[process.name]['timeout_reached'] != 'soft'):
         print('Process %s reached soft timeout!' % process.name)
         processlist[process.name]['timeout_reached'] = 'hard'
         log(what='soft_timeout', cron=cron_name, group=processlist[process.name]['cron_group'], instance=process.name,
@@ -456,7 +456,6 @@ def main():
                 state[name] = {}
             nextrun = prev + timedelta(seconds=result['nextrun'])
             tmpstate = state[name].copy()
-            tmpstate['timeout_reached'] = ''
             tmpstate['next_run'] = nextrun
             state[name] = tmpstate
             #check if there are any start commands
@@ -480,7 +479,6 @@ def main():
 
                     processlist[procname] = {}
                     processlist[procname]['cron_name'] = name
-                    processlist[procname]['timeout_reached'] = ''
                     processlist[procname]['cron_group'] = config['crons'][name]['group']
 
                     # this is wrong on multiple levels, to be fixed
