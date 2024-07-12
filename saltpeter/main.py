@@ -333,6 +333,7 @@ def log(what, cron, group, instance, time, machine='', code=0, out='', status=''
 
 
 def timeout(which, process, state, running):
+    print('----', which, state)
     global processlist
     cron_name = processlist[process.name]['cron_name']
     tmpstate = state[cron_name].copy()
