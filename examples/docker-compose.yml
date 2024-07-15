@@ -9,17 +9,44 @@ services:
             - ../:/opt/saltpeter
             - ./config:/etc/saltpeter
             - ./logs:/var/log/saltpeter
+        depends_on:
+            - opensearch
         ports:
             - 8888:8888
     sp-min1:
         image: saltpeter:latest
         hostname: sp-min1.sp.local
-        entrypoint: ["/usr/bin/salt-minion", "-l", "info"]
+        entrypoint: ["/usr/local/bin/salt-minion", "-l", "info"]
         depends_on:
             - sp-master
     sp-min2:
         image: saltpeter:latest
         hostname: sp-min2.sp.local
-        entrypoint: ["/usr/bin/salt-minion", "-l", "info"]
+        entrypoint: ["/usr/local/bin/salt-minion", "-l", "info"]
         depends_on:
             - sp-master
+    opensearch:
+        image: opensearchproject/opensearch:latest
+        container_name: opensearch
+        environment:
+            - cluster.name=opensearch-cluster
+            - node.name=opensearch-node1
+            - bootstrap.memory_lock=true
+            - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
+            - "DISABLE_INSTALL_DEMO_CONFIG=true"
+            - "DISABLE_SECURITY_PLUGIN=true"
+            - "discovery.type=single-node"
+        ports:
+            - 9200:9200
+    opensearch-dashboards:
+        image: opensearchproject/opensearch-dashboards:latest
+        container_name: opensearch-dashboards
+        ports:
+            - 5601:5601
+        expose:
+            - "5601"
+        environment:
+            - 'OPENSEARCH_HOSTS=["http://opensearch:9200"]'
+            - "DISABLE_SECURITY_DASHBOARDS_PLUGIN=true"
+        depends_on:
+            - opensearch

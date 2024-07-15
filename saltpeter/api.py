@@ -7,7 +7,7 @@ import json
 from datetime import timedelta
 from multiprocessing import Manager
 from .version import __version__
- 
+
 class VersionHandler(tornado.web.RequestHandler):
     def set_default_headers(self):
         self.set_header("Access-Control-Allow-Origin", "*")
@@ -41,10 +41,11 @@ class DictReturner(tornado.web.RequestHandler):
         self.write(response)
 
 class WSHandler(tornado.websocket.WebSocketHandler):
-    def initialize(self, cfg, cmds):
+    def initialize(self, cfg, cmds, tml):
         self.config = cfg
         self.cmds = cmds
         self.subscriptions = []
+        self.tml = tml
 
     def set_default_headers(self):
         self.set_header("Access-Control-Allow-Origin", "*")
@@ -61,7 +62,7 @@ class WSHandler(tornado.websocket.WebSocketHandler):
     def open(self):
         print('New WS connection')
         wsconnections.append(self)
-        send_data(self,True)
+        send_data(self,True,True)
 
     def on_message(self, message):
         print('Message received %s' % message)
@@ -76,7 +77,7 @@ class WSHandler(tornado.websocket.WebSocketHandler):
         if 'subscribe' in msg:
             cron = msg['subscribe']
             self.subscriptions.append(cron)
-            send_data(self,False)
+            send_data(self,False,False)
         if 'unsubscribe' in msg:
             cron = msg['unsubscribe']
             self.subscriptions.remove(cron)
@@ -86,6 +87,9 @@ class WSHandler(tornado.websocket.WebSocketHandler):
         if 'killCron' in msg:
             cron = msg['killCron']
             self.cmds.append(dict({'killcron': cron}))
+        if 'getTimeline' in msg:
+            timeline_params = msg['getTimeline']
+            self.cmds.append(dict({'get_timeline': timeline_params}))
 
 
 
@@ -93,7 +97,7 @@ class WSHandler(tornado.websocket.WebSocketHandler):
         print('WS connection closed')
         wsconnections.remove(self)
 
-def send_data(con, cfgupdate):
+def send_data(con, cfgupdate, tmlupdate):
     if cfgupdate:
         con.write_message(json.dumps(dict({'config': dict(cfg), 'sp_version': __version__})))
     srrng = rng.copy()
@@ -136,6 +140,8 @@ def send_data(con, cfgupdate):
 
             con.write_message(json.dumps(dict({cron: srcron})))
 
+    if tmlupdate:
+        con.write_message((json.dumps(dict({'timeline': tml.copy()}))))
 
 
 def ws_update():
@@ -148,12 +154,20 @@ def ws_update():
         cfgserial = cfg['serial']
         cfgupdate = True
 
+
+    global tmlserial
+    tmlupdate = False
+    if 'id' in tml:
+        if tmlserial != tml['id']:
+            tmlserial = tml['id']
+            tmlupdate = True
+
     if len(wsconnections) > 0:
         for con in wsconnections:
-            send_data(con, cfgupdate)
+            send_data(con, cfgupdate, tmlupdate)
 
 
-def start(port, config, running, state, commands, bad_crons, ):
+def start(port, config, running, state, commands, bad_crons, timeline ):
     global cfg
     cfg = config
     global wsconnections
@@ -164,12 +178,18 @@ def start(port, config, running, state, commands, bad_crons, ):
     cfgserial = ''
     global st
     st = state
+    
+    global tmlserial
+    tmlserial = ''
+    global tml
+    tml = timeline
 
     application = tornado.web.Application([
-        (r"/ws", WSHandler, dict(cfg=config,cmds=commands)),
+        (r"/ws", WSHandler, dict(cfg=config,cmds=commands,tml=timeline)),
         (r"/version", VersionHandler),
         (r"/config", DictReturner, dict(content=config)),
-        (r"/running", DictReturner, dict(content=running))
+        (r"/running", DictReturner, dict(content=running)),
+        (r"/timeline", DictReturner, dict(content=timeline))
     ])
 
     application.listen(port)

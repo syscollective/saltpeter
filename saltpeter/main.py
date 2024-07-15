@@ -65,10 +65,11 @@ def parsecron(name, data, time=datetime.now(timezone.utc)):
         year = data['year']
     else:
         year = '*'
-    if 'soft_timeout' in data:
-        ret['soft_timeout'] = data['soft_timeout']
-    if 'hard_timeout' in data:
-        ret['hard_timeout'] = data['hard_timeout']
+    if 'hard_timeout' in data and data['hard_timeout'] != 0:
+        ret['timeout'] = data['hard_timeout']
+    if 'timeout' in data and data['timeout'] != 0:
+        ret['timeout'] = data['timeout']
+
 
     try:
         entry = CronTab('%s %s %s %s %s %s %s' % (sec, minute, hour, dom, mon, dow, year))
@@ -90,7 +91,7 @@ def parsecron(name, data, time=datetime.now(timezone.utc)):
 
     return ret
 
-def processstart(chunk,name,procname,state):
+def processstart(chunk,name,group,procname,state):
     results = {}
 
     for target in chunk:
@@ -107,12 +108,12 @@ def processstart(chunk,name,procname,state):
         tmpstate['results'] = tmpresults
         state[name] = tmpstate
 
-        log(cron=name, what='machine_start', instance=procname,
+        log(cron=name, group=group, what='machine_start', instance=procname,
                 time=starttime, machine=target)
 
 
-def processresults(client,commands,job,name,procname,running,state,targets):
 
+def processresults(client,commands,job,name,group,procname,running,state,targets):
 
     import salt.runner
     opts = salt.config.master_config('/etc/salt/master')
@@ -121,28 +122,30 @@ def processresults(client,commands,job,name,procname,running,state,targets):
     jid = job['jid']
     minions = job['minions']
 
-
     rets = client.get_iter_returns(jid, minions, block=False, expect_minions=True,timeout=1)
-    keepgoing = True
+    failed_returns = False
+    kill = False
 
 
     for i in rets:
+
+        #process commands in the loop
+        for cmd in commands:
+            if 'killcron' in cmd:
+                if cmd['killcron'] == name:
+                    commands.remove(cmd)
+                    client.run_job(minions, 'saltutil.term_job', [jid], tgt_type='list')
+                    kill = True
+        if kill:
+            break
+
         if i is not None:
             m = list(i)[0]
+            print(i[m])
             if 'failed' in i[m] and i[m]['failed'] == True:
                 print(f"Getting info about job {name} jid: {jid} every 10 seconds")
-                #r = 255
-                #o = "Target did not return data" 
-                while True:
-                    job = runner.cmd('jobs.lookup_jid', [jid])
-                    print(f"Job {name}, jid {jid}: {job}")
-                    if m in job:
-                        job_listing = runner.cmd("jobs.list_job",[jid])
-                        o = job_listing['Result'][m]['return']
-                        r = job_listing['Result'][m]['retcode']
-                        break
-                    time.sleep(10)
-
+                failed_returns = True
+                continue
             else:
                 r = i[m]['retcode']
                 o = i[m]['ret']
@@ -159,22 +162,54 @@ def processresults(client,commands,job,name,procname,running,state,targets):
             tmprunning['machines'].remove(m)
             running[procname] = tmprunning
 
-            log(what='machine_result',cron=name, instance=procname, machine=m,
+            log(what='machine_result',cron=name, group=group, instance=procname, machine=m,
                 code=r, out=o, time=result['endtime'])
         #time.sleep(1)
-        for cmd in commands:
-            print('COMMAND: ',cmd)
-            if 'killcron' in cmd:
-                if cmd['killcron'] == name:
-                    commands.remove(cmd)
-                    client.run_job(minions, 'saltutil.term_job', [jid], tgt_type='list')
 
+       
+    if failed_returns:
+        while True:
+            #process commands in the loop
+            for cmd in commands:
+                if 'killcron' in cmd:
+                    if cmd['killcron'] == name:
+                        commands.remove(cmd)
+                        client.run_job(minions, 'saltutil.term_job', [jid], tgt_type='list')
+                        kill = True
+
+            if kill:
+                break
+
+            job_listing = runner.cmd("jobs.list_job",[jid])
+            if len(job_listing['Minions']) == len(job_listing['Result'].keys()) or kill:
+                for m in job_listing['Result'].keys():
+                    o = job_listing['Result'][m]['return']
+                    r = job_listing['Result'][m]['retcode']
+                    result = { 'ret': o, 'retcode': r, 'starttime': state[name]['results'][m]['starttime'], 'endtime': datetime.now(timezone.utc) }
+                    if 'results' in state[name]:
+                        tmpresults = state[name]['results'].copy()
+                    else:
+                        tmpresults = {}
+                    if m not in tmpresults:
+                        tmpresults[m] = result
+                        tmpstate = state[name].copy()
+                        tmpstate['results'] = tmpresults
+                        state[name] = tmpstate
+                        tmprunning = running[procname]
+                        tmprunning['machines'].remove(m)
+                        running[procname] = tmprunning
+
+                        log(what='machine_result',cron=name, group=group, instance=procname, machine=m,
+                            code=r, out=o, time=result['endtime'])
+
+                break
+            time.sleep(10)
 
 
     for tgt in targets:
-        if tgt not in minions:
+        if tgt not in minions or tgt not in state[name]['results'] or state[name]['results'][tgt]['endtime'] == '':
             now = datetime.now(timezone.utc)
-            log(what='machine_result',cron=name, instance=procname, machine=tgt,
+            log(what='machine_result',cron=name, group=group, instance=procname, machine=tgt,
                 code=255, out="Target did not return anything", time=now)
 
             tmpresults = state[name]['results'].copy()
@@ -189,6 +224,7 @@ def processresults(client,commands,job,name,procname,running,state,targets):
             tmprunning = running[procname]
             tmprunning['machines'].remove(m)
             running[procname] = tmprunning
+        
 
 
 
@@ -196,7 +232,7 @@ def run(name,data,procname,running,state,commands):
     #do this check here for the purpose of avoiding sync logging in the main program
     for instance in running.keys():
         if name == running[instance]['name']:
-            log(what='overlap', cron=name, instance=instance,
+            log(what='overlap', cron=name, group=data['group'], instance=instance,
                  time=datetime.now(timezone.utc))
             tmpstate = state[name]
             tmpstate['overlap'] = True
@@ -213,8 +249,8 @@ def run(name,data,procname,running,state,commands):
         cmdargs.append('cwd='+data['cwd'])
     if 'user' in data:
         cmdargs.append('runas='+data['user'])
-    if 'hard_timeout' in data:
-        cmdargs.append('timeout='+str(data['hard_timeout']))
+    if 'timeout' in data:
+        cmdargs.append('timeout='+str(data['timeout']))
 
     now = datetime.now(timezone.utc)
     running[procname]=  { 'started': now, 'name': name , 'machines': []}
@@ -222,7 +258,7 @@ def run(name,data,procname,running,state,commands):
     tmpstate['last_run'] = now
     tmpstate['overlap'] = False
     state[name] = tmpstate
-    log(cron=name, what='start', instance=procname, time=now)
+    log(cron=name, group=data['group'], what='start', instance=procname, time=now)
     minion_ret = salt.cmd(targets, 'test.ping', tgt_type=target_type)
     targets_list = list(minion_ret)
     dead_targets = []
@@ -240,8 +276,8 @@ def run(name,data,procname,running,state,commands):
 
     state[name] = tmpstate
     if len(targets_list) == 0:
-        log(cron=name, what='no_machines', instance=procname, time=datetime.now(timezone.utc))
-        log(cron=name, what='end', instance=procname, time=datetime.now(timezone.utc))
+        log(cron=name, group=data['group'], what='no_machines', instance=procname, time=datetime.now(timezone.utc))
+        log(cron=name, group=data['group'], what='end', instance=procname, time=datetime.now(timezone.utc))
         return
     if 'number_of_targets' in data and data['number_of_targets'] != 0:
         import random
@@ -264,9 +300,9 @@ def run(name,data,procname,running,state,commands):
 
                     # update running list and state
                     running[procname]=  { 'started': now, 'name': name, 'machines': chunk }
-                    processstart(chunk,name,procname,state)
+                    processstart(chunk,name,data['group'],procname,state)
                     #this should be blocking
-                    processresults(salt,commands,job,name,procname,running,state,chunk)
+                    processresults(salt,commands,job,name,data['group'],procname,running,state,chunk)
                     chunk = []
                 except Exception as e:
                     print('Exception triggered in run() at "batch_size" condition', e)
@@ -278,14 +314,14 @@ def run(name,data,procname,running,state,commands):
         try:
             job = salt.run_job(targets_list, 'cmd.run', cmdargs,
                     tgt_type='list', listen=True)
-            processstart(targets_list,name,procname,state)
+            processstart(targets_list,name,data['group'],procname,state)
             #this should be blocking
-            processresults(salt,commands,job,name,procname,running,state,targets_list)
+            processresults(salt,commands,job,name,data['group'],procname,running,state,targets_list)
 
         except Exception as e:
             print('Exception triggered in run()', e)
 
-    log(cron=name, what='end', instance=procname, time=datetime.now(timezone.utc))
+    log(cron=name, group=data['group'], what='end', instance=procname, time=datetime.now(timezone.utc))
 
 def debuglog(content):
     logfile = open(args.logdir+'/'+'debug.log','a')
@@ -294,7 +330,7 @@ def debuglog(content):
     logfile.close()
 
 
-def log(what, cron, instance, time, machine='', code=0, out='', status=''):
+def log(what, cron, group, instance, time, machine='', code=0, out='', status=''):
     try:
         logfile_name = args.logdir+'/'+cron+'.log'
         logfile = open(logfile_name,'a')
@@ -324,7 +360,7 @@ def log(what, cron, instance, time, machine='', code=0, out='', status=''):
     logfile.close()
 
     if use_es:
-        doc = { 'job_name': cron, "job_instance": instance, '@timestamp': time,
+        doc = { 'job_name': cron, "group": group, "job_instance": instance, '@timestamp': time,
                 'return_code': code, 'machine': machine, 'output': out, 'msg_type': what } 
         index_name = 'saltpeter-%s' % date.today().strftime('%Y.%m.%d')
         try:
@@ -335,7 +371,7 @@ def log(what, cron, instance, time, machine='', code=0, out='', status=''):
             print(e)
 
     if use_opensearch:
-        doc = { 'job_name': cron, "job_instance": instance, '@timestamp': time,
+        doc = { 'job_name': cron, "group": group, "job_instance": instance, '@timestamp': time,
                 'return_code': code, 'machine': machine, 'output': out, 'msg_type': what } 
         index_name = 'saltpeter-%s' % date.today().strftime('%Y.%m.%d')
         try:
@@ -345,18 +381,64 @@ def log(what, cron, instance, time, machine='', code=0, out='', status=''):
             #print("Can't write to opensearch", doc)
             print(e)
 
+def gettimeline(client, start_date, end_date, req_id, timeline, index_name):
+    # Build the query with a date range filter
+    query= {
+        "query": {
+            "bool" : {
+                "must" : [
+                    {
+                        "range": {
+                            "@timestamp": {
+                                "gte": start_date,
+                                "lte": end_date
+                            }
+                        }
+                    },
+                    {
+                        "terms": {
+                            "msg_type": ["machine_start", "machine_result"]
+                         }
+                    }  
+                    ]
+                }
+            }
+        }
+    result = client.search(index=index_name, body=query, scroll='1m')
+    new_timeline_content = []
+    scroll_id = None
+    try:
+        if 'hits' in result:
+            # Use the scroll API to fetch all documents
+            while True:
+                scroll_id = result['_scroll_id']
+                hits = result['hits']['hits']
+                if not hits:
+                    break  # Break out of the loop when no more documents are returned
 
+                for hit in hits:
+                    cron = hit['_source']['job_name']
+                    job_instance = hit['_source']['job_instance']
+                    timestamp = hit['_source']['@timestamp']
+                    ret_code = hit['_source']['return_code']
+                    msg_type = hit['_source']['msg_type']
+                    new_timeline_content.append({'cron': cron, 'timestamp': timestamp, 'ret_code': ret_code, 'msg_type': msg_type, 'job_instance':job_instance })
+                result = client.scroll(scroll_id=scroll_id, scroll='1m')
 
-def timeout(which, process):
-    global processlist
-    if which == 'hard':
-        print('Process %s is about to reach hard timeout! It will be killed soon!'\
-                % process.name)
-        processlist[process.name]['hard_timeout'] += timedelta(minutes=5)
-    if which == 'soft':
-        print('Process %s reached soft timeout!' % process.name)
-        processlist[process.name]['soft_timeout'] += timedelta(minutes=5)
+    except TransportError as e:
+        # Handle the transport error
+        print(f"TransportError occurred: {e}")
+    finally:
+        if scroll_id:
+            # Clear the scroll context when done
+            client.clear_scroll(scroll_id=scroll_id)
+    
+    new_timeline_content = sorted(new_timeline_content, key=lambda x: x['timestamp'])
 
+    if ('content' not in timeline) or (new_timeline_content != timeline['content']):
+        timeline['content'] = new_timeline_content
+        timeline['id'] = req_id
+        timeline['serial'] = datetime.now(timezone.utc).timestamp()
 
 def main():
     parser = argparse.ArgumentParser()
@@ -410,10 +492,15 @@ def main():
     state = manager.dict()
     commands = manager.list()
     bad_crons = manager.list()
+    timeline = manager.dict()
+
+    #timeline['content'] = []
+    #timeline['serial'] = datetime.now(timezone.utc).timestamp()
+    #timeline['id'] = ''
     
     #start the api
     if args.api:
-        a = multiprocessing.Process(target=api.start, args=(args.port,config,running,state,commands,bad_crons,), name='api')
+        a = multiprocessing.Process(target=api.start, args=(args.port,config,running,state,commands,bad_crons,timeline), name='api')
         a.start()
 
     if args.elasticsearch != '':
@@ -431,15 +518,32 @@ def main():
 
     #main loop
     prev = datetime.now(timezone.utc)
-
+    
     while True:
-        
         now = datetime.now(timezone.utc)
-
+        
         newconfig = readconfig(args.configdir)
         if 'crons' not in config or config['crons'] != newconfig:
             config['crons'] = newconfig
             config['serial'] = now.timestamp()
+        
+        # timeline
+        for cmd in commands:
+            if 'get_timeline' in cmd:
+                timeline_start_date = cmd['get_timeline']['start_date']
+                timeline_end_date = cmd['get_timeline']['end_date']
+                timeline_id = cmd['get_timeline']['id']
+                index_name = 'saltpeter*'
+                procname = 'timeline'
+                if use_es:
+                    p_timeline = multiprocessing.Process(target=gettimeline,\
+                            args=(es,timeline_start_date, timeline_end_date, timeline_id, timeline, index_name), name=procname)
+                    p_timeline.start()
+                if use_opensearch:
+                    p_timeline = multiprocessing.Process(target=gettimeline,\
+                            args=(opensearch,timeline_start_date, timeline_end_date, timeline_id, timeline, index_name), name=procname)
+                    p_timeline.start()
+                commands.remove(cmd)
 
         for name in config['crons'].copy():
             #determine next run based on the the last time the loop ran, not the current time
@@ -458,7 +562,6 @@ def main():
                     if cmd['runnow'] == name:
                         runnow = True
                         commands.remove(cmd)
-
             if (result != False and now >= nextrun) or runnow:
                 if name not in last_run or last_run[name] < prev:
                     last_run[name] = now 
@@ -470,32 +573,20 @@ def main():
                             args=(name,config['crons'][name],procname,running, state, commands), name=procname)
 
                     processlist[procname] = {}
+                    processlist[procname]['cron_name'] = name
+                    processlist[procname]['cron_group'] = config['crons'][name]['group']
 
-                    # this is wrong on multiple levels, to be fixed
-                    if 'soft_timeout' in result:
-                        processlist[procname]['soft_timeout'] = \
-                                now+timedelta(seconds = result['soft_timeout'])
-                    if 'hard_timeout' in result:
-                        processlist[procname]['hard_timeout'] = \
-                                now+timedelta(seconds = result['hard_timeout']-1)
                     p.start()
         prev = now
         time.sleep(0.05)
 
-        #process cleanup and timeout enforcing
+        #process cleanup
         processes = multiprocessing.active_children()
         for entry in list(processlist):
             found = False
             for process in processes:
                 if entry == process.name:
                     found = True
-                    # this is wrong on multiple levels, to be fixed:
-                    if 'soft_timeout' in processlist[entry]  and \
-                            processlist[entry]['soft_timeout'] < datetime.now(timezone.utc):
-                        timeout('soft',process)
-                    if 'hard_timeout' in processlist[entry] and \
-                            processlist[entry]['hard_timeout'] < datetime.now(timezone.utc):
-                        timeout('hard',process)
             if found == False:
                 print('Deleting process %s as it must have finished' % entry)
                 del(processlist[entry])
