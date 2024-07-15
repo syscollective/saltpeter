@@ -113,12 +113,8 @@ def processstart(chunk,name,group,procname,state):
 
 
 def processresults(client,commands,job,name,group,procname,running,state,targets):
-
-
-
     jid = job['jid']
     minions = job['minions']
-
 
     rets = client.get_iter_returns(jid, minions, block=False, expect_minions=True,timeout=1)
     keepgoing = True
@@ -331,6 +327,64 @@ def log(what, cron, group, instance, time, machine='', code=0, out='', status=''
             #print("Can't write to opensearch", doc)
             print(e)
 
+def gettimeline(client, start_date, end_date, req_id, timeline, index_name):
+    # Build the query with a date range filter
+    query= {
+        "query": {
+            "bool" : {
+                "must" : [
+                    {
+                        "range": {
+                            "@timestamp": {
+                                "gte": start_date,
+                                "lte": end_date
+                            }
+                        }
+                    },
+                    {
+                        "terms": {
+                            "msg_type": ["machine_start", "machine_result"]
+                         }
+                    }  
+                    ]
+                }
+            }
+        }
+    result = client.search(index=index_name, body=query, scroll='1m')
+    new_timeline_content = []
+    scroll_id = None
+    try:
+        if 'hits' in result:
+            # Use the scroll API to fetch all documents
+            while True:
+                scroll_id = result['_scroll_id']
+                hits = result['hits']['hits']
+                if not hits:
+                    break  # Break out of the loop when no more documents are returned
+
+                for hit in hits:
+                    cron = hit['_source']['job_name']
+                    job_instance = hit['_source']['job_instance']
+                    timestamp = hit['_source']['@timestamp']
+                    ret_code = hit['_source']['return_code']
+                    msg_type = hit['_source']['msg_type']
+                    new_timeline_content.append({'cron': cron, 'timestamp': timestamp, 'ret_code': ret_code, 'msg_type': msg_type, 'job_instance':job_instance })
+                result = client.scroll(scroll_id=scroll_id, scroll='1m')
+
+    except TransportError as e:
+        # Handle the transport error
+        print(f"TransportError occurred: {e}")
+    finally:
+        if scroll_id:
+            # Clear the scroll context when done
+            client.clear_scroll(scroll_id=scroll_id)
+    
+    new_timeline_content = sorted(new_timeline_content, key=lambda x: x['timestamp'])
+
+    if ('content' not in timeline) or (new_timeline_content != timeline['content']):
+        timeline['content'] = new_timeline_content
+        timeline['id'] = req_id
+        timeline['serial'] = datetime.now(timezone.utc).timestamp()
 
 def main():
     parser = argparse.ArgumentParser()
@@ -384,10 +438,15 @@ def main():
     state = manager.dict()
     commands = manager.list()
     bad_crons = manager.list()
+    timeline = manager.dict()
+
+    #timeline['content'] = []
+    #timeline['serial'] = datetime.now(timezone.utc).timestamp()
+    #timeline['id'] = ''
     
     #start the api
     if args.api:
-        a = multiprocessing.Process(target=api.start, args=(args.port,config,running,state,commands,bad_crons,), name='api')
+        a = multiprocessing.Process(target=api.start, args=(args.port,config,running,state,commands,bad_crons,timeline), name='api')
         a.start()
 
     if args.elasticsearch != '':
@@ -405,15 +464,32 @@ def main():
 
     #main loop
     prev = datetime.now(timezone.utc)
-
+    
     while True:
-        
         now = datetime.now(timezone.utc)
-
+        
         newconfig = readconfig(args.configdir)
         if 'crons' not in config or config['crons'] != newconfig:
             config['crons'] = newconfig
             config['serial'] = now.timestamp()
+        
+        # timeline
+        for cmd in commands:
+            if 'get_timeline' in cmd:
+                timeline_start_date = cmd['get_timeline']['start_date']
+                timeline_end_date = cmd['get_timeline']['end_date']
+                timeline_id = cmd['get_timeline']['id']
+                index_name = 'saltpeter*'
+                procname = 'timeline'
+                if use_es:
+                    p_timeline = multiprocessing.Process(target=gettimeline,\
+                            args=(es,timeline_start_date, timeline_end_date, timeline_id, timeline, index_name), name=procname)
+                    p_timeline.start()
+                if use_opensearch:
+                    p_timeline = multiprocessing.Process(target=gettimeline,\
+                            args=(opensearch,timeline_start_date, timeline_end_date, timeline_id, timeline, index_name), name=procname)
+                    p_timeline.start()
+                commands.remove(cmd)
 
         for name in config['crons'].copy():
             #determine next run based on the the last time the loop ran, not the current time
@@ -432,7 +508,6 @@ def main():
                     if cmd['runnow'] == name:
                         runnow = True
                         commands.remove(cmd)
-
             if (result != False and now >= nextrun) or runnow:
                 if name not in last_run or last_run[name] < prev:
                     last_run[name] = now 
