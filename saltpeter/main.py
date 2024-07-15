@@ -112,19 +112,40 @@ def processstart(chunk,name,group,procname,state):
                 time=starttime, machine=target)
 
 
+
 def processresults(client,commands,job,name,group,procname,running,state,targets):
+
+    import salt.runner
+    opts = salt.config.master_config('/etc/salt/master')
+    runner = salt.runner.RunnerClient(opts)
+
     jid = job['jid']
     minions = job['minions']
 
     rets = client.get_iter_returns(jid, minions, block=False, expect_minions=True,timeout=1)
-    keepgoing = True
+    failed_returns = False
+    kill = False
+
 
     for i in rets:
+
+        #process commands in the loop
+        for cmd in commands:
+            if 'killcron' in cmd:
+                if cmd['killcron'] == name:
+                    commands.remove(cmd)
+                    client.run_job(minions, 'saltutil.term_job', [jid], tgt_type='list')
+                    kill = True
+        if kill:
+            break
+
         if i is not None:
             m = list(i)[0]
+            print(i[m])
             if 'failed' in i[m] and i[m]['failed'] == True:
-                r = 255
-                o = "Target did not return data" 
+                print(f"Getting info about job {name} jid: {jid} every 10 seconds")
+                failed_returns = True
+                continue
             else:
                 r = i[m]['retcode']
                 o = i[m]['ret']
@@ -144,17 +165,49 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
             log(what='machine_result',cron=name, group=group, instance=procname, machine=m,
                 code=r, out=o, time=result['endtime'])
         #time.sleep(1)
-        for cmd in commands:
-            print('COMMAND: ',cmd)
-            if 'killcron' in cmd:
-                if cmd['killcron'] == name:
-                    commands.remove(cmd)
-                    client.run_job(minions, 'saltutil.term_job', [jid], tgt_type='list')
 
+       
+    if failed_returns:
+        while True:
+            #process commands in the loop
+            for cmd in commands:
+                if 'killcron' in cmd:
+                    if cmd['killcron'] == name:
+                        commands.remove(cmd)
+                        client.run_job(minions, 'saltutil.term_job', [jid], tgt_type='list')
+                        kill = True
+
+            if kill:
+                break
+
+            job_listing = runner.cmd("jobs.list_job",[jid])
+            if len(job_listing['Minions']) == len(job_listing['Result'].keys()) or kill:
+                for m in job_listing['Result'].keys():
+                    o = job_listing['Result'][m]['return']
+                    r = job_listing['Result'][m]['retcode']
+                    result = { 'ret': o, 'retcode': r, 'starttime': state[name]['results'][m]['starttime'], 'endtime': datetime.now(timezone.utc) }
+                    if 'results' in state[name]:
+                        tmpresults = state[name]['results'].copy()
+                    else:
+                        tmpresults = {}
+                    if m not in tmpresults:
+                        tmpresults[m] = result
+                        tmpstate = state[name].copy()
+                        tmpstate['results'] = tmpresults
+                        state[name] = tmpstate
+                        tmprunning = running[procname]
+                        tmprunning['machines'].remove(m)
+                        running[procname] = tmprunning
+
+                        log(what='machine_result',cron=name, group=group, instance=procname, machine=m,
+                            code=r, out=o, time=result['endtime'])
+
+                break
+            time.sleep(10)
 
 
     for tgt in targets:
-        if tgt not in minions:
+        if tgt not in minions or tgt not in state[name]['results'] or state[name]['results'][tgt]['endtime'] == '':
             now = datetime.now(timezone.utc)
             log(what='machine_result',cron=name, group=group, instance=procname, machine=tgt,
                 code=255, out="Target did not return anything", time=now)
@@ -171,6 +224,7 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
             tmprunning = running[procname]
             tmprunning['machines'].remove(m)
             running[procname] = tmprunning
+        
 
 
 
