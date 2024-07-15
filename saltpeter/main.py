@@ -65,10 +65,11 @@ def parsecron(name, data, time=datetime.now(timezone.utc)):
         year = data['year']
     else:
         year = '*'
-    if 'soft_timeout' in data and data['soft_timeout'] != 0:
-        ret['soft_timeout'] = data['soft_timeout']
     if 'hard_timeout' in data and data['hard_timeout'] != 0:
-        ret['hard_timeout'] = data['hard_timeout']
+        ret['timeout'] = data['hard_timeout']
+    if 'timeout' in data and data['timeout'] != 0:
+        ret['timeout'] = data['timeout']
+
 
     try:
         entry = CronTab('%s %s %s %s %s %s %s' % (sec, minute, hour, dom, mon, dow, year))
@@ -198,15 +199,14 @@ def run(name,data,procname,running,state,commands):
         cmdargs.append('cwd='+data['cwd'])
     if 'user' in data:
         cmdargs.append('runas='+data['user'])
-    if 'hard_timeout' in data:
-        cmdargs.append('timeout='+str(data['hard_timeout']))
+    if 'timeout' in data:
+        cmdargs.append('timeout='+str(data['timeout']))
 
     now = datetime.now(timezone.utc)
-    running[procname]=  { 'started': now, 'name': name , 'machines': [], 'timeout_reached': ''}
+    running[procname]=  { 'started': now, 'name': name , 'machines': []}
     tmpstate = state[name].copy()
     tmpstate['last_run'] = now
     tmpstate['overlap'] = False
-    tmpstate['timeout_reached'] = ""
     state[name] = tmpstate
     log(cron=name, group=data['group'], what='start', instance=procname, time=now)
     minion_ret = salt.cmd(targets, 'test.ping', tgt_type=target_type)
@@ -249,7 +249,7 @@ def run(name,data,procname,running,state,commands):
                             tgt_type='list', listen=True)
 
                     # update running list and state
-                    running[procname]=  { 'started': now, 'name': name, 'machines': chunk , 'timeout_reached': ''}
+                    running[procname]=  { 'started': now, 'name': name, 'machines': chunk }
                     processstart(chunk,name,data['group'],procname,state)
                     #this should be blocking
                     processresults(salt,commands,job,name,data['group'],procname,running,state,chunk)
@@ -258,7 +258,7 @@ def run(name,data,procname,running,state,commands):
                     print('Exception triggered in run() at "batch_size" condition', e)
                     chunk = []
     else:
-        running[procname]=  { 'started': now, 'name': name, 'machines': targets_list, 'timeout_reached': ''}
+        running[procname]=  { 'started': now, 'name': name, 'machines': targets_list }
         starttime = datetime.now(timezone.utc)
 
         try:
@@ -330,39 +330,6 @@ def log(what, cron, group, instance, time, machine='', code=0, out='', status=''
         except Exception as e:
             #print("Can't write to opensearch", doc)
             print(e)
-
-
-
-def timeout(which, process, state, running):
-    global processlist
-    cron_name = processlist[process.name]['cron_name']
-    tmpstate = state[cron_name].copy()
-    tmprunning = {}
-    if process.name in running.keys():
-        tmprunning = running[process.name].copy()
-    if which == 'hard' and ('timeout_reached' not in processlist[process.name] or processlist[process.name]['timeout_reached'] != 'hard'):
-        print('Process %s is about to reach hard timeout! It will be killed soon!'\
-                % process.name)
-        processlist[process.name]['timeout_reached'] = 'soft'
-        log(what='hard_timeout', cron=cron_name, group=processlist[process.name]['cron_group'], instance=process.name,
-            time=datetime.now(timezone.utc))
-        tmpstate['timeout_reached'] = 'hard'
-        state[cron_name] = tmpstate
-        if tmprunning:
-            tmprunning['timeout_reached'] = 'hard'
-            running[process.name] = tmprunning
-            
-    if which == 'soft' and ('timeout_reached' not in processlist[process.name] or processlist[process.name]['timeout_reached'] != 'soft'):
-        print('Process %s reached soft timeout!' % process.name)
-        processlist[process.name]['timeout_reached'] = 'hard'
-        log(what='soft_timeout', cron=cron_name, group=processlist[process.name]['cron_group'], instance=process.name,
-            time=datetime.now(timezone.utc))
-        tmpstate['timeout_reached'] = 'soft'
-        state[cron_name] = tmpstate
-        if tmprunning:
-            tmprunning['timeout_reached'] = 'soft'
-            running[process.name] = tmprunning
-
 
 
 def main():
@@ -480,31 +447,17 @@ def main():
                     processlist[procname]['cron_name'] = name
                     processlist[procname]['cron_group'] = config['crons'][name]['group']
 
-                    # this is wrong on multiple levels, to be fixed
-                    if 'soft_timeout' in result:
-                        processlist[procname]['soft_timeout'] = \
-                                now+timedelta(seconds = result['soft_timeout'])
-                    if 'hard_timeout' in result:
-                        processlist[procname]['hard_timeout'] = \
-                                now+timedelta(seconds = result['hard_timeout']-1)
                     p.start()
         prev = now
         time.sleep(0.05)
 
-        #process cleanup and timeout enforcing
+        #process cleanup
         processes = multiprocessing.active_children()
         for entry in list(processlist):
             found = False
             for process in processes:
                 if entry == process.name:
                     found = True
-                    # this is wrong on multiple levels, to be fixed:
-                    if 'soft_timeout' in processlist[entry]  and \
-                            processlist[entry]['soft_timeout'] < datetime.now(timezone.utc):
-                        timeout('soft', process, state, running)
-                    if 'hard_timeout' in processlist[entry] and \
-                            processlist[entry]['hard_timeout'] < datetime.now(timezone.utc):
-                        timeout('hard',process, state, running)
             if found == False:
                 print('Deleting process %s as it must have finished' % entry)
                 del(processlist[entry])
