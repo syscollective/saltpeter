@@ -208,12 +208,14 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
 
     for tgt in targets:
         print("---TARGETS ERROR-BEFORE-IF-CLAUSE---")
+        print("proc", procname)
         print("tgt", tgt)
         print("minions", minions)
         print("state", state[name]['results'])
         print("------------------------------------")
         if tgt not in minions or tgt not in state[name]['results'] or state[name]['results'][tgt]['endtime'] == '':
             print("---TARGETS ERROR-IF-CLAUSE---")
+            print("proc", procname)
             print("tgt", tgt)
             print("minions", minions)
             print("state", state[name]['results'])
