@@ -115,7 +115,7 @@ def processstart(chunk,name,group,procname,state):
 
 def processresults(client,commands,job,name,group,procname,running,state,targets):
  
-    print('processresults', procname,running,state[name]['results'],targets)
+    print('processresults', procname,state[name]['results'],targets)
     import salt.runner
     opts = salt.config.master_config('/etc/salt/master')
     runner = salt.runner.RunnerClient(opts)
