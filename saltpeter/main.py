@@ -210,13 +210,13 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
         print("---TARGETS ERROR-BEFORE-IF-CLAUSE---")
         print("tgt", tgt)
         print("minions", minions)
-        print("state", state)
+        print("state", state[name]['results'])
         print("------------------------------------")
         if tgt not in minions or tgt not in state[name]['results'] or state[name]['results'][tgt]['endtime'] == '':
             print("---TARGETS ERROR-IF-CLAUSE---")
             print("tgt", tgt)
             print("minions", minions)
-            print("state", state)
+            print("state", state[name]['results'])
             print("-------------------")
 
             now = datetime.now(timezone.utc)
