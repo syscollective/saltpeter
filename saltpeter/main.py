@@ -207,7 +207,18 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
 
 
     for tgt in targets:
+        print("---TARGETS ERROR-BEFORE-IF-CLAUSE---")
+        print("tgt", tgt)
+        print("minions", minions)
+        print("state", state)
+        print("------------------------------------")
         if tgt not in minions or tgt not in state[name]['results'] or state[name]['results'][tgt]['endtime'] == '':
+            print("---TARGETS ERROR-IF-CLAUSE---")
+            print("tgt", tgt)
+            print("minions", minions)
+            print("state", state)
+            print("-------------------")
+
             now = datetime.now(timezone.utc)
             log(what='machine_result',cron=name, group=group, instance=procname, machine=tgt,
                 code=255, out="Target did not return anything", time=now)
