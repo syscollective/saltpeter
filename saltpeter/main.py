@@ -92,6 +92,7 @@ def parsecron(name, data, time=datetime.now(timezone.utc)):
     return ret
 
 def processstart(chunk,name,group,procname,state):
+    print('PROCESSSTART - begin', procname,state[name])
     results = {}
 
     for target in chunk:
@@ -110,12 +111,13 @@ def processstart(chunk,name,group,procname,state):
 
         log(cron=name, group=group, what='machine_start', instance=procname,
                 time=starttime, machine=target)
+    print('PROCESSSTART - end', procname,state[name])
 
 
 
 def processresults(client,commands,job,name,group,procname,running,state,targets):
  
-    print('processresults', procname,state[name]['results'],targets)
+    print('PROCESSRESULTS - begin', procname,state[name]['results'],targets)
     import salt.runner
     opts = salt.config.master_config('/etc/salt/master')
     runner = salt.runner.RunnerClient(opts)
@@ -127,9 +129,9 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
     failed_returns = False
     kill = False
 
-
+    print('PROCESSRESULTS - rets', rets)
     for i in rets:
-
+        
         #process commands in the loop
         for cmd in commands:
             if 'killcron' in cmd:
@@ -208,12 +210,6 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
 
 
     for tgt in targets:
-        print("---TARGETS ERROR-BEFORE-IF-CLAUSE---")
-        print("proc", procname)
-        print("tgt", tgt)
-        print("minions", minions)
-        print("state", state[name]['results'])
-        print("------------------------------------")
         if tgt not in minions or tgt not in state[name]['results'] or state[name]['results'][tgt]['endtime'] == '':
             print("---TARGETS ERROR-IF-CLAUSE---")
             print("proc", procname)
@@ -239,10 +235,12 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
             tmprunning['machines'].remove(m)
             running[procname] = tmprunning
         
+    print('PROCESSRESULTS - end', procname,state[name]['results'],targets)
 
 
 
 def run(name,data,procname,running,state,commands):
+    print('RUN - begin', procname,state[name])
     #do this check here for the purpose of avoiding sync logging in the main program
     for instance in running.keys():
         if name == running[instance]['name']:
@@ -335,6 +333,7 @@ def run(name,data,procname,running,state,commands):
         except Exception as e:
             print('Exception triggered in run()', e)
 
+    print('RUN - end', procname,state[name])
     log(cron=name, group=data['group'], what='end', instance=procname, time=datetime.now(timezone.utc))
 
 def debuglog(content):
