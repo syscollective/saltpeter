@@ -129,23 +129,23 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
     failed_returns = False
     kill = False
 
-    print('PROCESSRESULTS - loop begin')
+    print('PROCESSRESULTS - loop begin', procname)
     for i in rets:
         
         #process commands in the loop
         for cmd in commands:
             if 'killcron' in cmd:
-                print('PROCESSRESULTS - killcron')
+                print('PROCESSRESULTS - killcron', procname)
                 if cmd['killcron'] == name:
                     commands.remove(cmd)
                     client.run_job(minions, 'saltutil.term_job', [jid], tgt_type='list')
                     kill = True
         if kill:
-            print('PROCESSRESULTS - kill')
+            print('PROCESSRESULTS - kill', procname)
             break
 
         if i is not None:
-            print('PROCESSRESULTS - if job info')
+            print('PROCESSRESULTS - if job info', procname)
             m = list(i)[0]
             print(i[m])
             if 'failed' in i[m] and i[m]['failed'] == True:
@@ -156,7 +156,7 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
                 r = i[m]['retcode']
                 o = i[m]['ret']
             result = { 'ret': o, 'retcode': r, 'starttime': state[name]['results'][m]['starttime'], 'endtime': datetime.now(timezone.utc) }
-            print('PROCESSRESULTS - if job info', result)
+            print('PROCESSRESULTS - if job info', procname, result)
             if 'results' in state[name]:
                 tmpresults = state[name]['results'].copy()
                 print('PROCESSRESULTS - if results in state', tmpresults)
@@ -169,34 +169,34 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
             tmprunning = running[procname]
             tmprunning['machines'].remove(m)
             running[procname] = tmprunning
-            print('PROCESSRESULTS - if results NOT in state', tmpstate)
+            print('PROCESSRESULTS - if results NOT in state', procname, tmpstate)
 
             log(what='machine_result',cron=name, group=group, instance=procname, machine=m,
                 code=r, out=o, time=result['endtime'])
-            print('PROCESSRESULTS - if job info end', state[name])
+            print('PROCESSRESULTS - if job info end', procname, state[name])
         #time.sleep(1)
 
        
     if failed_returns:
-        print('PROCESSRESULTS - if failed returns')
+        print('PROCESSRESULTS - if failed returns', procname)
         while True:
             #process commands in the loop
             for cmd in commands:
                 if 'killcron' in cmd:
-                    print('PROCESSRESULTS - if failed returns killcron')
+                    print('PROCESSRESULTS - if failed returns killcron', procname)
                     if cmd['killcron'] == name:
-                        print('PROCESSRESULTS - if failed returns killcron 2')
+                        print('PROCESSRESULTS - if failed returns killcron 2', procname)
                         commands.remove(cmd)
                         client.run_job(minions, 'saltutil.term_job', [jid], tgt_type='list')
                         kill = True
 
             if kill:
-                print('PROCESSRESULTS - if failed returns kill')
+                print('PROCESSRESULTS - if failed returns kill', procname)
                 break
 
             job_listing = runner.cmd("jobs.list_job",[jid])
             if len(job_listing['Minions']) == len(job_listing['Result'].keys()) or kill:
-                print('PROCESSRESULTS - if job listing')
+                print('PROCESSRESULTS - if job listing', procname)
                 for m in job_listing['Result'].keys():
                     o = job_listing['Result'][m]['return']
                     r = job_listing['Result'][m]['retcode']
@@ -216,7 +216,7 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
 
                         log(what='machine_result',cron=name, group=group, instance=procname, machine=m,
                             code=r, out=o, time=result['endtime'])
-                    print('PROCESSRESULTS - if failed returns end', state[name])
+                    print('PROCESSRESULTS - if failed returns end', procname, state[name])
 
                 break
             time.sleep(10)
