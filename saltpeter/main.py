@@ -108,6 +108,7 @@ def processstart(chunk,name,group,procname,state):
         tmpstate = state[name].copy()
         tmpstate['results'] = tmpresults
         state[name] = tmpstate
+        print('PROCESSSTART - loop', procname,state[name])
 
         log(cron=name, group=group, what='machine_start', instance=procname,
                 time=starttime, machine=target)
