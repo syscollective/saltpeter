@@ -156,7 +156,7 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
                 r = i[m]['retcode']
                 o = i[m]['ret']
             result = { 'ret': o, 'retcode': r, 'starttime': state[name]['results'][m]['starttime'], 'endtime': datetime.now(timezone.utc) }
-            print('PROCESSRESULTS - if job info' result)
+            print('PROCESSRESULTS - if job info', result)
             if 'results' in state[name]:
                 tmpresults = state[name]['results'].copy()
             else:
