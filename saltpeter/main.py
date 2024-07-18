@@ -218,6 +218,7 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
                         tmpstate = state[name].copy()
                         tmpstate['results'] = tmpresults
                         state[name] = tmpstate
+                        print("failed_returns state", state[name])
                         tmprunning = running[procname]
                         tmprunning['machines'].remove(m)
                         running[procname] = tmprunning
@@ -252,6 +253,7 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
             tmpstate = state[name].copy()
             tmpstate['results'] = tmpresults
             state[name] = tmpstate
+            print("targets if state", state[name])
             tmprunning = running[procname]
             tmprunning['machines'].remove(m)
             running[procname] = tmprunning
@@ -270,6 +272,7 @@ def run(name,data,procname,running,state,commands):
             tmpstate = state[name]
             tmpstate['overlap'] = True
             state[name] = tmpstate
+            print("run state", state[name])
             if 'allow_overlap' not in data or data['allow_overlap'] != 'i know what i am doing!':
                 return
 
@@ -291,6 +294,7 @@ def run(name,data,procname,running,state,commands):
     tmpstate['last_run'] = now
     tmpstate['overlap'] = False
     state[name] = tmpstate
+    print("run2 state", state[name])
     log(cron=name, group=data['group'], what='start', instance=procname, time=now)
     minion_ret = salt.cmd(targets, 'test.ping', tgt_type=target_type)
     targets_list = list(minion_ret)
@@ -308,6 +312,7 @@ def run(name,data,procname,running,state,commands):
                     'endtime': datetime.now(timezone.utc) }
 
     state[name] = tmpstate
+    print("run state3", state[name])
     if len(targets_list) == 0:
         log(cron=name, group=data['group'], what='no_machines', instance=procname, time=datetime.now(timezone.utc))
         log(cron=name, group=data['group'], what='end', instance=procname, time=datetime.now(timezone.utc))
@@ -584,10 +589,12 @@ def main():
             result = parsecron(name, config['crons'][name], prev)
             if name not in state:
                 state[name] = {}
+                print("init state", state[name])
             nextrun = prev + timedelta(seconds=result['nextrun'])
             tmpstate = state[name].copy()
             tmpstate['next_run'] = nextrun
             state[name] = tmpstate
+            print("main loop state", state[name])
             #check if there are any start commands
             runnow = False
             for cmd in commands:
