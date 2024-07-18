@@ -159,6 +159,7 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
             print('PROCESSRESULTS - if job info', result)
             if 'results' in state[name]:
                 tmpresults = state[name]['results'].copy()
+                print('PROCESSRESULTS - if results in state', tmpresults)
             else:
                 tmpresults = {}
             tmpresults[m] = result
@@ -168,6 +169,7 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
             tmprunning = running[procname]
             tmprunning['machines'].remove(m)
             running[procname] = tmprunning
+            print('PROCESSRESULTS - if results NOT in state', tmpstate)
 
             log(what='machine_result',cron=name, group=group, instance=procname, machine=m,
                 code=r, out=o, time=result['endtime'])
