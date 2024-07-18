@@ -157,23 +157,30 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
                 o = i[m]['ret']
             result = { 'ret': o, 'retcode': r, 'starttime': state[name]['results'][m]['starttime'], 'endtime': datetime.now(timezone.utc) }
             print('PROCESSRESULTS - if job info', procname, result)
+            print("state1", state[name]['results'])
             if 'results' in state[name]:
                 tmpresults = state[name]['results'].copy()
                 print('PROCESSRESULTS - if results in state', tmpresults)
             else:
                 tmpresults = {}
+            print("tmpresults1", tmpresults)
             tmpresults[m] = result
+            print("tmpresults2", tmpresults)
             tmpstate = state[name].copy()
+            print("tmpstate1", tmpstate)
             tmpstate['results'] = tmpresults
+            print("tmpstate2", tmpstate)
             state[name] = tmpstate
+            print("state1", state[name])
             tmprunning = running[procname]
             tmprunning['machines'].remove(m)
             running[procname] = tmprunning
-            print('PROCESSRESULTS - if results NOT in state', procname, tmpstate)
+            print("running", running[procname])
+            print('PROCESSRESULTS - if job end BEFORE LOG', procname, tmpstate, state[name])
 
             log(what='machine_result',cron=name, group=group, instance=procname, machine=m,
                 code=r, out=o, time=result['endtime'])
-            print('PROCESSRESULTS - if job info end', procname, state[name])
+            print('PROCESSRESULTS - if job info end AFTER LOG', procname, tmpstate, state[name])
         #time.sleep(1)
 
        
