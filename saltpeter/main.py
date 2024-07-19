@@ -152,14 +152,14 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
             result = { 'ret': o, 'retcode': r, 'starttime': state[name]['results'][m]['starttime'], 'endtime': datetime.now(timezone.utc) }
             print("RESULT", name, result)
             if 'results' in state[name]:
-                tmpresults = state[name]['results'].copy()
+                tmpresults = copy.deepcopy(state[name]['results'])
                 print('IF RESULTS', name, tmpresults)
             else:
                 tmpresults = {}
                 print('ELSE IF RESULTS', name, tmpresults)
             tmpresults[m] = result
             print('TMPRESULTS[M]', name, tmpresults[m])
-            tmpstate = state[name].copy()
+            tmpstate = copy.deepcopy(state[name])
             print('TMPSTATE', name, tmpstate)
             tmpstate['results'] = tmpresults
             print('TMPSTATE2', name, tmpstate)
@@ -194,12 +194,12 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
                     r = job_listing['Result'][m]['retcode']
                     result = { 'ret': o, 'retcode': r, 'starttime': state[name]['results'][m]['starttime'], 'endtime': datetime.now(timezone.utc) }
                     if 'results' in state[name]:
-                        tmpresults = state[name]['results'].copy()
+                        tmpresults = copy.deepcopy(state[name]['results'])
                     else:
                         tmpresults = {}
                     if m not in tmpresults:
                         tmpresults[m] = result
-                        tmpstate = state[name].copy()
+                        tmpstate = copy.deepcopy(state[name])
                         tmpstate['results'] = tmpresults
                         state[name] = tmpstate
                         tmprunning = running[procname]
@@ -219,13 +219,13 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
             log(what='machine_result',cron=name, group=group, instance=procname, machine=tgt,
                 code=255, out="Target did not return anything", time=now)
 
-            tmpresults = state[name]['results'].copy()
+            tmpresults = copy.deepcopy(state[name]['results'])
             tmpresults[tgt] = { 'ret': "Target did not return anything",
                     'retcode': 255,
                     'starttime': state[name]['results'][tgt]['starttime'],
                     'endtime': now }
 
-            tmpstate = state[name].copy()
+            tmpstate = copy.deepcopy(state[name])
             tmpstate['results'] = tmpresults
             state[name] = tmpstate
             tmprunning = running[procname]
