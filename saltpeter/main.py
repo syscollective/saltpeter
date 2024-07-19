@@ -11,6 +11,7 @@ from sys import exit
 from datetime import datetime,timedelta,date,timezone
 from crontab import CronTab
 import multiprocessing
+import copy
 #from pprint import pprint
 
 def readconfig(configdir):
