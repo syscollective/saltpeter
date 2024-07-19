@@ -162,9 +162,10 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
             tmpstate = copy.deepcopy(state[name])
             print('TMPSTATE', name, tmpstate)
             tmpstate['results'] = tmpresults
+            print("!!!!!!!!!!STATE1", name, state)
             print('TMPSTATE2', name, tmpstate)
             state[name] = tmpstate
-            print("STATE", name, state[name])
+            print("!!!!!!!!!!STATE2", name, state)
             tmprunning = running[procname]
             tmprunning['machines'].remove(m)
             running[procname] = tmprunning
