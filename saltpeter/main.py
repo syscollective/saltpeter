@@ -11,6 +11,7 @@ from sys import exit
 from datetime import datetime,timedelta,date,timezone
 from crontab import CronTab
 import multiprocessing
+from copy import deepcopy
 #from pprint import pprint
 
 def readconfig(configdir):
@@ -100,11 +101,11 @@ def processstart(chunk,name,group,procname,state):
             'starttime': starttime, 'endtime': ''}
         #do this crap to propagate changes; this is somewhat acceptable since this object is not modified anywhere else
         if 'results' in state[name]:
-            tmpresults = state[name]['results'].deepcopy()
+            tmpresults = deepcopy(state[name]['results'])
         else:
             tmpresults = {}
         tmpresults[target] = result
-        tmpstate = state[name].deepcopy()
+        tmpstate = deepcopy(state[name])
         tmpstate['results'] = tmpresults
         state[name] = tmpstate
 
@@ -150,11 +151,11 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
                 o = i[m]['ret']
             result = { 'ret': o, 'retcode': r, 'starttime': state[name]['results'][m]['starttime'], 'endtime': datetime.now(timezone.utc) }
             if 'results' in state[name]:
-                tmpresults = state[name]['results'].deepcopy()
+                tmpresults = deepcopy(state[name]['results'])
             else:
                 tmpresults = {}
             tmpresults[m] = result
-            tmpstate = state[name].deepcopy()
+            tmpstate = deepcopy(state[name])
             tmpstate['results'] = tmpresults
             state[name] = tmpstate
             tmprunning = running[procname]
@@ -186,12 +187,12 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
                     r = job_listing['Result'][m]['retcode']
                     result = { 'ret': o, 'retcode': r, 'starttime': state[name]['results'][m]['starttime'], 'endtime': datetime.now(timezone.utc) }
                     if 'results' in state[name]:
-                        tmpresults = state[name]['results'].deepcopy()
+                        tmpresults = deepcopy(state[name]['results'])
                     else:
                         tmpresults = {}
                     if m not in tmpresults:
                         tmpresults[m] = result
-                        tmpstate = state[name].deepcopy()
+                        tmpstate = deepcopy(state[name])
                         tmpstate['results'] = tmpresults
                         state[name] = tmpstate
                         tmprunning = running[procname]
@@ -211,13 +212,13 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
             log(what='machine_result',cron=name, group=group, instance=procname, machine=tgt,
                 code=255, out="Target did not return anything", time=now)
 
-            tmpresults = state[name]['results'].deepcopy()
+            tmpresults = deepcopy(state[name]['results'])
             tmpresults[tgt] = { 'ret': "Target did not return anything",
                     'retcode': 255,
                     'starttime': state[name]['results'][tgt]['starttime'],
                     'endtime': now }
 
-            tmpstate = state[name].deepcopy()
+            tmpstate = deepcopy(state[name])
             tmpstate['results'] = tmpresults
             state[name] = tmpstate
             tmprunning = running[procname]
@@ -252,7 +253,7 @@ def run(name,data,procname,running,state,commands):
 
     now = datetime.now(timezone.utc)
     running[procname]=  { 'started': now, 'name': name , 'machines': []}
-    tmpstate = state[name].deepcopy()
+    tmpstate = deepcopy(state[name])
     tmpstate['last_run'] = now
     tmpstate['overlap'] = False
     state[name] = tmpstate
@@ -549,7 +550,7 @@ def main():
             if name not in state:
                 state[name] = {}
             nextrun = prev + timedelta(seconds=result['nextrun'])
-            tmpstate = state[name].deepcopy()
+            tmpstate = deepcopy(state[name])
             tmpstate['next_run'] = nextrun
             state[name] = tmpstate
             #check if there are any start commands
