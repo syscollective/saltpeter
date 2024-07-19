@@ -107,7 +107,6 @@ def processstart(chunk,name,group,procname,state):
         tmpstate = state[name].copy()
         tmpstate['results'] = tmpresults
         state[name] = tmpstate
-        print("state1", name, state[name])
 
         log(cron=name, group=group, what='machine_start', instance=procname,
                 time=starttime, machine=target)
@@ -151,15 +150,21 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
                 r = i[m]['retcode']
                 o = i[m]['ret']
             result = { 'ret': o, 'retcode': r, 'starttime': state[name]['results'][m]['starttime'], 'endtime': datetime.now(timezone.utc) }
+            print("RESULT", name, result)
             if 'results' in state[name]:
                 tmpresults = state[name]['results'].copy()
+                print('IF RESULTS', name, tmpresults)
             else:
                 tmpresults = {}
+                print('ELSE IF RESULTS', name, tmpresults)
             tmpresults[m] = result
+            print('TMPRESULTS[M]', name, tmpresults[m])
             tmpstate = state[name].copy()
+            print('TMPSTATE', name, tmpstate)
             tmpstate['results'] = tmpresults
+            print('TMPSTATE2', name, tmpstate)
             state[name] = tmpstate
-            print("state2", name, state[name])
+            print("STATE", name, state[name])
             tmprunning = running[procname]
             tmprunning['machines'].remove(m)
             running[procname] = tmprunning
@@ -197,7 +202,6 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
                         tmpstate = state[name].copy()
                         tmpstate['results'] = tmpresults
                         state[name] = tmpstate
-                        print("state3", name, state[name])
                         tmprunning = running[procname]
                         tmprunning['machines'].remove(m)
                         running[procname] = tmprunning
@@ -224,7 +228,6 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
             tmpstate = state[name].copy()
             tmpstate['results'] = tmpresults
             state[name] = tmpstate
-            print("state4", name, state[name])
             tmprunning = running[procname]
             tmprunning['machines'].remove(m)
             running[procname] = tmprunning
@@ -241,7 +244,6 @@ def run(name,data,procname,running,state,commands):
             tmpstate = state[name]
             tmpstate['overlap'] = True
             state[name] = tmpstate
-            print("state5", name, state[name])
             if 'allow_overlap' not in data or data['allow_overlap'] != 'i know what i am doing!':
                 return
 
@@ -263,7 +265,6 @@ def run(name,data,procname,running,state,commands):
     tmpstate['last_run'] = now
     tmpstate['overlap'] = False
     state[name] = tmpstate
-    print("state6", name, state[name])
     log(cron=name, group=data['group'], what='start', instance=procname, time=now)
     minion_ret = salt.cmd(targets, 'test.ping', tgt_type=target_type)
     targets_list = list(minion_ret)
@@ -281,7 +282,6 @@ def run(name,data,procname,running,state,commands):
                     'endtime': datetime.now(timezone.utc) }
 
     state[name] = tmpstate
-    print("state7", name, state[name])
     if len(targets_list) == 0:
         log(cron=name, group=data['group'], what='no_machines', instance=procname, time=datetime.now(timezone.utc))
         log(cron=name, group=data['group'], what='end', instance=procname, time=datetime.now(timezone.utc))
@@ -557,12 +557,10 @@ def main():
             result = parsecron(name, config['crons'][name], prev)
             if name not in state:
                 state[name] = {}
-                print("state8", name, state[name])
             nextrun = prev + timedelta(seconds=result['nextrun'])
             tmpstate = state[name].copy()
             tmpstate['next_run'] = nextrun
             state[name] = tmpstate
-            print("state9", name, state[name])
             #check if there are any start commands
             runnow = False
             for cmd in commands:
