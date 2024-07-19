@@ -167,6 +167,7 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
             print('TMPSTATE2', name, tmpstate)
             state[name] = tmpstate
             print("!!!!!!!!!!STATE2", name, state)
+            print('!!!!!!!!!STATE[NAME]', name, state[name])
             tmprunning = running[procname]
             tmprunning['machines'].remove(m)
             running[procname] = tmprunning
