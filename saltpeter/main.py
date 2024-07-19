@@ -92,7 +92,6 @@ def parsecron(name, data, time=datetime.now(timezone.utc)):
     return ret
 
 def processstart(chunk,name,group,procname,state):
-    print('PROCESSSTART - begin', procname,state[name])
     results = {}
 
     for target in chunk:
@@ -101,24 +100,21 @@ def processstart(chunk,name,group,procname,state):
             'starttime': starttime, 'endtime': ''}
         #do this crap to propagate changes; this is somewhat acceptable since this object is not modified anywhere else
         if 'results' in state[name]:
-            tmpresults = state[name]['results'].copy()
+            tmpresults = state[name]['results'].deepcopy()
         else:
             tmpresults = {}
         tmpresults[target] = result
-        tmpstate = state[name].copy()
+        tmpstate = state[name].deepcopy()
         tmpstate['results'] = tmpresults
         state[name] = tmpstate
-        print('PROCESSSTART - loop', procname,state[name])
 
         log(cron=name, group=group, what='machine_start', instance=procname,
                 time=starttime, machine=target)
-    print('PROCESSSTART - end', procname,state[name])
 
 
 
 def processresults(client,commands,job,name,group,procname,running,state,targets):
  
-    print('PROCESSRESULTS - begin', procname,state[name]['results'],targets)
     import salt.runner
     opts = salt.config.master_config('/etc/salt/master')
     runner = salt.runner.RunnerClient(opts)
@@ -130,23 +126,19 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
     failed_returns = False
     kill = False
 
-    print('PROCESSRESULTS - loop begin', procname)
     for i in rets:
         
         #process commands in the loop
         for cmd in commands:
             if 'killcron' in cmd:
-                print('PROCESSRESULTS - killcron', procname)
                 if cmd['killcron'] == name:
                     commands.remove(cmd)
                     client.run_job(minions, 'saltutil.term_job', [jid], tgt_type='list')
                     kill = True
         if kill:
-            print('PROCESSRESULTS - kill', procname)
             break
 
         if i is not None:
-            print('PROCESSRESULTS - if job info', procname)
             m = list(i)[0]
             print(i[m])
             if 'failed' in i[m] and i[m]['failed'] == True:
@@ -157,75 +149,57 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
                 r = i[m]['retcode']
                 o = i[m]['ret']
             result = { 'ret': o, 'retcode': r, 'starttime': state[name]['results'][m]['starttime'], 'endtime': datetime.now(timezone.utc) }
-            print('PROCESSRESULTS - if job info', procname, result)
-            print("state1", name, state[name]['results'])
             if 'results' in state[name]:
-                tmpresults = state[name]['results'].copy()
-                print('PROCESSRESULTS - if results in state', tmpresults)
+                tmpresults = state[name]['results'].deepcopy()
             else:
                 tmpresults = {}
-            print("tmpresults1", tmpresults)
             tmpresults[m] = result
-            print("tmpresults2", tmpresults)
-            tmpstate = state[name].copy()
-            print("tmpstate1", tmpstate)
+            tmpstate = state[name].deepcopy()
             tmpstate['results'] = tmpresults
-            print("tmpstate2", tmpstate)
             state[name] = tmpstate
-            print("state1", state[name])
             tmprunning = running[procname]
             tmprunning['machines'].remove(m)
             running[procname] = tmprunning
-            print("running", running[procname])
-            print('PROCESSRESULTS - if job end BEFORE LOG', procname, tmpstate, state[name])
 
             log(what='machine_result',cron=name, group=group, instance=procname, machine=m,
                 code=r, out=o, time=result['endtime'])
-            print('PROCESSRESULTS - if job info end AFTER LOG', procname, tmpstate, state[name])
         #time.sleep(1)
 
        
     if failed_returns:
-        print('PROCESSRESULTS - if failed returns', procname)
         while True:
             #process commands in the loop
             for cmd in commands:
                 if 'killcron' in cmd:
-                    print('PROCESSRESULTS - if failed returns killcron', procname)
                     if cmd['killcron'] == name:
-                        print('PROCESSRESULTS - if failed returns killcron 2', procname)
                         commands.remove(cmd)
                         client.run_job(minions, 'saltutil.term_job', [jid], tgt_type='list')
                         kill = True
 
             if kill:
-                print('PROCESSRESULTS - if failed returns kill', procname)
                 break
 
             job_listing = runner.cmd("jobs.list_job",[jid])
             if len(job_listing['Minions']) == len(job_listing['Result'].keys()) or kill:
-                print('PROCESSRESULTS - if job listing', procname)
                 for m in job_listing['Result'].keys():
                     o = job_listing['Result'][m]['return']
                     r = job_listing['Result'][m]['retcode']
                     result = { 'ret': o, 'retcode': r, 'starttime': state[name]['results'][m]['starttime'], 'endtime': datetime.now(timezone.utc) }
                     if 'results' in state[name]:
-                        tmpresults = state[name]['results'].copy()
+                        tmpresults = state[name]['results'].deepcopy()
                     else:
                         tmpresults = {}
                     if m not in tmpresults:
                         tmpresults[m] = result
-                        tmpstate = state[name].copy()
+                        tmpstate = state[name].deepcopy()
                         tmpstate['results'] = tmpresults
                         state[name] = tmpstate
-                        print("failed_returns state", name,state[name])
                         tmprunning = running[procname]
                         tmprunning['machines'].remove(m)
                         running[procname] = tmprunning
 
                         log(what='machine_result',cron=name, group=group, instance=procname, machine=m,
                             code=r, out=o, time=result['endtime'])
-                    print('PROCESSRESULTS - if failed returns end', procname, state[name])
 
                 break
             time.sleep(10)
@@ -233,37 +207,25 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
 
     for tgt in targets:
         if tgt not in minions or tgt not in state[name]['results'] or state[name]['results'][tgt]['endtime'] == '':
-            print("---TARGETS ERROR-IF-CLAUSE---")
-            print("proc", procname)
-            print("tgt", tgt)
-            print("minions", minions)
-            print("state", state[name]['results'])
-            print("-------------------")
-
             now = datetime.now(timezone.utc)
             log(what='machine_result',cron=name, group=group, instance=procname, machine=tgt,
                 code=255, out="Target did not return anything", time=now)
 
-            tmpresults = state[name]['results'].copy()
+            tmpresults = state[name]['results'].deepcopy()
             tmpresults[tgt] = { 'ret': "Target did not return anything",
                     'retcode': 255,
                     'starttime': state[name]['results'][tgt]['starttime'],
                     'endtime': now }
 
-            tmpstate = state[name].copy()
+            tmpstate = state[name].deepcopy()
             tmpstate['results'] = tmpresults
             state[name] = tmpstate
-            print("targets if state", name, state[name])
             tmprunning = running[procname]
             tmprunning['machines'].remove(m)
             running[procname] = tmprunning
         
-    print('PROCESSRESULTS - end', procname,state[name]['results'],targets)
-
-
 
 def run(name,data,procname,running,state,commands):
-    print('RUN - begin', procname,state[name])
     #do this check here for the purpose of avoiding sync logging in the main program
     for instance in running.keys():
         if name == running[instance]['name']:
@@ -290,11 +252,10 @@ def run(name,data,procname,running,state,commands):
 
     now = datetime.now(timezone.utc)
     running[procname]=  { 'started': now, 'name': name , 'machines': []}
-    tmpstate = state[name].copy()
+    tmpstate = state[name].deepcopy()
     tmpstate['last_run'] = now
     tmpstate['overlap'] = False
     state[name] = tmpstate
-    print("run2 state", name, state[name])
     log(cron=name, group=data['group'], what='start', instance=procname, time=now)
     minion_ret = salt.cmd(targets, 'test.ping', tgt_type=target_type)
     targets_list = list(minion_ret)
@@ -312,7 +273,6 @@ def run(name,data,procname,running,state,commands):
                     'endtime': datetime.now(timezone.utc) }
 
     state[name] = tmpstate
-    print("run state3", name, state[name])
     if len(targets_list) == 0:
         log(cron=name, group=data['group'], what='no_machines', instance=procname, time=datetime.now(timezone.utc))
         log(cron=name, group=data['group'], what='end', instance=procname, time=datetime.now(timezone.utc))
@@ -359,7 +319,6 @@ def run(name,data,procname,running,state,commands):
         except Exception as e:
             print('Exception triggered in run()', e)
 
-    print('RUN - end', procname,state[name])
     log(cron=name, group=data['group'], what='end', instance=procname, time=datetime.now(timezone.utc))
 
 def debuglog(content):
@@ -589,12 +548,10 @@ def main():
             result = parsecron(name, config['crons'][name], prev)
             if name not in state:
                 state[name] = {}
-                print("init state", name, state[name])
             nextrun = prev + timedelta(seconds=result['nextrun'])
-            tmpstate = state[name].copy()
+            tmpstate = state[name].deepcopy()
             tmpstate['next_run'] = nextrun
             state[name] = tmpstate
-            print("main loop state", name, state[name])
             #check if there are any start commands
             runnow = False
             for cmd in commands:
