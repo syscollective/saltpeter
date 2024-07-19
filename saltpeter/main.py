@@ -152,12 +152,15 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
             result = { 'ret': o, 'retcode': r, 'starttime': state[name]['results'][m]['starttime'], 'endtime': datetime.now(timezone.utc) }
             if 'results' in state[name]:
                 tmpresults = deepcopy(state[name]['results'])
+                print("tmpresults", procname, tmpresults)
             else:
                 tmpresults = {}
             tmpresults[m] = result
             tmpstate = deepcopy(state[name])
             tmpstate['results'] = tmpresults
+            print("tmpstate", procname, tmpstate)
             state[name] = tmpstate
+            print("state", procname, state[name])
             tmprunning = running[procname]
             tmprunning['machines'].remove(m)
             running[procname] = tmprunning
