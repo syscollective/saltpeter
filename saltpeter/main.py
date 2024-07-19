@@ -92,6 +92,7 @@ def parsecron(name, data, time=datetime.now(timezone.utc)):
     return ret
 
 def processstart(chunk,name,group,procname,state):
+    print("PROCESSSTART1", procname, state[name]) 
     results = {}
 
     for target in chunk:
@@ -107,14 +108,14 @@ def processstart(chunk,name,group,procname,state):
         tmpstate = state[name].copy()
         tmpstate['results'] = tmpresults
         state[name] = tmpstate
-
+        print("PROCESSSTART2", procname, state[name])
         log(cron=name, group=group, what='machine_start', instance=procname,
                 time=starttime, machine=target)
 
 
 
 def processresults(client,commands,job,name,group,procname,running,state,targets):
-
+    print("PROCESSRESULTS1", procname, state[name])
     import salt.runner
     opts = salt.config.master_config('/etc/salt/master')
     runner = salt.runner.RunnerClient(opts)
@@ -128,7 +129,7 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
 
 
     for i in rets:
-
+        print("PROCESSRESULTS2", procname, state[name])
         #process commands in the loop
         for cmd in commands:
             if 'killcron' in cmd:
@@ -137,30 +138,39 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
                     client.run_job(minions, 'saltutil.term_job', [jid], tgt_type='list')
                     kill = True
         if kill:
+            print("PROCESSRESULTS3", procname, state[name])
             break
 
         if i is not None:
+            print("PROCESSRESULTS3", procname, state[name])
             m = list(i)[0]
             print(i[m])
             if 'failed' in i[m] and i[m]['failed'] == True:
+                print("PROCESSRESULTS4", procname, state[name])
                 print(f"Getting info about job {name} jid: {jid} every 10 seconds")
                 failed_returns = True
                 continue
             else:
+                print("PROCESSRESULTS5", procname, state[name])
                 r = i[m]['retcode']
                 o = i[m]['ret']
             result = { 'ret': o, 'retcode': r, 'starttime': state[name]['results'][m]['starttime'], 'endtime': datetime.now(timezone.utc) }
             if 'results' in state[name]:
+                print("PROCESSRESULTS6", procname, state[name])
                 tmpresults = state[name]['results'].copy()
+                print("PROCESSRESULTS7", procname, state[name])
             else:
                 tmpresults = {}
             tmpresults[m] = result
             tmpstate = state[name].copy()
             tmpstate['results'] = tmpresults
+            print("PROCESSRESULTS8", procname, state[name])
             state[name] = tmpstate
+            print("PROCESSRESULTS9", procname, state[name])
             tmprunning = running[procname]
             tmprunning['machines'].remove(m)
             running[procname] = tmprunning
+            print("PROCESSRESULTS10", procname, state[name])
 
             log(what='machine_result',cron=name, group=group, instance=procname, machine=m,
                 code=r, out=o, time=result['endtime'])
@@ -178,16 +188,19 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
                         kill = True
 
             if kill:
+                print("PROCESSRESULTS11", procname, state[name])
                 break
 
             job_listing = runner.cmd("jobs.list_job",[jid])
             if len(job_listing['Minions']) == len(job_listing['Result'].keys()) or kill:
+                print("PROCESSRESULTS12", procname, state[name])
                 for m in job_listing['Result'].keys():
                     o = job_listing['Result'][m]['return']
                     r = job_listing['Result'][m]['retcode']
                     result = { 'ret': o, 'retcode': r, 'starttime': state[name]['results'][m]['starttime'], 'endtime': datetime.now(timezone.utc) }
                     if 'results' in state[name]:
                         tmpresults = state[name]['results'].copy()
+                        print("PROCESSRESULTS13", procname, state[name])
                     else:
                         tmpresults = {}
                     if m not in tmpresults:
@@ -198,16 +211,20 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
                         tmprunning = running[procname]
                         tmprunning['machines'].remove(m)
                         running[procname] = tmprunning
+                        print("PROCESSRESULTS14", procname, state[name])
 
                         log(what='machine_result',cron=name, group=group, instance=procname, machine=m,
                             code=r, out=o, time=result['endtime'])
 
                 break
+                print("PROCESSRESULTS15", procname, state[name])
             time.sleep(10)
 
 
     for tgt in targets:
+        print("PROCESSRESULT16", procname, state[name])
         if tgt not in minions or tgt not in state[name]['results'] or state[name]['results'][tgt]['endtime'] == '':
+            print("PROCESSRESULTS17", procname, state[name])
             now = datetime.now(timezone.utc)
             log(what='machine_result',cron=name, group=group, instance=procname, machine=tgt,
                 code=255, out="Target did not return anything", time=now)
@@ -224,12 +241,14 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
             tmprunning = running[procname]
             tmprunning['machines'].remove(m)
             running[procname] = tmprunning
+            print("PROCESSRESULTS18", procname, state[name])
         
 
 
 
 def run(name,data,procname,running,state,commands):
     #do this check here for the purpose of avoiding sync logging in the main program
+    print("RUN1", procname, state[name])
     for instance in running.keys():
         if name == running[instance]['name']:
             log(what='overlap', cron=name, group=data['group'], instance=instance,
@@ -237,6 +256,7 @@ def run(name,data,procname,running,state,commands):
             tmpstate = state[name]
             tmpstate['overlap'] = True
             state[name] = tmpstate
+            print("RUN2", procname, state[name])
             if 'allow_overlap' not in data or data['allow_overlap'] != 'i know what i am doing!':
                 return
 
@@ -257,7 +277,9 @@ def run(name,data,procname,running,state,commands):
     tmpstate = state[name].copy()
     tmpstate['last_run'] = now
     tmpstate['overlap'] = False
+    print("RUN3", procname, state[name])
     state[name] = tmpstate
+    print("RUN4", procname, state[name])
     log(cron=name, group=data['group'], what='start', instance=procname, time=now)
     minion_ret = salt.cmd(targets, 'test.ping', tgt_type=target_type)
     targets_list = list(minion_ret)
@@ -275,6 +297,7 @@ def run(name,data,procname,running,state,commands):
                     'endtime': datetime.now(timezone.utc) }
 
     state[name] = tmpstate
+    print("RUN5", procname, state[name])
     if len(targets_list) == 0:
         log(cron=name, group=data['group'], what='no_machines', instance=procname, time=datetime.now(timezone.utc))
         log(cron=name, group=data['group'], what='end', instance=procname, time=datetime.now(timezone.utc))
@@ -554,6 +577,7 @@ def main():
             tmpstate = state[name].copy()
             tmpstate['next_run'] = nextrun
             state[name] = tmpstate
+            print("MAIN1", name, state[name])
             #check if there are any start commands
             runnow = False
             for cmd in commands:
