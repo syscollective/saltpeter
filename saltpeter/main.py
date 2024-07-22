@@ -122,12 +122,12 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
     minions = job['minions']
 
     rets = client.get_iter_returns(jid, minions, block=False, expect_minions=True,timeout=1)
-    print(rets)
     failed_returns = False
     kill = False
 
 
     for i in rets:
+        print("rets",list(i)) 
 
         #process commands in the loop
         for cmd in commands:
