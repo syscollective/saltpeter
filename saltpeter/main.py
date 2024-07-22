@@ -92,6 +92,7 @@ def parsecron(name, data, time=datetime.now(timezone.utc)):
     return ret
 
 def processstart(chunk,name,group,procname,state):
+    print("processstart1", name, state[name])
     results = {}
 
     for target in chunk:
@@ -100,21 +101,27 @@ def processstart(chunk,name,group,procname,state):
             'starttime': starttime, 'endtime': ''}
         #do this crap to propagate changes; this is somewhat acceptable since this object is not modified anywhere else
         if 'results' in state[name]:
+            print("processstart2", name, state[name])
             tmpresults = state[name]['results'].copy()
+            print("processstart3", name, state[name])
         else:
             tmpresults = {}
         tmpresults[target] = result
+        print("processstart4", name, state[name])
         tmpstate = state[name].copy()
+        print("processstart5", name, state[name])
         tmpstate['results'] = tmpresults
+        print("processstart6", name, state[name])
         state[name] = tmpstate
+        print("processstart7", name, state[name])
 
         log(cron=name, group=group, what='machine_start', instance=procname,
                 time=starttime, machine=target)
-
+    print("processstart8", name, state[name])
 
 
 def processresults(client,commands,job,name,group,procname,running,state,targets):
-
+    print("processresults1", name, state[name])
     import salt.runner
     opts = salt.config.master_config('/etc/salt/master')
     runner = salt.runner.RunnerClient(opts)
@@ -151,13 +158,20 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
                 o = i[m]['ret']
             result = { 'ret': o, 'retcode': r, 'starttime': state[name]['results'][m]['starttime'], 'endtime': datetime.now(timezone.utc) }
             if 'results' in state[name]:
+                print("processresults2", name, state[name])
                 tmpresults = state[name]['results'].copy()
+                print("processresults3", name, state[name])
             else:
                 tmpresults = {}
+            print("processresults4", name, state[name])
             tmpresults[m] = result
+            print("processresults5", name, state[name])
             tmpstate = state[name].copy()
+            print("processresults6", name, state[name])
             tmpstate['results'] = tmpresults
+            print("processresults7", name, state[name])
             state[name] = tmpstate
+            print("processresults8", name, state[name])
             tmprunning = running[procname]
             tmprunning['machines'].remove(m)
             running[procname] = tmprunning
@@ -187,14 +201,21 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
                     r = job_listing['Result'][m]['retcode']
                     result = { 'ret': o, 'retcode': r, 'starttime': state[name]['results'][m]['starttime'], 'endtime': datetime.now(timezone.utc) }
                     if 'results' in state[name]:
+                        print("processresults9", name, state[name])
                         tmpresults = state[name]['results'].copy()
+                        print("processresults10", name, state[name])
                     else:
                         tmpresults = {}
                     if m not in tmpresults:
+                        print("processresults11", name, state[name])
                         tmpresults[m] = result
+                        print("processresults12", name, state[name])
                         tmpstate = state[name].copy()
+                        print("processresults13", name, state[name])
                         tmpstate['results'] = tmpresults
+                        print("processresults14", name, state[name])
                         state[name] = tmpstate
+                        print("processresults15", name, state[name])
                         tmprunning = running[procname]
                         tmprunning['machines'].remove(m)
                         running[procname] = tmprunning
@@ -218,17 +239,22 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
                     'starttime': state[name]['results'][tgt]['starttime'],
                     'endtime': now }
 
+            print("processresults16", name, state[name])
             tmpstate = state[name].copy()
+            print("processresults17", name, state[name])
             tmpstate['results'] = tmpresults
+            print("processresults18", name, state[name])
             state[name] = tmpstate
+            print("processresults19", name, state[name])
             tmprunning = running[procname]
             tmprunning['machines'].remove(m)
             running[procname] = tmprunning
         
-
+    print("processresults20", name, state[name])
 
 
 def run(name,data,procname,running,state,commands):
+    print("run1", name, state[name])
     #do this check here for the purpose of avoiding sync logging in the main program
     for instance in running.keys():
         if name == running[instance]['name']:
@@ -254,17 +280,23 @@ def run(name,data,procname,running,state,commands):
 
     now = datetime.now(timezone.utc)
     running[procname]=  { 'started': now, 'name': name , 'machines': []}
+    print("run2", name, state[name])
     tmpstate = state[name].copy()
     tmpstate['last_run'] = now
     tmpstate['overlap'] = False
+    print("run3", name, state[name])
     state[name] = tmpstate
+    print("run4", name, state[name])
     log(cron=name, group=data['group'], what='start', instance=procname, time=now)
     minion_ret = salt.cmd(targets, 'test.ping', tgt_type=target_type)
     targets_list = list(minion_ret)
     dead_targets = []
+    print("run5", name, state[name])
     tmpstate = state[name]
+    print("run6", name, state[name])
     tmpstate['targets'] = targets_list.copy()
     tmpstate['results'] = {}
+    print("run7", name, state[name])
 
     for tgt in targets_list.copy():
         if minion_ret[tgt] == False:
@@ -274,7 +306,9 @@ def run(name,data,procname,running,state,commands):
                     'starttime': now,
                     'endtime': datetime.now(timezone.utc) }
 
+    print("run8", name, state[name])
     state[name] = tmpstate
+    print("run9", name, state[name])
     if len(targets_list) == 0:
         log(cron=name, group=data['group'], what='no_machines', instance=procname, time=datetime.now(timezone.utc))
         log(cron=name, group=data['group'], what='end', instance=procname, time=datetime.now(timezone.utc))
@@ -300,9 +334,12 @@ def run(name,data,procname,running,state,commands):
 
                     # update running list and state
                     running[procname]=  { 'started': now, 'name': name, 'machines': chunk }
+                    print("run10", name, state[name])
                     processstart(chunk,name,data['group'],procname,state)
+                    print("run11", name, state[name])
                     #this should be blocking
                     processresults(salt,commands,job,name,data['group'],procname,running,state,chunk)
+                    print("run12", name, state[name])
                     chunk = []
                 except Exception as e:
                     print('Exception triggered in run() at "batch_size" condition', e)
@@ -549,11 +586,14 @@ def main():
             #determine next run based on the the last time the loop ran, not the current time
             result = parsecron(name, config['crons'][name], prev)
             if name not in state:
+                print("main1", name, state[name])
                 state[name] = {}
             nextrun = prev + timedelta(seconds=result['nextrun'])
             tmpstate = state[name].copy()
             tmpstate['next_run'] = nextrun
+            print("main2", name, state[name])
             state[name] = tmpstate
+            print("main3", name, state[name])
             #check if there are any start commands
             runnow = False
             for cmd in commands:
