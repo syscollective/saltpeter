@@ -11,6 +11,7 @@ from sys import exit
 from datetime import datetime,timedelta,date,timezone
 from crontab import CronTab
 import multiprocessing
+import copy
 #from pprint import pprint
 
 def readconfig(configdir):
@@ -100,13 +101,14 @@ def processstart(chunk,name,group,procname,state):
             'starttime': starttime, 'endtime': ''}
         #do this crap to propagate changes; this is somewhat acceptable since this object is not modified anywhere else
         if 'results' in state[name]:
-            tmpresults = state[name]['results'].copy()
+            tmpresults = copy.deepcopy(state[name]['results'])
         else:
             tmpresults = {}
         tmpresults[target] = result
-        tmpstate = state[name].copy()
+        tmpstate = copy.deepcopy(state[name])
         tmpstate['results'] = tmpresults
-        state[name] = tmpstate
+        state[name] = copy.deepcopy(tmpstate)
+        print("2-----", name, state[name]['results']['endtime'])
         log(cron=name, group=group, what='machine_start', instance=procname,
                 time=starttime, machine=target)
 
@@ -148,19 +150,17 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
                 o = i[m]['ret']
             result = { 'ret': o, 'retcode': r, 'starttime': state[name]['results'][m]['starttime'], 'endtime': datetime.now(timezone.utc) }
             if 'results' in state[name]:
-                tmpresults = state[name]['results'].copy()
+                tmpresults = copy.deepcopy(state[name]['results'])
             else:
                 tmpresults = {}
             tmpresults[m] = result
-            tmpstate = state[name].copy()
-            tmpstate['results'] = tmpresults
-            print("PROCESSRESULTS8", procname, state[name])
-            state[name] = tmpstate
-            print("PROCESSRESULTS9", procname, state[name])
+            tmpstate = copy.deepcopy(state[name])
+            tmpstate['results'] = copy.deepcopy(tmpresults)
+            state[name] = copy.deepcopy(tmpstate)
+            print("3-----", name, state[name]['results']['endtime'])
             tmprunning = running[procname]
             tmprunning['machines'].remove(m)
             running[procname] = tmprunning
-            print("PROCESSRESULTS10", procname, state[name])
 
             log(what='machine_result',cron=name, group=group, instance=procname, machine=m,
                 code=r, out=o, time=result['endtime'])
@@ -187,14 +187,15 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
                     r = job_listing['Result'][m]['retcode']
                     result = { 'ret': o, 'retcode': r, 'starttime': state[name]['results'][m]['starttime'], 'endtime': datetime.now(timezone.utc) }
                     if 'results' in state[name]:
-                        tmpresults = state[name]['results'].copy()
+                        tmpresults = copy.deepcopy(state[name]['results'])
                     else:
                         tmpresults = {}
                     if m not in tmpresults:
                         tmpresults[m] = result
-                        tmpstate = state[name].copy()
+                        tmpstate = copy.deepcopy(state[name])
                         tmpstate['results'] = tmpresults
-                        state[name] = tmpstate
+                        state[name] = copy.deepcopy(tmpstate)
+                        print("4-----", name, state[name]['results']['endtime'])
                         tmprunning = running[procname]
                         tmprunning['machines'].remove(m)
                         running[procname] = tmprunning
@@ -212,15 +213,16 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
             log(what='machine_result',cron=name, group=group, instance=procname, machine=tgt,
                 code=255, out="Target did not return anything", time=now)
 
-            tmpresults = state[name]['results'].copy()
+            tmpresults = copy.deepcopy(state[name]['results'])
             tmpresults[tgt] = { 'ret': "Target did not return anything",
                     'retcode': 255,
                     'starttime': state[name]['results'][tgt]['starttime'],
                     'endtime': now }
 
-            tmpstate = state[name].copy()
+            tmpstate = copy.deepcopy(state[name])
             tmpstate['results'] = tmpresults
-            state[name] = tmpstate
+            state[name] = copy.deepcopy(tmpstate)
+            print("5-----", name, state[name]['results']['endtime'])
             tmprunning = running[procname]
             tmprunning['machines'].remove(m)
             running[procname] = tmprunning
@@ -233,9 +235,9 @@ def run(name,data,procname,running,state,commands):
         if name == running[instance]['name']:
             log(what='overlap', cron=name, group=data['group'], instance=instance,
                  time=datetime.now(timezone.utc))
-            tmpstate = state[name].copy()
+            tmpstate = copy.deepcopy(state[name])
             tmpstate['overlap'] = True
-            state[name] = tmpstate
+            state[name] = copy.deepcopy(tmpstate)
             if 'allow_overlap' not in data or data['allow_overlap'] != 'i know what i am doing!':
                 return
 
@@ -253,15 +255,16 @@ def run(name,data,procname,running,state,commands):
 
     now = datetime.now(timezone.utc)
     running[procname]=  { 'started': now, 'name': name , 'machines': []}
-    tmpstate = state[name].copy()
+    tmpstate = copy.deepcopy(state[name])
     tmpstate['last_run'] = now
     tmpstate['overlap'] = False
-    state[name] = tmpstate
+    state[name] = copy.deepcopy(tmpstate)
+    print("6-----", name, state[name]['results']['endtime'])
     log(cron=name, group=data['group'], what='start', instance=procname, time=now)
     minion_ret = salt.cmd(targets, 'test.ping', tgt_type=target_type)
     targets_list = list(minion_ret)
     dead_targets = []
-    tmpstate = state[name].copy()
+    tmpstate = copy.deepcopy(state[name])
     tmpstate['targets'] = targets_list.copy()
     tmpstate['results'] = {}
 
@@ -273,7 +276,8 @@ def run(name,data,procname,running,state,commands):
                     'starttime': now,
                     'endtime': datetime.now(timezone.utc) }
 
-    state[name] = tmpstate
+    state[name] = copy.deepcopy(tmpstate)
+    print("7-----", name, state[name]['results']['endtime'])
     if len(targets_list) == 0:
         log(cron=name, group=data['group'], what='no_machines', instance=procname, time=datetime.now(timezone.utc))
         log(cron=name, group=data['group'], what='end', instance=procname, time=datetime.now(timezone.utc))
@@ -550,9 +554,10 @@ def main():
             if name not in state:
                 state[name] = {}
             nextrun = prev + timedelta(seconds=result['nextrun'])
-            tmpstate = state[name].copy()
+            tmpstate = copy.deepcopy(state[name])
             tmpstate['next_run'] = nextrun
-            state[name] = tmpstate
+            state[name] = copy.deepcopy(tmpstate)
+            print("1-----", name, state[name]['results']['endtime'])
             #check if there are any start commands
             runnow = False
             for cmd in commands:
