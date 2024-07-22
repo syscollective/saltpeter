@@ -158,7 +158,9 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
             tmpstate['results'] = tmpresults
             state[name] = tmpstate
             tmprunning = running[procname]
+            print("tmprunnning1", name, tmprunning)
             tmprunning['machines'].remove(m)
+            print("tmprunnning2", name, tmprunning)
             running[procname] = tmprunning
 
             log(what='machine_result',cron=name, group=group, instance=procname, machine=m,
@@ -195,7 +197,9 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
                         tmpstate['results'] = tmpresults
                         state[name] = tmpstate
                         tmprunning = running[procname]
+                        print("tmprunnning3", name, tmprunning)
                         tmprunning['machines'].remove(m)
+                        print("tmprunnning4", name, tmprunning)
                         running[procname] = tmprunning
 
                         log(what='machine_result',cron=name, group=group, instance=procname, machine=m,
@@ -221,7 +225,9 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
             tmpstate['results'] = tmpresults
             state[name] = tmpstate
             tmprunning = running[procname]
+            print("tmprunnning5", name, tmprunning)
             tmprunning['machines'].remove(m)
+            print("tmprunnning6", name, tmprunning)
             running[procname] = tmprunning
         
 
