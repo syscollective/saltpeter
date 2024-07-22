@@ -208,7 +208,7 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
                         tmpresults[m] = result
                         print("processresults12", name, job)
                         tmpstate = state[name].copy()
-                        print("processresults13", name, job
+                        print("processresults13", name, job)
                         tmpstate['results'] = tmpresults
                         print("processresults14", name, job)
                         state[name] = tmpstate
