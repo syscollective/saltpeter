@@ -113,7 +113,6 @@ def processstart(chunk,name,group,procname,state):
 
 
 def processresults(client,commands,job,name,group,procname,running,state,targets):
-    print("processresults1", name, job)
     import salt.runner
     opts = salt.config.master_config('/etc/salt/master')
     runner = salt.runner.RunnerClient(opts)
@@ -138,12 +137,9 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
         if kill:
             break
 
-        print("i",name, i)
         if i is not None:
             m = list(i)[0]
-            print("m",name, m)
             print(i[m])
-            print("i[m]",name, i[m])
             if 'failed' in i[m] and i[m]['failed'] == True:
                 print(f"Getting info about job {name} jid: {jid} every 10 seconds")
                 failed_returns = True
@@ -153,24 +149,13 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
                 o = i[m]['ret']
             result = { 'ret': o, 'retcode': r, 'starttime': state[name]['results'][m]['starttime'], 'endtime': datetime.now(timezone.utc) }
             if 'results' in state[name]:
-                print("processresults2", name, job)
                 tmpresults = state[name]['results'].copy()
-                print("processresults1-tmpsresults", name, job)
-                print("processresults3", name, job)
             else:
                 tmpresults = {}
-            print("processresults4", name, job)
             tmpresults[m] = result
-            print("processresults2-tmpsresults", name, job)
-            print("processresults5", name, job)
             tmpstate = state[name].copy()
-            print("processresults6", name, job)
             tmpstate['results'] = tmpresults
-            print("processresults1-tmpstate", name, job)
-            print("processresults7", name, job)
             state[name] = tmpstate
-            print("processresults2-tmpstate", name, job)
-            print("processresults8", name, job)
             tmprunning = running[procname]
             tmprunning['machines'].remove(m)
             running[procname] = tmprunning
@@ -200,21 +185,14 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
                     r = job_listing['Result'][m]['retcode']
                     result = { 'ret': o, 'retcode': r, 'starttime': state[name]['results'][m]['starttime'], 'endtime': datetime.now(timezone.utc) }
                     if 'results' in state[name]:
-                        print("processresults9", name, job)
                         tmpresults = state[name]['results'].copy()
-                        print("processresults10", name, job)
                     else:
                         tmpresults = {}
                     if m not in tmpresults:
-                        print("processresults11", name, job)
                         tmpresults[m] = result
-                        print("processresults12", name, job)
                         tmpstate = state[name].copy()
-                        print("processresults13", name, job)
                         tmpstate['results'] = tmpresults
-                        print("processresults14", name, job)
                         state[name] = tmpstate
-                        print("processresults15", name, job)
                         tmprunning = running[procname]
                         tmprunning['machines'].remove(m)
                         running[procname] = tmprunning
@@ -245,8 +223,6 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
             tmprunning['machines'].remove(m)
             running[procname] = tmprunning
         
-    print("processresults20", name, rets, job)
-
 
 def run(name,data,procname,running,state,commands):
     #do this check here for the purpose of avoiding sync logging in the main program
@@ -286,11 +262,8 @@ def run(name,data,procname,running,state,commands):
     tmpstate['targets'] = targets_list.copy()
     tmpstate['results'] = {}
 
-    print("targets", name, targets_list)
     for tgt in targets_list.copy():
-        print("tgt before if", name, tgt, minion_ret[tgt], targets_list)
         if minion_ret[tgt] == False:
-            print("tgt in if", name, tgt, minion_ret[tgt], targets_list)
             targets_list.remove(tgt)
             tmpstate['results'][tgt] = { 'ret': "Target did not respond",
                     'retcode': 255,
@@ -337,9 +310,14 @@ def run(name,data,procname,running,state,commands):
         try:
             job = salt.run_job(targets_list, 'cmd.run', cmdargs,
                     tgt_type='list', listen=True)
+            print("job", name, job)
+            print("before processstart", name, state[name])
             processstart(targets_list,name,data['group'],procname,state)
+            print("after processstart", name, state[name])
             #this should be blocking
+            print("before processresults", name, state[name])
             processresults(salt,commands,job,name,data['group'],procname,running,state,targets_list)
+            print("after processresults", name, state[name])
         except Exception as e:
             print('Exception triggered in run()', e)
 
