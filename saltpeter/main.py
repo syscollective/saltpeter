@@ -586,7 +586,6 @@ def main():
             #determine next run based on the the last time the loop ran, not the current time
             result = parsecron(name, config['crons'][name], prev)
             if name not in state:
-                print("main1", name, state[name])
                 state[name] = {}
             nextrun = prev + timedelta(seconds=result['nextrun'])
             tmpstate = state[name].copy()
