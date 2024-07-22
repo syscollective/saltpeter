@@ -138,10 +138,12 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
         if kill:
             break
 
+        print("i",name, i)
         if i is not None:
             m = list(i)[0]
-            print("rets",list(i), list(i)[0])
+            print("m",name, m)
             print(i[m])
+            print("i[m]",name, i[m])
             if 'failed' in i[m] and i[m]['failed'] == True:
                 print(f"Getting info about job {name} jid: {jid} every 10 seconds")
                 failed_returns = True
