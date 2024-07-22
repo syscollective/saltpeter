@@ -277,7 +277,7 @@ def run(name,data,procname,running,state,commands):
                     'endtime': datetime.now(timezone.utc) }
 
     state[name] = copy.deepcopy(tmpstate)
-    print("7-----", name, state[name])
+    print("7-----", name, state[name]['results']['endtime'])
     if len(targets_list) == 0:
         log(cron=name, group=data['group'], what='no_machines', instance=procname, time=datetime.now(timezone.utc))
         log(cron=name, group=data['group'], what='end', instance=procname, time=datetime.now(timezone.utc))
