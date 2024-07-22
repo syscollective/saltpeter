@@ -286,8 +286,11 @@ def run(name,data,procname,running,state,commands):
     tmpstate['targets'] = targets_list.copy()
     tmpstate['results'] = {}
 
+    print("targets", name, targets_list)
     for tgt in targets_list.copy():
+        print("tgt before if", name, tgt, minion_ret[tgt], targets_list)
         if minion_ret[tgt] == False:
+            print("tgt in if", name, tgt, minion_ret[tgt], targets_list)
             targets_list.remove(tgt)
             tmpstate['results'][tgt] = { 'ret': "Target did not respond",
                     'retcode': 255,
