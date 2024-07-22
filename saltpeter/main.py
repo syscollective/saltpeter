@@ -160,17 +160,21 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
             if 'results' in state[name]:
                 print("processresults2", name, state[name])
                 tmpresults = state[name]['results'].copy()
+                print("processresults1-tmpsresults", name, tmpresults)
                 print("processresults3", name, state[name])
             else:
                 tmpresults = {}
             print("processresults4", name, state[name])
             tmpresults[m] = result
+            print("processresults2-tmpsresults", name, tmpresults)
             print("processresults5", name, state[name])
             tmpstate = state[name].copy()
             print("processresults6", name, state[name])
             tmpstate['results'] = tmpresults
+            print("processresults1-tmpstate", name, tmpstate)
             print("processresults7", name, state[name])
             state[name] = tmpstate
+            print("processresults2-tmpstate", name, tmpstate)
             print("processresults8", name, state[name])
             tmprunning = running[procname]
             tmprunning['machines'].remove(m)
@@ -353,8 +357,9 @@ def run(name,data,procname,running,state,commands):
                     tgt_type='list', listen=True)
             processstart(targets_list,name,data['group'],procname,state)
             #this should be blocking
+            print("run13", name, state[name])
             processresults(salt,commands,job,name,data['group'],procname,running,state,targets_list)
-
+            print("run14", name, state[name])
         except Exception as e:
             print('Exception triggered in run()', e)
 
