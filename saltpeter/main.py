@@ -11,6 +11,7 @@ from sys import exit
 from datetime import datetime,timedelta,date,timezone
 from crontab import CronTab
 import multiprocessing
+import traceback
 #from pprint import pprint
 
 def readconfig(configdir):
@@ -320,6 +321,7 @@ def run(name,data,procname,running,state,commands):
             print("after processresults", name, state[name])
         except Exception as e:
             print('Exception triggered in run()', e)
+            traceback.print_exc()
 
     log(cron=name, group=data['group'], what='end', instance=procname, time=datetime.now(timezone.utc))
 
