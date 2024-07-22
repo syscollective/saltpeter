@@ -127,7 +127,6 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
 
 
     for i in rets:
-        print("rets",list(i)) 
 
         #process commands in the loop
         for cmd in commands:
@@ -141,6 +140,7 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
 
         if i is not None:
             m = list(i)[0]
+            print("rets",list(i), list(i)[0])
             print(i[m])
             if 'failed' in i[m] and i[m]['failed'] == True:
                 print(f"Getting info about job {name} jid: {jid} every 10 seconds")
