@@ -125,6 +125,8 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
     failed_returns = False
     kill = False
 
+    result_received = False
+
 
     for i in rets:
 
@@ -141,7 +143,6 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
         if i is not None:
             m = list(i)[0]
             print(i[m])
-            print("im", name, list(i), m)
             if 'failed' in i[m] and i[m]['failed'] == True:
                 print(f"Getting info about job {name} jid: {jid} every 10 seconds")
                 failed_returns = True
@@ -159,10 +160,10 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
             tmpstate['results'] = tmpresults
             state[name] = tmpstate
             tmprunning = running[procname]
-            print("tmprunnning1", name, tmprunning)
             tmprunning['machines'].remove(m)
-            print("tmprunnning2", name, tmprunning)
             running[procname] = tmprunning
+
+            result_received = True
 
             log(what='machine_result',cron=name, group=group, instance=procname, machine=m,
                 code=r, out=o, time=result['endtime'])
@@ -198,9 +199,7 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
                         tmpstate['results'] = tmpresults
                         state[name] = tmpstate
                         tmprunning = running[procname]
-                        print("tmprunnning3", name, tmprunning)
                         tmprunning['machines'].remove(m)
-                        print("tmprunnning4", name, tmprunning)
                         running[procname] = tmprunning
 
                         log(what='machine_result',cron=name, group=group, instance=procname, machine=m,
@@ -211,7 +210,7 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
 
 
     for tgt in targets:
-        if tgt not in minions or tgt not in state[name]['results'] or state[name]['results'][tgt]['endtime'] == '':
+        if tgt not in minions or tgt not in state[name]['results'] or (not result_received and state[name]['results'][tgt]['endtime'] == ''):
             now = datetime.now(timezone.utc)
             log(what='machine_result',cron=name, group=group, instance=procname, machine=tgt,
                 code=255, out="Target did not return anything", time=now)
