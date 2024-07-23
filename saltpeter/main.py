@@ -125,7 +125,7 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
     failed_returns = False
     kill = False
 
-    result_received = False
+    #result_received = False
 
 
     for i in rets:
@@ -210,7 +210,7 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
 
 
     for tgt in targets:
-        if tgt not in minions or tgt not in state[name]['results'] or (not result_received and state[name]['results'][tgt]['endtime'] == ''):
+        if tgt not in minions or tgt not in state[name]['results'] or state[name]['results'][tgt]['endtime'] == '': #(not result_received and state[name]['results'][tgt]['endtime'] == ''):
             now = datetime.now(timezone.utc)
             log(what='machine_result',cron=name, group=group, instance=procname, machine=tgt,
                 code=255, out="Target did not return anything", time=now)
@@ -266,8 +266,11 @@ def run(name,data,procname,running,state,commands):
     targets_list = list(minion_ret)
     dead_targets = []
     tmpstate = state[name]
+    print("1", name, tmpstate)
     tmpstate['targets'] = targets_list.copy()
+    print("2", name, tmpstate)
     tmpstate['results'] = {}
+    print("3", name, tmpstate)
 
     for tgt in targets_list.copy():
         if minion_ret[tgt] == False:
@@ -277,7 +280,10 @@ def run(name,data,procname,running,state,commands):
                     'starttime': now,
                     'endtime': datetime.now(timezone.utc) }
 
+    print("4", name, tmpstate)
     state[name] = tmpstate
+    print("5", name, tmpstate)
+    print("6", name, state[name])
     if len(targets_list) == 0:
         log(cron=name, group=data['group'], what='no_machines', instance=procname, time=datetime.now(timezone.utc))
         log(cron=name, group=data['group'], what='end', instance=procname, time=datetime.now(timezone.utc))
@@ -317,14 +323,12 @@ def run(name,data,procname,running,state,commands):
         try:
             job = salt.run_job(targets_list, 'cmd.run', cmdargs,
                     tgt_type='list', listen=True)
-            print("job", name, job)
-            print("before processstart", name, state[name])
+            print("7", name, state[name])
             processstart(targets_list,name,data['group'],procname,state)
-            print("after processstart", name, state[name])
+            print("8", name, state[name])
             #this should be blocking
-            print("before processresults", name, state[name])
             processresults(salt,commands,job,name,data['group'],procname,running,state,targets_list)
-            print("after processresults", name, state[name])
+            print("9", name, state[name])
         except Exception as e:
             print('Exception triggered in run()', e)
             traceback.print_exc()
