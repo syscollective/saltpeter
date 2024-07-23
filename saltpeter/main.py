@@ -128,7 +128,6 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
 
 
     for i in rets:
-        print(list(i))
 
         #process commands in the loop
         for cmd in commands:
@@ -141,6 +140,7 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
             break
 
         if i is not None:
+            print("rets", name, list(i))
             m = list(i)[0]
             print(i[m])
             if 'failed' in i[m] and i[m]['failed'] == True:
