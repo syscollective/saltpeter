@@ -99,14 +99,15 @@ def processstart(chunk,name,group,procname,state):
         result = { 'ret': '', 'retcode': '',
             'starttime': starttime, 'endtime': ''}
         #do this crap to propagate changes; this is somewhat acceptable since this object is not modified anywhere else
-        if 'results' in state[name]:
-            tmpresults = state[name]['results'].copy()
-        else:
-            tmpresults = {}
-        tmpresults[target] = result
-        tmpstate = state[name].copy()
-        tmpstate['results'] = tmpresults
-        state[name] = tmpstate
+        with statelocks[name]:
+            if 'results' in state[name]:
+                tmpresults = state[name]['results'].copy()
+            else:
+                tmpresults = {}
+            tmpresults[target] = result
+            tmpstate = state[name].copy()
+            tmpstate['results'] = tmpresults
+            state[name] = tmpstate
 
         log(cron=name, group=group, what='machine_start', instance=procname,
                 time=starttime, machine=target)
@@ -137,12 +138,12 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
                     client.run_job(minions, 'saltutil.term_job', [jid], tgt_type='list')
                     kill = True
         if kill:
-            print('break from kill in returns loop')
+            #print('break from kill in returns loop')
             break
 
         if i is not None:
             m = list(i)[0]
-            print(i[m])
+            #print(i[m])
             if 'failed' in i[m] and i[m]['failed'] == True:
                 print(f"Getting info about job {name} jid: {jid} every 10 seconds")
                 failed_returns = True
@@ -151,17 +152,18 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
                 r = i[m]['retcode']
                 o = i[m]['ret']
             result = { 'ret': o, 'retcode': r, 'starttime': state[name]['results'][m]['starttime'], 'endtime': datetime.now(timezone.utc) }
-            if 'results' in state[name]:
-                tmpresults = state[name]['results'].copy()
-            else:
-                tmpresults = {}
-            tmpresults[m] = result
-            tmpstate = state[name].copy()
-            tmpstate['results'] = tmpresults
-            state[name] = tmpstate
-            tmprunning = running[procname]
-            tmprunning['machines'].remove(m)
-            running[procname] = tmprunning
+
+            with statelocks[name]:
+                tmpstate = state[name].copy()
+                if 'results' not in tmpstate:
+                    tmpstate['results'] = {}
+                tmpstate['results'][m] = result
+                state[name] = tmpstate
+
+                if procname in running and m in running[procname]['machines']:
+                    tmprunning = running[procname]
+                    tmprunning['machines'].remove(m)
+                    running[procname] = tmprunning
 
             log(what='machine_result',cron=name, group=group, instance=procname, machine=m,
                 code=r, out=o, time=result['endtime'])
@@ -179,7 +181,7 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
                         kill = True
 
             if kill:
-                print('break from kill in failed returns loop')
+                #print('break from kill in failed returns loop')
                 break
 
             job_listing = runner.cmd("jobs.list_job",[jid])
@@ -188,48 +190,58 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
                     o = job_listing['Result'][m]['return']
                     r = job_listing['Result'][m]['retcode']
                     result = { 'ret': o, 'retcode': r, 'starttime': state[name]['results'][m]['starttime'], 'endtime': datetime.now(timezone.utc) }
-                    if 'results' in state[name]:
-                        tmpresults = state[name]['results'].copy()
-                    else:
-                        tmpresults = {}
-                    print(f'state befor check if m not in tmprresults: {state[name]}')
-                    if m not in tmpresults or tmpresults[m]['endtime'] =='':
-                        tmpresults[m] = result
+                    send_log = False
+                    with statelocks[name]:
                         tmpstate = state[name].copy()
-                        tmpstate['results'] = tmpresults
-                        state[name] = tmpstate
-                        tmprunning = running[procname]
-                        tmprunning['machines'].remove(m)
-                        running[procname] = tmprunning
+                        if 'results' not in tmpstate:
+                            tmpstate['results'] = {}
 
+                        #print(f'state before check if m not in tmprresults: {state[name]}')
+                        if m not in tmpstate['results'] or tmpstate['results'][m]['endtime'] =='':
+                            tmpstate['results'][m] = result
+                            state[name] = tmpstate
+
+                            if procname in running and m in running[procname]['machines']:
+                                tmprunning = running[procname]
+                                tmprunning['machines'].remove(m)
+                                running[procname] = tmprunning
+
+                            send_log = True
+
+                    if send_log:
                         log(what='machine_result',cron=name, group=group, instance=procname, machine=m,
                             code=r, out=o, time=result['endtime'])
 
-                print('break from failed returns loop')
+                #print('break from failed returns loop')
                 break
             time.sleep(10)
 
 
-    print(f'targets: {targets}\nminions: {minions}\nstate: {state[name]}')
+    #print(f'targets: {targets}\nminions: {minions}\nstate: {state[name]}')
     for tgt in targets:
         if tgt not in minions or tgt not in state[name]['results'] or state[name]['results'][tgt]['endtime'] == '':
+            #print(f'machine {tgt} has no output, state: {state[name]}')
             now = datetime.now(timezone.utc)
+            if tgt in state[name]['results'] and 'starttime' in state[name]['results'][tgt]:
+                starttime = state[name]['results'][tgt]['starttime']
+            else:
+                starttime = state[name]['lastrun']
+
             log(what='machine_result',cron=name, group=group, instance=procname, machine=tgt,
                 code=255, out="Target did not return anything", time=now)
 
-            tmpresults = state[name]['results'].copy()
-            tmpresults[tgt] = { 'ret': "Target did not return anything",
-                    'retcode': 255,
-                    'starttime': state[name]['results'][tgt]['starttime'],
-                    'endtime': now }
+            with statelocks[name]:
+                tmpstate = state[name].copy()
+                tmpstate['results'][tgt] = { 'ret': "Target did not return anything",
+                        'retcode': 255,
+                        'starttime': starttime,
+                        'endtime': now }
+                state[name] = tmpstate
 
-            tmpstate = state[name].copy()
-            tmpstate['results'] = tmpresults
-            state[name] = tmpstate
-            tmprunning = running[procname]
-            tmprunning['machines'].remove(m)
-            running[procname] = tmprunning
-        
+                if procname in running and m in running[procname]['machines']:
+                    tmprunning = running[procname]
+                    tmprunning['machines'].remove(m)
+                    running[procname] = tmprunning
 
 
 
@@ -239,9 +251,10 @@ def run(name,data,procname,running,state,commands):
         if name == running[instance]['name']:
             log(what='overlap', cron=name, group=data['group'], instance=instance,
                  time=datetime.now(timezone.utc))
-            tmpstate = state[name]
-            tmpstate['overlap'] = True
-            state[name] = tmpstate
+            with statelocks[name]:
+                tmpstate = state[name].copy()
+                tmpstate['overlap'] = True
+                state[name] = tmpstate
             if 'allow_overlap' not in data or data['allow_overlap'] != 'i know what i am doing!':
                 return
 
@@ -259,27 +272,29 @@ def run(name,data,procname,running,state,commands):
 
     now = datetime.now(timezone.utc)
     running[procname]=  { 'started': now, 'name': name , 'machines': []}
-    tmpstate = state[name].copy()
-    tmpstate['last_run'] = now
-    tmpstate['overlap'] = False
-    state[name] = tmpstate
+    with statelocks[name]:
+        tmpstate = state[name].copy()
+        tmpstate['last_run'] = now
+        tmpstate['overlap'] = False
+        state[name] = tmpstate
     log(cron=name, group=data['group'], what='start', instance=procname, time=now)
     minion_ret = salt.cmd(targets, 'test.ping', tgt_type=target_type)
     targets_list = list(minion_ret)
     dead_targets = []
-    tmpstate = state[name]
-    tmpstate['targets'] = targets_list.copy()
-    tmpstate['results'] = {}
+    with statelocks[name]:
+        tmpstate = state[name]
+        tmpstate['targets'] = targets_list.copy()
+        tmpstate['results'] = {}
 
-    for tgt in targets_list.copy():
-        if minion_ret[tgt] == False:
-            targets_list.remove(tgt)
-            tmpstate['results'][tgt] = { 'ret': "Target did not respond",
-                    'retcode': 255,
-                    'starttime': now,
-                    'endtime': datetime.now(timezone.utc) }
+        for tgt in targets_list.copy():
+            if minion_ret[tgt] == False:
+                targets_list.remove(tgt)
+                tmpstate['results'][tgt] = { 'ret': "Target did not respond",
+                        'retcode': 255,
+                        'starttime': now,
+                        'endtime': datetime.now(timezone.utc) }
 
-    state[name] = tmpstate
+        state[name] = tmpstate
     if len(targets_list) == 0:
         log(cron=name, group=data['group'], what='no_machines', instance=procname, time=datetime.now(timezone.utc))
         log(cron=name, group=data['group'], what='end', instance=procname, time=datetime.now(timezone.utc))
@@ -495,6 +510,8 @@ def main():
     running = manager.dict()
     config = manager.dict()
     state = manager.dict()
+    global statelocks
+    statelocks = {}
     commands = manager.list()
     bad_crons = manager.list()
     timeline = manager.dict()
@@ -555,14 +572,17 @@ def main():
             result = parsecron(name, config['crons'][name], prev)
             if name not in state:
                 state[name] = {}
+            if name not in statelocks:
+                statelocks[name] = manager.Lock()
             nextrun = prev + timedelta(seconds=result['nextrun'])
-            tmpstate = state[name].copy()
-            tmpstate['next_run'] = nextrun
-            state[name] = tmpstate
+            with statelocks[name]:
+                tmpstate = state[name].copy()
+                tmpstate['next_run'] = nextrun
+                state[name] = tmpstate
             #check if there are any start commands
             runnow = False
             for cmd in commands:
-                print('COMMAND: ',cmd)
+                #print('COMMAND: ',cmd)
                 if 'runnow' in cmd:
                     if cmd['runnow'] == name:
                         runnow = True
