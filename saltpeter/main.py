@@ -137,6 +137,7 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
                     client.run_job(minions, 'saltutil.term_job', [jid], tgt_type='list')
                     kill = True
         if kill:
+            print('break from kill in returns loop')
             break
 
         if i is not None:
@@ -178,10 +179,11 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
                         kill = True
 
             if kill:
+                print('break from kill in failed returns loop')
                 break
 
             job_listing = runner.cmd("jobs.list_job",[jid])
-            if len(job_listing['Minions']) == len(job_listing['Result'].keys()) or kill:
+            if len(job_listing['Minions']) == len(job_listing['Result'].keys()):
                 for m in job_listing['Result'].keys():
                     o = job_listing['Result'][m]['return']
                     r = job_listing['Result'][m]['retcode']
@@ -190,7 +192,8 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
                         tmpresults = state[name]['results'].copy()
                     else:
                         tmpresults = {}
-                    if m not in tmpresults:
+                    print(f'state befor check if m not in tmprresults: {state[name]}')
+                    if m not in tmpresults or tmpresults[m]['endtime'] =='':
                         tmpresults[m] = result
                         tmpstate = state[name].copy()
                         tmpstate['results'] = tmpresults
@@ -202,10 +205,12 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
                         log(what='machine_result',cron=name, group=group, instance=procname, machine=m,
                             code=r, out=o, time=result['endtime'])
 
+                print('break from failed returns loop')
                 break
             time.sleep(10)
 
 
+    print(f'targets: {targets}\nminions: {minions}\nstate: {state[name]}')
     for tgt in targets:
         if tgt not in minions or tgt not in state[name]['results'] or state[name]['results'][tgt]['endtime'] == '':
             now = datetime.now(timezone.utc)
