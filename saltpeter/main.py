@@ -123,6 +123,7 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
     minions = job['minions']
 
     rets = client.get_iter_returns(jid, minions, block=False, expect_minions=True,timeout=1)
+    print("rets", name, list(rets))
     failed_returns = False
     kill = False
 
