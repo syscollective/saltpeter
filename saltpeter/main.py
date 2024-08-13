@@ -278,8 +278,20 @@ def run(name,data,procname,running,state,commands):
         tmpstate['overlap'] = False
         state[name] = tmpstate
     log(cron=name, group=data['group'], what='start', instance=procname, time=now)
-    minion_ret = salt.cmd(targets, 'test.ping', tgt_type=target_type)
-    targets_list = list(minion_ret)
+    
+    jid = salt.cmd_async(targets, 'test.ping', tgt_type=target_type)
+    poll_interval = 2
+    minion_ret = []
+    targets_list = []
+    while True:
+        minion_ret_raw = list(salt.get_cli_returns(jid,targets))
+        if minion_ret_raw:
+            minion_ret = {key: value['ret'] for m in minion_ret_raw for key, value in m.items()}
+            targets_list = list(minion_ret)
+            break
+    print(name,minion_ret)
+    print(name,targets_list)
+
     dead_targets = []
     with statelocks[name]:
         tmpstate = state[name]
