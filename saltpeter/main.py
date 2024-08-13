@@ -279,18 +279,37 @@ def run(name,data,procname,running,state,commands):
         state[name] = tmpstate
     log(cron=name, group=data['group'], what='start', instance=procname, time=now)
     
-    jid = salt.cmd_async(targets, 'test.ping', tgt_type=target_type)
+
+    ## ping the minions and parse the result
+    ret_job = salt.run_job(targets, 'test.ping', tgt_type=target_type)
+    jid = ret_job['jid']
+    jid_targets = ret_job['minions']
+
     poll_interval = 2
-    minion_ret = []
-    targets_list = []
+    poll_count = 0
+    targets_up = []
+    targets_down = []
+    minion_ret = {}
     while True:
         minion_ret_raw = list(salt.get_cli_returns(jid,targets))
         if minion_ret_raw:
             minion_ret = {key: value['ret'] for m in minion_ret_raw for key, value in m.items()}
-            targets_list = list(minion_ret)
+            targets_up = list(minion_ret)
+            break
+        if poll_count == 45:
             break
         # Wait before polling again
         time.sleep(poll_interval)
+        poll_count = poll_count + 1
+
+    targets_down = list(set(jid_targets) - set(targets_up))
+    for item in targets_down:
+        minion_ret[item] = False
+
+    targets_list = jid_targets.copy()
+    print(name, minion_ret)
+    print(name, targets_list)
+    ###
 
     dead_targets = []
     with statelocks[name]:
