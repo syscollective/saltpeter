@@ -289,8 +289,8 @@ def run(name,data,procname,running,state,commands):
             minion_ret = {key: value['ret'] for m in minion_ret_raw for key, value in m.items()}
             targets_list = list(minion_ret)
             break
-    print(name,minion_ret)
-    print(name,targets_list)
+        # Wait before polling again
+        time.sleep(poll_interval)
 
     dead_targets = []
     with statelocks[name]:
