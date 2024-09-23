@@ -316,7 +316,7 @@ def run(name,data,procname,running,state,commands):
                 try:
                     # this should be nonblocking
                     job = salt.run_job(chunk, 'cmd.run', cmdargs,
-                            tgt_type='list', listen=True)
+                            tgt_type='list', kwargs={'CRON_NAME': name, 'INSTANCE_NAME': procname}, listen=True)
 
                     # update running list and state
                     running[procname]=  { 'started': now, 'name': name, 'machines': chunk }
@@ -333,7 +333,7 @@ def run(name,data,procname,running,state,commands):
 
         try:
             job = salt.run_job(targets_list, 'cmd.run', cmdargs,
-                    tgt_type='list', listen=True)
+                    tgt_type='list', kwargs={'CRON_NAME': name, 'INSTANCE_NAME': procname}, listen=True)
             processstart(targets_list,name,data['group'],procname,state)
             #this should be blocking
             processresults(salt,commands,job,name,data['group'],procname,running,state,targets_list)
