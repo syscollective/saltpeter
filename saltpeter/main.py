@@ -261,6 +261,8 @@ def run(name,data,procname,running,state,commands):
     targets = data['targets']
     target_type = data['target_type']
     cmdargs = [data['command']]
+    env = {'SP_JOB_NAME':name, 'SP_JOB_INSTANCE_NAME':procname}
+    cmdargs.append('env='+env)
     if 'cwd' in data:
         cmdargs.append('cwd='+data['cwd'])
     if 'user' in data:
