@@ -129,7 +129,6 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
 
 
     for i in rets:
-
         #process commands in the loop
         for cmd in commands:
             if 'killcron' in cmd:
@@ -143,7 +142,7 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
 
         if i is not None:
             m = list(i)[0]
-            #print(i[m])
+            print(name, i[m])
             if 'failed' in i[m] and i[m]['failed'] == True:
                 print(f"Getting info about job {name} jid: {jid} every 10 seconds")
                 failed_returns = True
@@ -152,7 +151,6 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
                 r = i[m]['retcode']
                 o = i[m]['ret']
             result = { 'ret': o, 'retcode': r, 'starttime': state[name]['results'][m]['starttime'], 'endtime': datetime.now(timezone.utc) }
-
             with statelocks[name]:
                 tmpstate = state[name].copy()
                 if 'results' not in tmpstate:
@@ -278,8 +276,39 @@ def run(name,data,procname,running,state,commands):
         tmpstate['overlap'] = False
         state[name] = tmpstate
     log(cron=name, group=data['group'], what='start', instance=procname, time=now)
-    minion_ret = salt.cmd(targets, 'test.ping', tgt_type=target_type)
-    targets_list = list(minion_ret)
+    
+
+    ## ping the minions and parse the result
+    ret_job = salt.run_job(targets, 'test.ping', tgt_type=target_type)
+    jid = ret_job['jid']
+    jid_targets = ret_job['minions']
+
+    poll_interval = 2
+    poll_count = 0
+    targets_up = []
+    targets_down = []
+    minion_ret = {}
+    while True:
+        minion_ret_raw = list(salt.get_cli_returns(jid,targets))
+        if minion_ret_raw:
+            minion_ret = {key: value['ret'] for m in minion_ret_raw for key, value in m.items()}
+            targets_up = list(minion_ret)
+            break
+        if poll_count == 45:
+            break
+        # Wait before polling again
+        time.sleep(poll_interval)
+        poll_count = poll_count + 1
+
+    targets_down = list(set(jid_targets) - set(targets_up))
+    for item in targets_down:
+        minion_ret[item] = False
+
+    targets_list = jid_targets.copy()
+    print(name, minion_ret)
+    print(name, targets_list)
+    ###
+
     dead_targets = []
     with statelocks[name]:
         tmpstate = state[name]
