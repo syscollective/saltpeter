@@ -262,7 +262,6 @@ def run(name,data,procname,running,state,commands):
     target_type = data['target_type']
     cmdargs = [data['command']]
     env = {'SP_JOB_NAME': name, 'SP_JOB_INSTANCE_NAME':procname}
-    print(str(env))
     cmdargs.append('env='+str(env))
     if 'cwd' in data:
         cmdargs.append('cwd='+data['cwd'])
