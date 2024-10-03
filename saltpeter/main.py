@@ -296,7 +296,7 @@ def run(name,data,procname,running,state,commands):
             minion_ret = {key: value['ret'] for m in minion_ret_raw for key, value in m.items()}
             targets_up = list(minion_ret)
             break
-        if poll_count == 45:
+        if poll_count == 10:
             break
         # Wait before polling again
         time.sleep(poll_interval)

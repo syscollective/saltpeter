@@ -114,11 +114,14 @@ def send_data(con, cfgupdate, tmlupdate):
             lastst[cron]['last_run'] = srst[cron]['last_run'].isoformat()
             if 'results' in srst[cron] and len(srst[cron]['results']) > 0:
                 lastst[cron]['result_ok'] = True
+                false_result_number = 0
                 for tgt_key in srst[cron]['results']:
                     tgt = srst[cron]['results'][tgt_key]
                     if cron not in rng_names:
                         if 'retcode' not in tgt or (tgt['retcode'] != 0 and tgt['retcode'] != "0"):
-                            lastst[cron]['result_ok'] = False
+                            false_result_number += 1
+                    if false_result_number == len(srst[cron]['results']):
+                        lastst[cron]['result_ok'] = False
             else:
                 lastst[cron]['result_ok'] = False
 
