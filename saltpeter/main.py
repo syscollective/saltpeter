@@ -600,7 +600,9 @@ def main():
 
         maintenance = config['maintenance']
         if maintenance['global'] and not running:
+            now = datetime.now(timezone.utc)
             if 'last_maintenance_log' not in globals():
+                print("Maintenance mode active and no crons running.")
                 globals()['last_maintenance_log'] = now
             if (now - globals()['last_maintenance_log']).total_seconds() >= 20:
                 print("Maintenance mode active and no crons running.")
