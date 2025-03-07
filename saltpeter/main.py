@@ -16,7 +16,7 @@ import multiprocessing
 def readconfig(configdir):
     global bad_files
     config = {}
-    maintenance = {'global': False, 'machines': []}
+    saltpeter_maintenance = {'global': False, 'machines': []}
     for f in os.listdir(configdir):
         if not re.match('^.+\.yaml$',f):
             continue
@@ -28,9 +28,9 @@ def readconfig(configdir):
             for cron in loaded_config:
                 if cron == 'saltpeter_maintenance':
                     if 'global' in loaded_config[cron] and isinstance(loaded_config[cron]['global'], bool):
-                        maintenance['global'] = loaded_config[cron]['global']
+                        saltpeter_maintenance['global'] = loaded_config[cron]['global']
                     if 'machines' in loaded_config[cron] and isinstance(loaded_config[cron]['machines'], list):
-                        maintenance['machines'] = loaded_config[cron]['machines']
+                        saltpeter_maintenance['machines'] = loaded_config[cron]['machines']
                 elif parsecron(cron,loaded_config[cron]) is not False:
                     add_config[cron] = loaded_config[cron]
                     add_config[cron]['group'] = group 
@@ -41,7 +41,7 @@ def readconfig(configdir):
             if f not in bad_files:
                 print('Could not parse file %s: %s' % (f,e))
                 bad_files.append(f)
-    config['maintenance'] = maintenance
+    config['saltpeter_maintenance'] = saltpeter_maintenance
     return config
 
 
@@ -252,7 +252,7 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
 
 def run(name, data, procname, running, state, commands):
     global config
-    maintenance = config.get('maintenance', {'global': False, 'machines': []})
+    maintenance = config.get('saltpeter_maintenance', {'global': False, 'machines': []})
 
     if maintenance['global']:
         log(cron=name, group=data['group'], what='maintenance_mode', instance=procname, time=datetime.now(timezone.utc))
@@ -606,7 +606,7 @@ def main():
                     p_timeline.start()
                 commands.remove(cmd)
 
-        maintenance = config.get('maintenance', {'global': False, 'machines': []})
+        maintenance = config.get('saltpeter_maintenance', {'global': False, 'machines': []})
         if maintenance['global'] and not running:
             if 'last_maintenance_log' not in globals():
             globals()['last_maintenance_log'] = now
@@ -616,6 +616,8 @@ def main():
             continue
 
         for name in config['crons'].copy():
+            if name in ['saltpeter_maintenance']:
+                continue
             #determine next run based on the the last time the loop ran, not the current time
             result = parsecron(name, config['crons'][name], prev)
             if name not in state:
