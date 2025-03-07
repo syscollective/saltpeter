@@ -250,6 +250,10 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
 
 
 def run(name, data, procname, running, state, commands, maintenance):
+
+    if maintenance['global']:
+        log(cron=name, group=data['group'], what='maintenance', instance=procname, time=datetime.now(timezone.utc), out="Global maintenance mode active")
+        return
     import salt.client
     salt = salt.client.LocalClient()
     targets = data['targets']
@@ -600,14 +604,12 @@ def main():
                 commands.remove(cmd)
 
         maintenance = config['maintenance']
-        if maintenance['global'] and not running:
+        if maintenance['global']:
             now = datetime.now(timezone.utc)
             if (now - last_maintenance_log).total_seconds() >= 20:
-                print("Maintenance mode active and no crons running.")
+                print("Maintenance mode active, no crons will be started.")
                 last_maintenance_log = now
-            continue
         else:
-
             for name in config['crons'].copy():
                 #determine next run based on the the last time the loop ran, not the current time
                 result = parsecron(name, config['crons'][name], prev)
