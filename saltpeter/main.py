@@ -598,7 +598,7 @@ def main():
                     p_timeline.start()
                 commands.remove(cmd)
 
-        maintenance = config['saltpeter_maintenance']
+        maintenance = config['maintenance']
         if maintenance['global'] and not running:
             if 'last_maintenance_log' not in globals():
                 globals()['last_maintenance_log'] = now
@@ -609,8 +609,6 @@ def main():
         else:
 
             for name in config['crons'].copy():
-                if name in ['saltpeter_maintenance']:
-                    continue
                 #determine next run based on the the last time the loop ran, not the current time
                 result = parsecron(name, config['crons'][name], prev)
                 if name not in state:
