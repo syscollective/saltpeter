@@ -39,7 +39,7 @@ def readconfig(configdir):
                 bad_files.remove(f)
         except Exception as e:
             if f not in bad_files:
-                print('Could not parse file %s: %s' % (f,e))
+                print('Could not parse file %s: %s' % (f,e), flush=True)
                 bad_files.append(f)
     return (crons, saltpeter_maintenance)
 
@@ -59,7 +59,7 @@ def parsecron(name, data, time=datetime.now(timezone.utc)):
             utc = False
     except KeyError as e:
         if name not in bad_crons:
-            print('Missing required %s property from "%s"' % (e,name))
+            print('Missing required %s property from "%s"' % (e,name), flush=True)
             bad_crons.append(name)
         return False
     ret = {}
@@ -81,8 +81,8 @@ def parsecron(name, data, time=datetime.now(timezone.utc)):
         entry = CronTab('%s %s %s %s %s %s %s' % (sec, minute, hour, dom, mon, dow, year))
     except Exception as e:
         if name not in bad_crons:
-            print('Could not parse execution time in "%s":' % name)
-            print(e)
+            print('Could not parse execution time in "%s":' % name, flush=True)
+            print(e, flush=True)
             bad_crons.append(name)
         return False
 
@@ -148,9 +148,9 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
 
         if i is not None:
             m = list(i)[0]
-            print(name, i[m])
+            print(name, i[m], flush=True)
             if 'failed' in i[m] and i[m]['failed'] == True:
-                print(f"Getting info about job {name} jid: {jid} every 10 seconds")
+                print(f"Getting info about job {name} jid: {jid} every 10 seconds", flush=True)
                 failed_returns = True
                 continue
             else:
@@ -304,8 +304,8 @@ def run(name, data, procname, running, state, commands, maintenance):
         minion_ret[item] = False
 
     targets_list = jid_targets.copy()
-    print(name, minion_ret)
-    print(name, targets_list)
+    #print(name, minion_ret)
+    #print(name, targets_list)
     ###
 
     dead_targets = []
@@ -360,7 +360,7 @@ def run(name, data, procname, running, state, commands, maintenance):
                     processresults(salt, commands, job, name, data['group'], procname, running, state, chunk)
                     chunk = []
                 except Exception as e:
-                    print('Exception triggered in run() at "batch_size" condition', e)
+                    print('Exception triggered in run() at "batch_size" condition', e, flush=True)
                     chunk = []
     else:
         running[procname] = {'started': now, 'name': name, 'machines': targets_list}
@@ -374,7 +374,7 @@ def run(name, data, procname, running, state, commands, maintenance):
             processresults(salt, commands, job, name, data['group'], procname, running, state, targets_list)
 
         except Exception as e:
-            print('Exception triggered in run()', e)
+            print('Exception triggered in run()', e, flush=True)
 
     log(cron=name, group=data['group'], what='end', instance=procname, time=datetime.now(timezone.utc))
 
@@ -390,7 +390,7 @@ def log(what, cron, group, instance, time, machine='', code=0, out='', status=''
         logfile_name = args.logdir+'/'+cron+'.log'
         logfile = open(logfile_name,'a')
     except Exception as e:
-        print(f"Could not open logfile {logfile_name}: ", e)
+        print(f"Could not open logfile {logfile_name}: ", e, flush=True)
         return
 
     if what == 'start':
@@ -422,8 +422,8 @@ def log(what, cron, group, instance, time, machine='', code=0, out='', status=''
             #es.indices.create(index=index_name, ignore=400)
             es.index(index=index_name, doc_type='_doc', body=doc, request_timeout=20)
         except Exception as e:
-            print("Can't write to elasticsearch", doc)
-            print(e)
+            #print("Can't write to elasticsearch", doc, flush=True)
+            print(e, flush=True)
 
     if use_opensearch:
         doc = { 'job_name': cron, "group": group, "job_instance": instance, '@timestamp': time,
@@ -434,7 +434,7 @@ def log(what, cron, group, instance, time, machine='', code=0, out='', status=''
             opensearch.index(index=index_name, body=doc, request_timeout=20)
         except Exception as e:
             #print("Can't write to opensearch", doc)
-            print(e)
+            print(e, flush=True)
 
 def gettimeline(client, start_date, end_date, req_id, timeline, index_name):
     # Build the query with a date range filter
@@ -482,7 +482,7 @@ def gettimeline(client, start_date, end_date, req_id, timeline, index_name):
 
     except TransportError as e:
         # Handle the transport error
-        print(f"TransportError occurred: {e}")
+        print(f"TransportError occurred: {e}", flush=True)
     finally:
         if scroll_id:
             # Clear the scroll context when done
@@ -607,7 +607,7 @@ def main():
         if maintenance['global']:
             now = datetime.now(timezone.utc)
             if (now - last_maintenance_log).total_seconds() >= 20:
-                print("Maintenance mode active, no crons will be started.")
+                print("Maintenance mode active, no crons will be started.", flush=True)
                 last_maintenance_log = now
         else:
             for name in config['crons'].copy():
@@ -634,7 +634,7 @@ def main():
                     if name not in last_run or last_run[name] < prev:
                         last_run[name] = now 
                         procname = name+'_'+str(int(time.time()))
-                        print('Firing %s!' % procname)
+                        print('Firing %s!' % procname, flush=True)
 
                         #running[procname] = {'empty': True}
                         p = multiprocessing.Process(target=run,\
@@ -656,7 +656,7 @@ def main():
                 if entry == process.name:
                     found = True
             if found == False:
-                print('Deleting process %s as it must have finished' % entry)
+                print('Deleting process %s as it must have finished' % entry, flush=True)
                 del(processlist[entry])
                 if entry in running:
                     del(running[entry])
