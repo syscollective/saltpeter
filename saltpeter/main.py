@@ -15,7 +15,7 @@ import multiprocessing
 
 def readconfig(configdir):
     global bad_files
-    config = {}
+    crons = {}
     saltpeter_maintenance = {'global': False, 'machines': []}
     for f in os.listdir(configdir):
         if not re.match('^.+\.yaml$',f):
@@ -34,7 +34,7 @@ def readconfig(configdir):
                 elif parsecron(cron,loaded_config[cron]) is not False:
                     add_config[cron] = loaded_config[cron]
                     add_config[cron]['group'] = group 
-            config.update(add_config)
+            crons.update(add_config)
             if f in bad_files:
                 bad_files.remove(f)
         except Exception as e:
