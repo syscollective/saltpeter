@@ -251,13 +251,6 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
 
 
 def run(name, data, procname, running, state, commands):
-    global config
-    maintenance = config.get('saltpeter_maintenance', {'global': False, 'machines': []})
-
-    if maintenance['global']:
-        log(cron=name, group=data['group'], what='maintenance_mode', instance=procname, time=datetime.now(timezone.utc))
-        return
-
     import salt.client
     salt = salt.client.LocalClient()
     targets = data['targets']
@@ -614,44 +607,45 @@ def main():
             print("Maintenance mode active and no crons running.")
             globals()['last_maintenance_log'] = now
             continue
+        else:
 
-        for name in config['crons'].copy():
-            if name in ['saltpeter_maintenance']:
-                continue
-            #determine next run based on the the last time the loop ran, not the current time
-            result = parsecron(name, config['crons'][name], prev)
-            if name not in state:
-                state[name] = {}
-            if name not in statelocks:
-                statelocks[name] = manager.Lock()
-            nextrun = prev + timedelta(seconds=result['nextrun'])
-            with statelocks[name]:
-                tmpstate = state[name].copy()
-                tmpstate['next_run'] = nextrun
-                state[name] = tmpstate
-            #check if there are any start commands
-            runnow = False
-            for cmd in commands:
-                #print('COMMAND: ',cmd)
-                if 'runnow' in cmd:
-                    if cmd['runnow'] == name:
-                        runnow = True
-                        commands.remove(cmd)
-            if (result != False and now >= nextrun) or runnow:
-                if name not in last_run or last_run[name] < prev:
-                    last_run[name] = now 
-                    procname = name+'_'+str(int(time.time()))
-                    print('Firing %s!' % procname)
+            for name in config['crons'].copy():
+                if name in ['saltpeter_maintenance']:
+                    continue
+                #determine next run based on the the last time the loop ran, not the current time
+                result = parsecron(name, config['crons'][name], prev)
+                if name not in state:
+                    state[name] = {}
+                if name not in statelocks:
+                    statelocks[name] = manager.Lock()
+                nextrun = prev + timedelta(seconds=result['nextrun'])
+                with statelocks[name]:
+                    tmpstate = state[name].copy()
+                    tmpstate['next_run'] = nextrun
+                    state[name] = tmpstate
+                #check if there are any start commands
+                runnow = False
+                for cmd in commands:
+                    #print('COMMAND: ',cmd)
+                    if 'runnow' in cmd:
+                        if cmd['runnow'] == name:
+                            runnow = True
+                            commands.remove(cmd)
+                if (result != False and now >= nextrun) or runnow:
+                    if name not in last_run or last_run[name] < prev:
+                        last_run[name] = now 
+                        procname = name+'_'+str(int(time.time()))
+                        print('Firing %s!' % procname)
 
-                    #running[procname] = {'empty': True}
-                    p = multiprocessing.Process(target=run,\
-                            args=(name,config['crons'][name],procname,running, state, commands), name=procname)
+                        #running[procname] = {'empty': True}
+                        p = multiprocessing.Process(target=run,\
+                                args=(name,config['crons'][name],procname,running, state, commands), name=procname)
 
-                    processlist[procname] = {}
-                    processlist[procname]['cron_name'] = name
-                    processlist[procname]['cron_group'] = config['crons'][name]['group']
+                        processlist[procname] = {}
+                        processlist[procname]['cron_name'] = name
+                        processlist[procname]['cron_group'] = config['crons'][name]['group']
 
-                    p.start()
+                        p.start()
         prev = now
         time.sleep(0.05)
 
