@@ -41,8 +41,7 @@ def readconfig(configdir):
             if f not in bad_files:
                 print('Could not parse file %s: %s' % (f,e))
                 bad_files.append(f)
-    config['saltpeter_maintenance'] = saltpeter_maintenance
-    return config
+    return (crons, saltpeter_maintenance)
 
 
 def parsecron(name, data, time=datetime.now(timezone.utc)):
@@ -578,7 +577,7 @@ def main():
         
         newconfig = readconfig(args.configdir)
         if 'crons' not in config or config['crons'] != newconfig:
-            config['crons'] = newconfig
+            (config['crons'], config['maintenance']) = newconfig
             config['serial'] = now.timestamp()
         
         # timeline
@@ -599,7 +598,7 @@ def main():
                     p_timeline.start()
                 commands.remove(cmd)
 
-        maintenance = config.get('saltpeter_maintenance', {'global': False, 'machines': []})
+        maintenance = config['saltpeter_maintenance']
         if maintenance['global'] and not running:
             if 'last_maintenance_log' not in globals():
             globals()['last_maintenance_log'] = now
@@ -639,7 +638,7 @@ def main():
 
                         #running[procname] = {'empty': True}
                         p = multiprocessing.Process(target=run,\
-                                args=(name,config['crons'][name],procname,running, state, commands), name=procname)
+                                args=(name,config['crons'][name],procname,running, state, commands, maintenance), name=procname)
 
                         processlist[procname] = {}
                         processlist[procname]['cron_name'] = name
