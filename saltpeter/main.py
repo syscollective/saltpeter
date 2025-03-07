@@ -16,6 +16,7 @@ import multiprocessing
 def readconfig(configdir):
     global bad_files
     config = {}
+    maintenance = {'global': False, 'machines': []}
     for f in os.listdir(configdir):
         if not re.match('^.+\.yaml$',f):
             continue
@@ -25,7 +26,12 @@ def readconfig(configdir):
             loaded_config = yaml.load(config_string, Loader=yaml.FullLoader)
             add_config = {}
             for cron in loaded_config:
-                if parsecron(cron,loaded_config[cron]) is not False:
+                if cron == 'saltpeter_maintenance':
+                    if 'global' in loaded_config[cron] and isinstance(loaded_config[cron]['global'], bool):
+                        maintenance['global'] = loaded_config[cron]['global']
+                    if 'machines' in loaded_config[cron] and isinstance(loaded_config[cron]['machines'], list):
+                        maintenance['machines'] = loaded_config[cron]['machines']
+                elif parsecron(cron,loaded_config[cron]) is not False:
                     add_config[cron] = loaded_config[cron]
                     add_config[cron]['group'] = group 
             config.update(add_config)
@@ -35,6 +41,7 @@ def readconfig(configdir):
             if f not in bad_files:
                 print('Could not parse file %s: %s' % (f,e))
                 bad_files.append(f)
+    config['maintenance'] = maintenance
     return config
 
 
@@ -243,44 +250,38 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
 
 
 
-def run(name,data,procname,running,state,commands):
-    #do this check here for the purpose of avoiding sync logging in the main program
-    for instance in running.keys():
-        if name == running[instance]['name']:
-            log(what='overlap', cron=name, group=data['group'], instance=instance,
-                 time=datetime.now(timezone.utc))
-            with statelocks[name]:
-                tmpstate = state[name].copy()
-                tmpstate['overlap'] = True
-                state[name] = tmpstate
-            if 'allow_overlap' not in data or data['allow_overlap'] != 'i know what i am doing!':
-                return
+def run(name, data, procname, running, state, commands):
+    global config
+    maintenance = config.get('maintenance', {'global': False, 'machines': []})
+
+    if maintenance['global']:
+        log(cron=name, group=data['group'], what='maintenance_mode', instance=procname, time=datetime.now(timezone.utc))
+        return
 
     import salt.client
     salt = salt.client.LocalClient()
     targets = data['targets']
     target_type = data['target_type']
     cmdargs = [data['command']]
-    env = {'SP_JOB_NAME': name, 'SP_JOB_INSTANCE_NAME':procname}
-    cmdargs.append('env='+str(env))
+    env = {'SP_JOB_NAME': name, 'SP_JOB_INSTANCE_NAME': procname}
+    cmdargs.append('env=' + str(env))
     if 'cwd' in data:
-        cmdargs.append('cwd='+data['cwd'])
+        cmdargs.append('cwd=' + data['cwd'])
     if 'user' in data:
-        cmdargs.append('runas='+data['user'])
+        cmdargs.append('runas=' + data['user'])
     if 'timeout' in data:
-        cmdargs.append('timeout='+str(data['timeout']))
+        cmdargs.append('timeout=' + str(data['timeout']))
 
     now = datetime.now(timezone.utc)
-    running[procname]=  { 'started': now, 'name': name , 'machines': []}
+    running[procname] = {'started': now, 'name': name, 'machines': []}
     with statelocks[name]:
         tmpstate = state[name].copy()
         tmpstate['last_run'] = now
         tmpstate['overlap'] = False
         state[name] = tmpstate
     log(cron=name, group=data['group'], what='start', instance=procname, time=now)
-    
 
-    ## ping the minions and parse the result
+    # ping the minions and parse the result
     ret_job = salt.run_job(targets, 'test.ping', tgt_type=target_type)
     jid = ret_job['jid']
     jid_targets = ret_job['minions']
@@ -291,7 +292,7 @@ def run(name,data,procname,running,state,commands):
     targets_down = []
     minion_ret = {}
     while True:
-        minion_ret_raw = list(salt.get_cli_returns(jid,targets))
+        minion_ret_raw = list(salt.get_cli_returns(jid, targets))
         if minion_ret_raw:
             minion_ret = {key: value['ret'] for m in minion_ret_raw for key, value in m.items()}
             targets_up = list(minion_ret)
@@ -320,19 +321,26 @@ def run(name,data,procname,running,state,commands):
         for tgt in targets_list.copy():
             if minion_ret[tgt] == False:
                 targets_list.remove(tgt)
-                tmpstate['results'][tgt] = { 'ret': "Target did not respond",
-                        'retcode': 255,
-                        'starttime': now,
-                        'endtime': datetime.now(timezone.utc) }
+                tmpstate['results'][tgt] = {'ret': "Target did not respond",
+                                            'retcode': 255,
+                                            'starttime': now,
+                                            'endtime': datetime.now(timezone.utc)}
 
         state[name] = tmpstate
+
+    # Remove maintenance machines from targets_list and log a message
+    for tgt in targets_list.copy():
+        if tgt in maintenance['machines']:
+            targets_list.remove(tgt)
+            log(cron=name, group=data['group'], what='maintenance', instance=procname, time=datetime.now(timezone.utc), machine=tgt, out="Target under maintenance")
+
     if len(targets_list) == 0:
         log(cron=name, group=data['group'], what='no_machines', instance=procname, time=datetime.now(timezone.utc))
         log(cron=name, group=data['group'], what='end', instance=procname, time=datetime.now(timezone.utc))
         return
     if 'number_of_targets' in data and data['number_of_targets'] != 0:
         import random
-        #targets chosen at random
+        # targets chosen at random
         random.shuffle(targets_list)
         targets_list = targets_list[:data['number_of_targets']]
 
@@ -347,27 +355,27 @@ def run(name,data,procname,running,state,commands):
                 try:
                     # this should be nonblocking
                     job = salt.run_job(chunk, 'cmd.run', cmdargs,
-                            tgt_type='list', listen=True)
+                                       tgt_type='list', listen=True)
 
                     # update running list and state
-                    running[procname]=  { 'started': now, 'name': name, 'machines': chunk }
-                    processstart(chunk,name,data['group'],procname,state)
-                    #this should be blocking
-                    processresults(salt,commands,job,name,data['group'],procname,running,state,chunk)
+                    running[procname] = {'started': now, 'name': name, 'machines': chunk}
+                    processstart(chunk, name, data['group'], procname, state)
+                    # this should be blocking
+                    processresults(salt, commands, job, name, data['group'], procname, running, state, chunk)
                     chunk = []
                 except Exception as e:
                     print('Exception triggered in run() at "batch_size" condition', e)
                     chunk = []
     else:
-        running[procname]=  { 'started': now, 'name': name, 'machines': targets_list }
+        running[procname] = {'started': now, 'name': name, 'machines': targets_list}
         starttime = datetime.now(timezone.utc)
 
         try:
             job = salt.run_job(targets_list, 'cmd.run', cmdargs,
-                    tgt_type='list', listen=True)
-            processstart(targets_list,name,data['group'],procname,state)
-            #this should be blocking
-            processresults(salt,commands,job,name,data['group'],procname,running,state,targets_list)
+                               tgt_type='list', listen=True)
+            processstart(targets_list, name, data['group'], procname, state)
+            # this should be blocking
+            processresults(salt, commands, job, name, data['group'], procname, running, state, targets_list)
 
         except Exception as e:
             print('Exception triggered in run()', e)
@@ -597,6 +605,11 @@ def main():
                             args=(opensearch,timeline_start_date, timeline_end_date, timeline_id, timeline, index_name), name=procname)
                     p_timeline.start()
                 commands.remove(cmd)
+
+        maintenance = config.get('maintenance', {'global': False, 'machines': []})
+        if maintenance['global'] and not running:
+            print("Maintenance mode active and no crons running. Exiting.")
+            break
 
         for name in config['crons'].copy():
             #determine next run based on the the last time the loop ran, not the current time
