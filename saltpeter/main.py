@@ -546,6 +546,7 @@ def main():
     commands = manager.list()
     bad_crons = manager.list()
     timeline = manager.dict()
+    last_maintenance_log = datetime.now(timezone.utc)
 
     #timeline['content'] = []
     #timeline['serial'] = datetime.now(timezone.utc).timestamp()
@@ -601,12 +602,9 @@ def main():
         maintenance = config['maintenance']
         if maintenance['global'] and not running:
             now = datetime.now(timezone.utc)
-            if 'last_maintenance_log' not in globals():
+            if (now - last_maintenance_log).total_seconds() >= 20:
                 print("Maintenance mode active and no crons running.")
-                globals()['last_maintenance_log'] = now
-            if (now - globals()['last_maintenance_log']).total_seconds() >= 20:
-                print("Maintenance mode active and no crons running.")
-                globals()['last_maintenance_log'] = now
+                last_maintenance_log = now
             continue
         else:
 
