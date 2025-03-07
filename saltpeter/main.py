@@ -249,7 +249,7 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
 
 
 
-def run(name, data, procname, running, state, commands):
+def run(name, data, procname, running, state, commands, maintenance):
     import salt.client
     salt = salt.client.LocalClient()
     targets = data['targets']
