@@ -609,10 +609,10 @@ def main():
         maintenance = config.get('saltpeter_maintenance', {'global': False, 'machines': []})
         if maintenance['global'] and not running:
             if 'last_maintenance_log' not in globals():
-            globals()['last_maintenance_log'] = now
+                globals()['last_maintenance_log'] = now
             if (now - globals()['last_maintenance_log']).total_seconds() >= 20:
-            print("Maintenance mode active and no crons running.")
-            globals()['last_maintenance_log'] = now
+                print("Maintenance mode active and no crons running.")
+                globals()['last_maintenance_log'] = now
             continue
 
         for name in config['crons'].copy():
