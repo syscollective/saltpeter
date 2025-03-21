@@ -4,3 +4,10 @@ pyyaml
 tornado
 elasticsearch
 opensearch-py
+distro
+looseversion
+packaging
+jinja2
+msgpack
+zmq
+pycryptodome
