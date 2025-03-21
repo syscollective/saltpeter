@@ -581,7 +581,7 @@ def main():
         now = datetime.now(timezone.utc)
         
         newconfig = readconfig(args.configdir)
-        if 'crons' not in config or config['crons'] != newconfig:
+        if ('crons' not in config or config['crons'] != newconfig[0]) or ('maintenance' not in config or config['maintenance'] != newconfig[1]):
             (config['crons'], config['maintenance']) = newconfig
             config['serial'] = now.timestamp()
         
