@@ -20,5 +20,12 @@ setup(name='saltpeter',
           'tornado',
           'elasticsearch',
           'opensearch-py',
+          'distro',
+          'looseversion',
+          'packaging',
+          'jinja2',
+          'msgpack',
+          'zmq',
+          'pycryptodome'
       ],
       zip_safe=False)
