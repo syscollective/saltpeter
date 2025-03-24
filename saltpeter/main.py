@@ -15,7 +15,8 @@ import multiprocessing
 
 def readconfig(configdir):
     global bad_files
-    config = {}
+    crons = {}
+    saltpeter_maintenance = {'global': False, 'machines': []}
     for f in os.listdir(configdir):
         if not re.match('^.+\.yaml$',f):
             continue
@@ -25,17 +26,22 @@ def readconfig(configdir):
             loaded_config = yaml.load(config_string, Loader=yaml.FullLoader)
             add_config = {}
             for cron in loaded_config:
-                if parsecron(cron,loaded_config[cron]) is not False:
+                if cron == 'saltpeter_maintenance':
+                    if 'global' in loaded_config[cron] and isinstance(loaded_config[cron]['global'], bool):
+                        saltpeter_maintenance['global'] = loaded_config[cron]['global']
+                    if 'machines' in loaded_config[cron] and isinstance(loaded_config[cron]['machines'], list):
+                        saltpeter_maintenance['machines'] = loaded_config[cron]['machines']
+                elif parsecron(cron,loaded_config[cron]) is not False:
                     add_config[cron] = loaded_config[cron]
                     add_config[cron]['group'] = group 
-            config.update(add_config)
+            crons.update(add_config)
             if f in bad_files:
                 bad_files.remove(f)
         except Exception as e:
             if f not in bad_files:
-                print('Could not parse file %s: %s' % (f,e))
+                print('Could not parse file %s: %s' % (f,e), flush=True)
                 bad_files.append(f)
-    return config
+    return (crons, saltpeter_maintenance)
 
 
 def parsecron(name, data, time=datetime.now(timezone.utc)):
@@ -53,7 +59,7 @@ def parsecron(name, data, time=datetime.now(timezone.utc)):
             utc = False
     except KeyError as e:
         if name not in bad_crons:
-            print('Missing required %s property from "%s"' % (e,name))
+            print('Missing required %s property from "%s"' % (e,name), flush=True)
             bad_crons.append(name)
         return False
     ret = {}
@@ -75,8 +81,8 @@ def parsecron(name, data, time=datetime.now(timezone.utc)):
         entry = CronTab('%s %s %s %s %s %s %s' % (sec, minute, hour, dom, mon, dow, year))
     except Exception as e:
         if name not in bad_crons:
-            print('Could not parse execution time in "%s":' % name)
-            print(e)
+            print('Could not parse execution time in "%s":' % name, flush=True)
+            print(e, flush=True)
             bad_crons.append(name)
         return False
 
@@ -142,9 +148,9 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
 
         if i is not None:
             m = list(i)[0]
-            print(name, i[m])
+            print(name, i[m], flush=True)
             if 'failed' in i[m] and i[m]['failed'] == True:
-                print(f"Getting info about job {name} jid: {jid} every 10 seconds")
+                print(f"Getting info about job {name} jid: {jid} every 10 seconds", flush=True)
                 failed_returns = True
                 continue
             else:
@@ -243,44 +249,35 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
 
 
 
-def run(name,data,procname,running,state,commands):
-    #do this check here for the purpose of avoiding sync logging in the main program
-    for instance in running.keys():
-        if name == running[instance]['name']:
-            log(what='overlap', cron=name, group=data['group'], instance=instance,
-                 time=datetime.now(timezone.utc))
-            with statelocks[name]:
-                tmpstate = state[name].copy()
-                tmpstate['overlap'] = True
-                state[name] = tmpstate
-            if 'allow_overlap' not in data or data['allow_overlap'] != 'i know what i am doing!':
-                return
+def run(name, data, procname, running, state, commands, maintenance):
 
+    if maintenance['global']:
+        log(cron=name, group=data['group'], what='maintenance', instance=procname, time=datetime.now(timezone.utc), out="Global maintenance mode active")
+        return
     import salt.client
     salt = salt.client.LocalClient()
     targets = data['targets']
     target_type = data['target_type']
     cmdargs = [data['command']]
-    env = {'SP_JOB_NAME': name, 'SP_JOB_INSTANCE_NAME':procname}
-    cmdargs.append('env='+str(env))
+    env = {'SP_JOB_NAME': name, 'SP_JOB_INSTANCE_NAME': procname}
+    cmdargs.append('env=' + str(env))
     if 'cwd' in data:
-        cmdargs.append('cwd='+data['cwd'])
+        cmdargs.append('cwd=' + data['cwd'])
     if 'user' in data:
-        cmdargs.append('runas='+data['user'])
+        cmdargs.append('runas=' + data['user'])
     if 'timeout' in data:
-        cmdargs.append('timeout='+str(data['timeout']))
+        cmdargs.append('timeout=' + str(data['timeout']))
 
     now = datetime.now(timezone.utc)
-    running[procname]=  { 'started': now, 'name': name , 'machines': []}
+    running[procname] = {'started': now, 'name': name, 'machines': []}
     with statelocks[name]:
         tmpstate = state[name].copy()
         tmpstate['last_run'] = now
         tmpstate['overlap'] = False
         state[name] = tmpstate
     log(cron=name, group=data['group'], what='start', instance=procname, time=now)
-    
 
-    ## ping the minions and parse the result
+    # ping the minions and parse the result
     ret_job = salt.run_job(targets, 'test.ping', tgt_type=target_type)
     jid = ret_job['jid']
     jid_targets = ret_job['minions']
@@ -291,7 +288,7 @@ def run(name,data,procname,running,state,commands):
     targets_down = []
     minion_ret = {}
     while True:
-        minion_ret_raw = list(salt.get_cli_returns(jid,targets))
+        minion_ret_raw = list(salt.get_cli_returns(jid, targets))
         if minion_ret_raw:
             minion_ret = {key: value['ret'] for m in minion_ret_raw for key, value in m.items()}
             targets_up = list(minion_ret)
@@ -307,8 +304,8 @@ def run(name,data,procname,running,state,commands):
         minion_ret[item] = False
 
     targets_list = jid_targets.copy()
-    print(name, minion_ret)
-    print(name, targets_list)
+    #print(name, minion_ret)
+    #print(name, targets_list)
     ###
 
     dead_targets = []
@@ -320,19 +317,26 @@ def run(name,data,procname,running,state,commands):
         for tgt in targets_list.copy():
             if minion_ret[tgt] == False:
                 targets_list.remove(tgt)
-                tmpstate['results'][tgt] = { 'ret': "Target did not respond",
-                        'retcode': 255,
-                        'starttime': now,
-                        'endtime': datetime.now(timezone.utc) }
+                tmpstate['results'][tgt] = {'ret': "Target did not respond",
+                                            'retcode': 255,
+                                            'starttime': now,
+                                            'endtime': datetime.now(timezone.utc)}
 
         state[name] = tmpstate
+
+    # Remove maintenance machines from targets_list and log a message
+    for tgt in targets_list.copy():
+        if tgt in maintenance['machines']:
+            targets_list.remove(tgt)
+            log(cron=name, group=data['group'], what='maintenance', instance=procname, time=datetime.now(timezone.utc), machine=tgt, out="Target under maintenance")
+
     if len(targets_list) == 0:
         log(cron=name, group=data['group'], what='no_machines', instance=procname, time=datetime.now(timezone.utc))
         log(cron=name, group=data['group'], what='end', instance=procname, time=datetime.now(timezone.utc))
         return
     if 'number_of_targets' in data and data['number_of_targets'] != 0:
         import random
-        #targets chosen at random
+        # targets chosen at random
         random.shuffle(targets_list)
         targets_list = targets_list[:data['number_of_targets']]
 
@@ -347,30 +351,30 @@ def run(name,data,procname,running,state,commands):
                 try:
                     # this should be nonblocking
                     job = salt.run_job(chunk, 'cmd.run', cmdargs,
-                            tgt_type='list', listen=True)
+                                       tgt_type='list', listen=True)
 
                     # update running list and state
-                    running[procname]=  { 'started': now, 'name': name, 'machines': chunk }
-                    processstart(chunk,name,data['group'],procname,state)
-                    #this should be blocking
-                    processresults(salt,commands,job,name,data['group'],procname,running,state,chunk)
+                    running[procname] = {'started': now, 'name': name, 'machines': chunk}
+                    processstart(chunk, name, data['group'], procname, state)
+                    # this should be blocking
+                    processresults(salt, commands, job, name, data['group'], procname, running, state, chunk)
                     chunk = []
                 except Exception as e:
-                    print('Exception triggered in run() at "batch_size" condition', e)
+                    print('Exception triggered in run() at "batch_size" condition', e, flush=True)
                     chunk = []
     else:
-        running[procname]=  { 'started': now, 'name': name, 'machines': targets_list }
+        running[procname] = {'started': now, 'name': name, 'machines': targets_list}
         starttime = datetime.now(timezone.utc)
 
         try:
             job = salt.run_job(targets_list, 'cmd.run', cmdargs,
-                    tgt_type='list', listen=True)
-            processstart(targets_list,name,data['group'],procname,state)
-            #this should be blocking
-            processresults(salt,commands,job,name,data['group'],procname,running,state,targets_list)
+                               tgt_type='list', listen=True)
+            processstart(targets_list, name, data['group'], procname, state)
+            # this should be blocking
+            processresults(salt, commands, job, name, data['group'], procname, running, state, targets_list)
 
         except Exception as e:
-            print('Exception triggered in run()', e)
+            print('Exception triggered in run()', e, flush=True)
 
     log(cron=name, group=data['group'], what='end', instance=procname, time=datetime.now(timezone.utc))
 
@@ -386,7 +390,7 @@ def log(what, cron, group, instance, time, machine='', code=0, out='', status=''
         logfile_name = args.logdir+'/'+cron+'.log'
         logfile = open(logfile_name,'a')
     except Exception as e:
-        print(f"Could not open logfile {logfile_name}: ", e)
+        print(f"Could not open logfile {logfile_name}: ", e, flush=True)
         return
 
     if what == 'start':
@@ -418,8 +422,8 @@ def log(what, cron, group, instance, time, machine='', code=0, out='', status=''
             #es.indices.create(index=index_name, ignore=400)
             es.index(index=index_name, doc_type='_doc', body=doc, request_timeout=20)
         except Exception as e:
-            print("Can't write to elasticsearch", doc)
-            print(e)
+            #print("Can't write to elasticsearch", doc, flush=True)
+            print(e, flush=True)
 
     if use_opensearch:
         doc = { 'job_name': cron, "group": group, "job_instance": instance, '@timestamp': time,
@@ -430,7 +434,7 @@ def log(what, cron, group, instance, time, machine='', code=0, out='', status=''
             opensearch.index(index=index_name, body=doc, request_timeout=20)
         except Exception as e:
             #print("Can't write to opensearch", doc)
-            print(e)
+            print(e, flush=True)
 
 def gettimeline(client, start_date, end_date, req_id, timeline, index_name):
     # Build the query with a date range filter
@@ -478,7 +482,7 @@ def gettimeline(client, start_date, end_date, req_id, timeline, index_name):
 
     except TransportError as e:
         # Handle the transport error
-        print(f"TransportError occurred: {e}")
+        print(f"TransportError occurred: {e}", flush=True)
     finally:
         if scroll_id:
             # Clear the scroll context when done
@@ -546,6 +550,7 @@ def main():
     commands = manager.list()
     bad_crons = manager.list()
     timeline = manager.dict()
+    last_maintenance_log = datetime.now(timezone.utc)
 
     #timeline['content'] = []
     #timeline['serial'] = datetime.now(timezone.utc).timestamp()
@@ -576,8 +581,8 @@ def main():
         now = datetime.now(timezone.utc)
         
         newconfig = readconfig(args.configdir)
-        if 'crons' not in config or config['crons'] != newconfig:
-            config['crons'] = newconfig
+        if ('crons' not in config or config['crons'] != newconfig[0]) or ('maintenance' not in config or config['maintenance'] != newconfig[1]):
+            (config['crons'], config['maintenance']) = newconfig
             config['serial'] = now.timestamp()
         
         # timeline
@@ -598,41 +603,48 @@ def main():
                     p_timeline.start()
                 commands.remove(cmd)
 
-        for name in config['crons'].copy():
-            #determine next run based on the the last time the loop ran, not the current time
-            result = parsecron(name, config['crons'][name], prev)
-            if name not in state:
-                state[name] = {}
-            if name not in statelocks:
-                statelocks[name] = manager.Lock()
-            nextrun = prev + timedelta(seconds=result['nextrun'])
-            with statelocks[name]:
-                tmpstate = state[name].copy()
-                tmpstate['next_run'] = nextrun
-                state[name] = tmpstate
-            #check if there are any start commands
-            runnow = False
-            for cmd in commands:
-                #print('COMMAND: ',cmd)
-                if 'runnow' in cmd:
-                    if cmd['runnow'] == name:
-                        runnow = True
-                        commands.remove(cmd)
-            if (result != False and now >= nextrun) or runnow:
-                if name not in last_run or last_run[name] < prev:
-                    last_run[name] = now 
-                    procname = name+'_'+str(int(time.time()))
-                    print('Firing %s!' % procname)
+        maintenance = config['maintenance']
+        if maintenance['global']:
+            now = datetime.now(timezone.utc)
+            if (now - last_maintenance_log).total_seconds() >= 20:
+                print("Maintenance mode active, no crons will be started.", flush=True)
+                last_maintenance_log = now
+        else:
+            for name in config['crons'].copy():
+                #determine next run based on the the last time the loop ran, not the current time
+                result = parsecron(name, config['crons'][name], prev)
+                if name not in state:
+                    state[name] = {}
+                if name not in statelocks:
+                    statelocks[name] = manager.Lock()
+                nextrun = prev + timedelta(seconds=result['nextrun'])
+                with statelocks[name]:
+                    tmpstate = state[name].copy()
+                    tmpstate['next_run'] = nextrun
+                    state[name] = tmpstate
+                #check if there are any start commands
+                runnow = False
+                for cmd in commands:
+                    #print('COMMAND: ',cmd)
+                    if 'runnow' in cmd:
+                        if cmd['runnow'] == name:
+                            runnow = True
+                            commands.remove(cmd)
+                if (result != False and now >= nextrun) or runnow:
+                    if name not in last_run or last_run[name] < prev:
+                        last_run[name] = now 
+                        procname = name+'_'+str(int(time.time()))
+                        print('Firing %s!' % procname, flush=True)
 
-                    #running[procname] = {'empty': True}
-                    p = multiprocessing.Process(target=run,\
-                            args=(name,config['crons'][name],procname,running, state, commands), name=procname)
+                        #running[procname] = {'empty': True}
+                        p = multiprocessing.Process(target=run,\
+                                args=(name,config['crons'][name],procname,running, state, commands, maintenance), name=procname)
 
-                    processlist[procname] = {}
-                    processlist[procname]['cron_name'] = name
-                    processlist[procname]['cron_group'] = config['crons'][name]['group']
+                        processlist[procname] = {}
+                        processlist[procname]['cron_name'] = name
+                        processlist[procname]['cron_group'] = config['crons'][name]['group']
 
-                    p.start()
+                        p.start()
         prev = now
         time.sleep(0.05)
 
@@ -644,7 +656,7 @@ def main():
                 if entry == process.name:
                     found = True
             if found == False:
-                print('Deleting process %s as it must have finished' % entry)
+                print('Deleting process %s as it must have finished' % entry, flush=True)
                 del(processlist[entry])
                 if entry in running:
                     del(running[entry])
