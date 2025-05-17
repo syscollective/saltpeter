@@ -254,6 +254,18 @@ def run(name, data, procname, running, state, commands, maintenance):
     if maintenance['global']:
         log(cron=name, group=data['group'], what='maintenance', instance=procname, time=datetime.now(timezone.utc), out="Global maintenance mode active")
         return
+
+    for instance in running.keys():
+        if name == running[instance]['name']:
+            log(what='overlap', cron=name, group=data['group'], instance=instance,
+                 time=datetime.now(timezone.utc))
+            with statelocks[name]:
+                tmpstate = state[name].copy()
+                tmpstate['overlap'] = True
+                state[name] = tmpstate
+            if 'allow_overlap' not in data or data['allow_overlap'] != 'i know what i am doing!':
+                return
+
     import salt.client
     salt = salt.client.LocalClient()
     targets = data['targets']
