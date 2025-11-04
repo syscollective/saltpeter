@@ -18,7 +18,7 @@ Use this checklist to migrate from the old Salt-based Saltpeter to the new WebSo
 
 - [ ] **Verify Python version**
   ```bash
-  python3 --version  # Should be 3.6+
+  python3 --version  # Should be 3.7+ (tested with 3.11)
   ```
 
 - [ ] **Check available disk space**

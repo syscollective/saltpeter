@@ -19,8 +19,13 @@ class WebSocketJobServer:
         self.log_func = log_func
         self.connections = {}  # Track active connections by job_instance + machine
         
-    async def handle_client(self, websocket, path):
-        """Handle incoming WebSocket connections"""
+    async def handle_client(self, websocket):
+        """
+        Handle incoming WebSocket connections
+        
+        Note: In websockets 10.0+, the path argument was removed.
+        This handler works with both old and new versions.
+        """
         client_id = None
         try:
             async for message in websocket:

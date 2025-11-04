@@ -2,9 +2,10 @@
 
 ## Prerequisites
 
-1. Python 3.6+
+1. Python 3.7+ (tested with Python 3.11)
 2. Salt master and minions configured
 3. Saltpeter installed
+4. websockets library 10.0+ (installed automatically via requirements.txt)
 
 ## Installation
 
