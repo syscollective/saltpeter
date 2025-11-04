@@ -17,20 +17,52 @@ The wrapper script is executed by Salt minions and performs the following functi
 - **Real-time Streaming**: Streams stdout and stderr output in real-time
 - **Exit Reporting**: Reports the process exit code when the job completes
 
+#### Wrapper Configuration
+
+The wrapper reads its configuration from **environment variables** (not command-line arguments) for better security and flexibility:
+
+**Required Environment Variables:**
+- `SP_WEBSOCKET_URL` - WebSocket server URL (e.g., `ws://saltpeter:8889`)
+- `SP_JOB_NAME` - Name of the cron job
+- `SP_JOB_INSTANCE` - Unique instance identifier for this job run
+- `SP_COMMAND` - The actual command to execute
+
+**Optional Environment Variables:**
+- `SP_MACHINE_ID` - Hostname or identifier (defaults to system hostname)
+- `SP_CWD` - Working directory for the command
+- `SP_USER` - User to run the command as
+- `SP_TIMEOUT` - Command timeout in seconds
+
 #### Wrapper Usage
 
 ```bash
-python3 wrapper.py <websocket_url> <job_name> <job_instance> <machine_id> <command> [cwd] [user]
+# Environment variables are set by Salt's cmd.run env parameter
+export SP_WEBSOCKET_URL="ws://saltpeter:8889"
+export SP_JOB_NAME="backup_job"
+export SP_JOB_INSTANCE="backup_job_1699000000"
+export SP_COMMAND="/usr/local/bin/backup.sh"
+export SP_CWD="/backup"
+export SP_USER="backup"
+export SP_TIMEOUT="3600"
+
+python3 /usr/local/bin/saltpeter-wrapper.py
 ```
 
-**Parameters:**
-- `websocket_url`: WebSocket server URL (e.g., `ws://saltpeter:8889`)
-- `job_name`: Name of the cron job
-- `job_instance`: Unique instance identifier for this job run
-- `machine_id`: Hostname or identifier of the machine
-- `command`: The actual command to execute
-- `cwd`: (Optional) Working directory for the command
-- `user`: (Optional) User to run the command as
+**Why Environment Variables?**
+- **Security**: Command-line arguments are visible in `ps aux` output
+- **No Escaping Issues**: No shell quoting/escaping problems
+- **Length Limits**: Command lines have limits; env vars don't
+- **Cleaner**: Easier to add new parameters without changing interface
+
+**Example of the security issue with command-line args:**
+```bash
+# BAD: Password visible in ps output
+python3 wrapper.py ws://server:8889 job1 inst1 host1 "mysql -p'secret123' ..."
+
+# GOOD: Password in environment (not visible in ps)
+export SP_COMMAND="mysql -p'secret123' ..."
+python3 wrapper.py
+```
 
 ### 2. WebSocket Server (`saltpeter/websocket_server.py`)
 
@@ -249,12 +281,19 @@ grep "WebSocket" /var/log/saltpeter/*.log
 
 **Verify wrapper script location:**
 ```bash
-salt '*' cmd.run 'ls -l /path/to/wrapper.py'
+salt '*' cmd.run 'ls -l /usr/local/bin/saltpeter-wrapper.py'
 ```
 
 **Test wrapper manually:**
 ```bash
-python3 /path/to/wrapper.py ws://saltpeter:8889 test_job test_instance $(hostname) 'echo hello'
+# Set environment variables
+export SP_WEBSOCKET_URL="ws://saltpeter:8889"
+export SP_JOB_NAME="test_job"
+export SP_JOB_INSTANCE="test_instance"
+export SP_COMMAND="echo hello"
+
+# Run wrapper
+python3 /usr/local/bin/saltpeter-wrapper.py
 ```
 
 **Check WebSocket connections:**

@@ -5,6 +5,16 @@ This script is executed by Salt and immediately returns success.
 It runs the actual command in a subprocess and communicates with
 Saltpeter via WebSocket, sending heartbeats, streaming output,
 and reporting the final exit code.
+
+Environment Variables:
+    SP_WEBSOCKET_URL - WebSocket server URL (required)
+    SP_JOB_NAME - Name of the cron job (required)
+    SP_JOB_INSTANCE - Unique instance identifier (required)
+    SP_MACHINE_ID - Machine hostname/identifier (optional, defaults to hostname)
+    SP_COMMAND - Command to execute (required)
+    SP_CWD - Working directory (optional)
+    SP_USER - User to run command as (optional)
+    SP_TIMEOUT - Command timeout in seconds (optional)
 """
 
 import asyncio
@@ -14,9 +24,10 @@ import sys
 import os
 import json
 import time
+import socket
 from datetime import datetime, timezone
 
-async def run_command_and_stream(websocket_url, job_name, job_instance, machine_id, command, cwd=None, user=None):
+async def run_command_and_stream(websocket_url, job_name, job_instance, machine_id, command, cwd=None, user=None, timeout=None):
     """
     Run command in subprocess and stream output via WebSocket
     """
@@ -169,20 +180,40 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
             pass
 
 def main():
-    if len(sys.argv) < 6:
-        print("Usage: wrapper.py <websocket_url> <job_name> <job_instance> <machine_id> <command> [cwd] [user]")
+    # Read configuration from environment variables
+    websocket_url = os.environ.get('SP_WEBSOCKET_URL')
+    job_name = os.environ.get('SP_JOB_NAME')
+    job_instance = os.environ.get('SP_JOB_INSTANCE')
+    machine_id = os.environ.get('SP_MACHINE_ID') or socket.gethostname()
+    command = os.environ.get('SP_COMMAND')
+    cwd = os.environ.get('SP_CWD')
+    user = os.environ.get('SP_USER')
+    timeout_str = os.environ.get('SP_TIMEOUT')
+    
+    # Validate required parameters
+    if not websocket_url:
+        print("Error: SP_WEBSOCKET_URL environment variable not set", file=sys.stderr)
+        sys.exit(1)
+    if not job_name:
+        print("Error: SP_JOB_NAME environment variable not set", file=sys.stderr)
+        sys.exit(1)
+    if not job_instance:
+        print("Error: SP_JOB_INSTANCE environment variable not set", file=sys.stderr)
+        sys.exit(1)
+    if not command:
+        print("Error: SP_COMMAND environment variable not set", file=sys.stderr)
         sys.exit(1)
     
-    websocket_url = sys.argv[1]
-    job_name = sys.argv[2]
-    job_instance = sys.argv[3]
-    machine_id = sys.argv[4]
-    command = sys.argv[5]
-    cwd = sys.argv[6] if len(sys.argv) > 6 else None
-    user = sys.argv[7] if len(sys.argv) > 7 else None
+    # Parse timeout
+    timeout = None
+    if timeout_str:
+        try:
+            timeout = int(timeout_str)
+        except ValueError:
+            print(f"Warning: Invalid timeout value '{timeout_str}', ignoring", file=sys.stderr)
     
     # Run the command asynchronously
-    asyncio.run(run_command_and_stream(websocket_url, job_name, job_instance, machine_id, command, cwd, user))
+    asyncio.run(run_command_and_stream(websocket_url, job_name, job_instance, machine_id, command, cwd, user, timeout))
     
     # Return success immediately to Salt
     print("Wrapper started successfully")

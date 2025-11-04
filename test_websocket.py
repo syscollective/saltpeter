@@ -2,6 +2,11 @@
 """
 Test script for WebSocket functionality
 Tests the wrapper and WebSocket server integration
+
+Usage:
+    python3 test_websocket.py [websocket_url]
+    
+    Default websocket_url: ws://localhost:8889
 """
 
 import asyncio

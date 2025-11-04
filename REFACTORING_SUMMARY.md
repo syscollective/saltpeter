@@ -21,6 +21,7 @@ A wrapper script that:
 - Sends heartbeats every 5 seconds
 - Streams stdout/stderr in real-time
 - Reports final exit code
+- **Uses environment variables** for configuration (secure, no escaping issues)
 
 #### `/saltpeter/websocket_server.py`
 WebSocket server that:

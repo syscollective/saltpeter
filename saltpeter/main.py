@@ -346,21 +346,31 @@ def run(name, data, procname, running, state, commands, maintenance):
     # Get wrapper script path
     wrapper_path = os.path.join(os.path.dirname(__file__), 'wrapper.py')
     
-    # Prepare wrapper command arguments
+    # Prepare environment variables for the wrapper
     websocket_url = f"ws://{args.websocket_host}:{args.websocket_port}"
-    command = data['command']
-    cwd = data.get('cwd', '')
-    user = data.get('user', '')
+    
+    # Build environment variables to pass to the wrapper
+    # These will be passed via Salt's cmd.run with env parameter
+    wrapper_env = {
+        'SP_WEBSOCKET_URL': websocket_url,
+        'SP_JOB_NAME': name,
+        'SP_JOB_INSTANCE_NAME': procname,  # For backwards compatibility
+        'SP_JOB_INSTANCE': procname,
+        'SP_COMMAND': data['command']
+    }
+    
+    if 'cwd' in data:
+        wrapper_env['SP_CWD'] = data['cwd']
+    if 'user' in data:
+        wrapper_env['SP_USER'] = data['user']
+    if 'timeout' in data:
+        wrapper_env['SP_TIMEOUT'] = str(data['timeout'])
     
     # Build the Salt command to run the wrapper
-    # The wrapper will handle the actual command execution
-    wrapper_cmd = f"python3 {wrapper_path} {websocket_url} {name} {procname} $(hostname) '{command}'"
-    if cwd:
-        wrapper_cmd += f" '{cwd}'"
-    if user:
-        wrapper_cmd += f" '{user}'"
-    
+    # The wrapper will read configuration from environment variables
+    wrapper_cmd = f"python3 {wrapper_path}"
     cmdargs = [wrapper_cmd]
+    cmdargs.append('env=' + str(wrapper_env))
     
     # Note: timeout is now handled by the WebSocket monitoring
     timeout = data.get('timeout', 3600)  # Default 1 hour

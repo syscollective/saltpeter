@@ -15,6 +15,7 @@ This document provides a complete summary of the WebSocket-based refactoring of 
    - Sends heartbeats every 5 seconds
    - Streams stdout/stderr in real-time
    - Reports exit code on completion
+   - **Reads configuration from environment variables** for security and flexibility
 
 2. **`saltpeter/websocket_server.py`** (New)
    - WebSocket server for receiving job updates

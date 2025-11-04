@@ -213,7 +213,8 @@ salt '*' cmd.run 'ls -l /usr/local/bin/saltpeter-wrapper.py'
 
 **Test wrapper manually:**
 ```bash
-salt 'minion1' cmd.run 'python3 /usr/local/bin/saltpeter-wrapper.py ws://saltpeter:8889 test_job test_instance $(hostname) "echo hello"'
+# On a minion, set environment variables and run
+salt 'minion1' cmd.run 'export SP_WEBSOCKET_URL=ws://saltpeter:8889 SP_JOB_NAME=test SP_JOB_INSTANCE=test_inst SP_COMMAND="echo hello" && python3 /usr/local/bin/saltpeter-wrapper.py' shell=/bin/bash
 ```
 
 ### Jobs Not Reporting Back

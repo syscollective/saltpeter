@@ -11,6 +11,7 @@ It reads configuration from yaml files in a folder specified by -c (default /etc
 
 - **Distributed Cron Execution:** Run scheduled jobs across multiple machines via Salt
 - **WebSocket Communication:** Real-time job monitoring with heartbeats and output streaming
+- **Secure Configuration:** Uses environment variables (not command-line args) to hide sensitive data
 - **Maintenance Mode:** Global and per-machine maintenance controls
 - **Flexible Targeting:** Use Salt's powerful targeting system (glob, pcre, compound, etc.)
 - **HTTP API:** Control and monitor jobs via REST API
@@ -205,6 +206,7 @@ See `WEBSOCKET_ARCHITECTURE.md` for complete details.
 
 - **QUICKSTART.md** - Quick start guide for new installations
 - **WEBSOCKET_ARCHITECTURE.md** - Complete WebSocket architecture documentation
+- **ENV_VARS_APPROACH.md** - Why we use environment variables (security benefits)
 - **REFACTORING_SUMMARY.md** - Summary of all changes and features
 - **MIGRATION_CHECKLIST.md** - Step-by-step migration guide
 - **IMPLEMENTATION_SUMMARY.md** - Complete implementation details
