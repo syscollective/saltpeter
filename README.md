@@ -33,7 +33,7 @@ Description=Saltpeter distributed scheduled execution tool
 [Service]
 User=root
 #WorkingDirectory=/opt/saltpeter/
-ExecStart=/usr/local/bin/saltpeter -a -p 8888 -w 8889 --websocket-host 0.0.0.0
+ExecStart=/usr/local/bin/saltpeter -a -p 8888 -w 8889 --websocket-host 0.0.0.0 --wrapper-path /usr/local/bin/sp_wrapper.py
 Restart=on-failure
 KillSignal=SIGTERM
 SyslogIdentifier=saltpeter
@@ -50,11 +50,11 @@ mkdir /var/log/saltpeter
 **Deploy the wrapper script to all minions:**
 ```
 # Copy wrapper to Salt file server
-sudo cp /path/to/saltpeter/wrapper.py /srv/salt/saltpeter/wrapper.py
+sudo cp /path/to/saltpeter/saltpeter/wrapper.py /srv/salt/saltpeter/sp_wrapper.py
 
-# Deploy to minions
-salt '*' cp.get_file salt://saltpeter/wrapper.py /usr/local/bin/saltpeter-wrapper.py
-salt '*' cmd.run 'chmod +x /usr/local/bin/saltpeter-wrapper.py'
+# Deploy to minions at the default location
+salt '*' cp.get_file salt://saltpeter/sp_wrapper.py /usr/local/bin/sp_wrapper.py
+salt '*' cmd.run 'chmod +x /usr/local/bin/sp_wrapper.py'
 ```
 
 **Configure firewall:**
@@ -136,6 +136,11 @@ example:
 # Timeout in seconds; job will be marked as timed out if it exceeds this duration
 # With WebSocket mode, timeout is enforced at the Saltpeter level
 
+    wrapper_path: '/usr/local/bin/sp_wrapper.py'
+# Optional: Path to the wrapper script on minions
+# If not specified, uses the default from --wrapper-path argument (default: /usr/local/bin/sp_wrapper.py)
+# Useful if you need different wrapper versions for different jobs
+
 ```
 
 #### Maintenance Mode Configuration:
@@ -174,6 +179,7 @@ Options:
   -p, --port PORT          HTTP API port (default: 8888)
   -w, --websocket-port     WebSocket server port (default: 8889)
   --websocket-host HOST    WebSocket server host (default: 0.0.0.0)
+  --wrapper-path PATH      Default wrapper script path on minions (default: /usr/local/bin/sp_wrapper.py)
   -e, --elasticsearch URL  Elasticsearch host for logging
   -o, --opensearch URL     OpenSearch host for logging
   -i, --index NAME         Index name for ES/OpenSearch (default: saltpeter)

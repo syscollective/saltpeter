@@ -30,7 +30,7 @@ python3 -c "import websockets; print('WebSocket support: OK')"
 
 ```bash
 cd /home/marin/syscollective/saltpeter
-python3 -m saltpeter.main -w 8889 --websocket-host 0.0.0.0 -a
+python3 -m saltpeter.main -w 8889 --websocket-host 0.0.0.0 --wrapper-path /usr/local/bin/sp_wrapper.py -a
 ```
 
 You should see:
@@ -71,12 +71,12 @@ All tests completed successfully!
 
 ```bash
 # Copy wrapper to a shared location
-sudo cp saltpeter/wrapper.py /usr/local/bin/saltpeter-wrapper.py
-sudo chmod +x /usr/local/bin/saltpeter-wrapper.py
+sudo cp saltpeter/wrapper.py /usr/local/bin/sp_wrapper.py
+sudo chmod +x /usr/local/bin/sp_wrapper.py
 
 # Deploy to all minions via Salt
-salt '*' cp.get_file salt://saltpeter/wrapper.py /usr/local/bin/saltpeter-wrapper.py
-salt '*' cmd.run 'chmod +x /usr/local/bin/saltpeter-wrapper.py'
+salt '*' cp.get_file salt://saltpeter/sp_wrapper.py /usr/local/bin/sp_wrapper.py
+salt '*' cmd.run 'chmod +x /usr/local/bin/sp_wrapper.py'
 ```
 
 ### Option 2: Via Salt File Server
@@ -84,14 +84,14 @@ salt '*' cmd.run 'chmod +x /usr/local/bin/saltpeter-wrapper.py'
 ```bash
 # 1. Copy to Salt file server
 sudo mkdir -p /srv/salt/saltpeter
-sudo cp saltpeter/wrapper.py /srv/salt/saltpeter/wrapper.py
+sudo cp saltpeter/wrapper.py /srv/salt/saltpeter/sp_wrapper.py
 
 # 2. Deploy to minions
-salt '*' cp.get_file salt://saltpeter/wrapper.py /usr/local/bin/saltpeter-wrapper.py
-salt '*' cmd.run 'chmod +x /usr/local/bin/saltpeter-wrapper.py'
+salt '*' cp.get_file salt://saltpeter/sp_wrapper.py /usr/local/bin/sp_wrapper.py
+salt '*' cmd.run 'chmod +x /usr/local/bin/sp_wrapper.py'
 
 # 3. Verify
-salt '*' cmd.run 'ls -l /usr/local/bin/saltpeter-wrapper.py'
+salt '*' cmd.run 'ls -l /usr/local/bin/sp_wrapper.py'
 ```
 
 ## Configuring Maintenance Mode
@@ -209,13 +209,13 @@ sudo firewall-cmd --reload
 **Verify wrapper location:**
 ```bash
 salt '*' cmd.run 'which python3'
-salt '*' cmd.run 'ls -l /usr/local/bin/saltpeter-wrapper.py'
+salt '*' cmd.run 'ls -l /usr/local/bin/sp_wrapper.py'
 ```
 
 **Test wrapper manually:**
 ```bash
 # On a minion, set environment variables and run
-salt 'minion1' cmd.run 'export SP_WEBSOCKET_URL=ws://saltpeter:8889 SP_JOB_NAME=test SP_JOB_INSTANCE=test_inst SP_COMMAND="echo hello" && python3 /usr/local/bin/saltpeter-wrapper.py' shell=/bin/bash
+salt 'minion1' cmd.run 'export SP_WEBSOCKET_URL=ws://saltpeter:8889 SP_JOB_NAME=test SP_JOB_INSTANCE=test_inst SP_COMMAND="echo hello" && python3 /usr/local/bin/sp_wrapper.py' shell=/bin/bash
 ```
 
 ### Jobs Not Reporting Back

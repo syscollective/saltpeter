@@ -343,8 +343,8 @@ def run(name, data, procname, running, state, commands, maintenance):
     targets = data['targets']
     target_type = data['target_type']
     
-    # Get wrapper script path
-    wrapper_path = os.path.join(os.path.dirname(__file__), 'wrapper.py')
+    # Get wrapper script path - use job-specific path if provided, otherwise use default
+    wrapper_path = data.get('wrapper_path', args.wrapper_path)
     
     # Prepare environment variables for the wrapper
     websocket_url = f"ws://{args.websocket_host}:{args.websocket_port}"
@@ -629,6 +629,9 @@ def main():
 
     parser.add_argument('--websocket-host', default='0.0.0.0',\
             help='WebSocket server host')
+
+    parser.add_argument('--wrapper-path', default='/usr/local/bin/sp_wrapper.py',\
+            help='Default path to wrapper script on minions (default: /usr/local/bin/sp_wrapper.py)')
 
     parser.add_argument('-e', '--elasticsearch', default='',\
             help='Elasticsearch host')

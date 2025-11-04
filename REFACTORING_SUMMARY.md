@@ -295,8 +295,8 @@ This allows gradual migration or fallback if needed.
 
 4. **Deploy wrapper script to minions:**
    ```bash
-   salt '*' cp.get_file salt://saltpeter/wrapper.py /usr/local/bin/wrapper.py
-   salt '*' cmd.run 'chmod +x /usr/local/bin/wrapper.py'
+   salt '*' cp.get_file salt://saltpeter/wrapper.py /usr/local/bin/sp_wrapper.py
+   salt '*' cmd.run 'chmod +x /usr/local/bin/sp_wrapper.py'
    ```
 
 5. **Configure firewall:**

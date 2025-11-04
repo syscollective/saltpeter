@@ -87,7 +87,7 @@ wrapper_env = {
     'SP_COMMAND': data['command'],
 }
 
-cmdargs = ['python3 /usr/local/bin/saltpeter-wrapper.py']
+cmdargs = ['python3 /usr/local/bin/sp_wrapper.py']
 cmdargs.append('env=' + str(wrapper_env))
 
 job = salt.run_job(targets, 'cmd.run', cmdargs, tgt_type='list')
@@ -203,14 +203,14 @@ export SP_JOB_INSTANCE="test_instance_$(date +%s)"
 export SP_COMMAND="echo 'Testing wrapper'; sleep 5; echo 'Done'"
 
 # Run wrapper
-python3 /usr/local/bin/saltpeter-wrapper.py
+python3 /usr/local/bin/sp_wrapper.py
 ```
 
 ### Test via Salt
 
 ```bash
 # Test on a single minion
-salt 'minion1' cmd.run 'python3 /usr/local/bin/saltpeter-wrapper.py' \
+salt 'minion1' cmd.run 'python3 /usr/local/bin/sp_wrapper.py' \
   env='{
     "SP_WEBSOCKET_URL": "ws://saltpeter:8889",
     "SP_JOB_NAME": "test",

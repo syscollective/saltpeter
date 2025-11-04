@@ -95,11 +95,11 @@ wrapper_env = {
     'SP_JOB_INSTANCE': procname,
     'SP_COMMAND': data['command'],
 }
-cmdargs = ['python3 /usr/local/bin/saltpeter-wrapper.py']
+cmdargs = ['python3 /usr/local/bin/sp_wrapper.py']
 cmdargs.append('env=' + str(wrapper_env))
 
 # Visible in ps:
-python3 /usr/local/bin/saltpeter-wrapper.py
+python3 /usr/local/bin/sp_wrapper.py
                    ^^^^^^^
               CLEAN - no sensitive data!
 ```
@@ -113,7 +113,7 @@ export SP_JOB_NAME="test_job"
 export SP_JOB_INSTANCE="test_$(date +%s)"
 export SP_COMMAND="echo 'Hello World'; sleep 5"
 
-python3 /usr/local/bin/saltpeter-wrapper.py
+python3 /usr/local/bin/sp_wrapper.py
 ```
 
 ## Migration Impact
@@ -151,7 +151,7 @@ root  12345  python3 wrapper.py ... 'mysqldump -u root -pMyPassword123 ...'
 **Secure (new approach):**
 ```bash
 $ ps aux | grep wrapper
-root  12345  python3 /usr/local/bin/saltpeter-wrapper.py
+root  12345  python3 /usr/local/bin/sp_wrapper.py
                                            ^^^^^^^
                               Clean! Password hidden in environment
 ```

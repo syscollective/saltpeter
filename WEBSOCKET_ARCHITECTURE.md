@@ -45,7 +45,7 @@ export SP_CWD="/backup"
 export SP_USER="backup"
 export SP_TIMEOUT="3600"
 
-python3 /usr/local/bin/saltpeter-wrapper.py
+python3 /usr/local/bin/sp_wrapper.py
 ```
 
 **Why Environment Variables?**
@@ -281,7 +281,7 @@ grep "WebSocket" /var/log/saltpeter/*.log
 
 **Verify wrapper script location:**
 ```bash
-salt '*' cmd.run 'ls -l /usr/local/bin/saltpeter-wrapper.py'
+salt '*' cmd.run 'ls -l /usr/local/bin/sp_wrapper.py'
 ```
 
 **Test wrapper manually:**
@@ -293,7 +293,7 @@ export SP_JOB_INSTANCE="test_instance"
 export SP_COMMAND="echo hello"
 
 # Run wrapper
-python3 /usr/local/bin/saltpeter-wrapper.py
+python3 /usr/local/bin/sp_wrapper.py
 ```
 
 **Check WebSocket connections:**

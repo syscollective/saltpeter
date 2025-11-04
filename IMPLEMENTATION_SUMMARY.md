@@ -228,7 +228,7 @@ Must deploy `saltpeter/wrapper.py` to all Salt minions.
 3. Manual deployment to standard location
 
 **Recommended Location:**
-- `/usr/local/bin/saltpeter-wrapper.py`
+- `/usr/local/bin/sp_wrapper.py`
 
 ### 4. Firewall Configuration
 
@@ -305,7 +305,7 @@ grep -i maintenance /var/log/saltpeter/*.log
 
 2. **Deploy wrapper:**
    ```bash
-   salt '*' cp.get_file salt://saltpeter/wrapper.py /usr/local/bin/saltpeter-wrapper.py
+   salt '*' cp.get_file salt://saltpeter/wrapper.py /usr/local/bin/sp_wrapper.py
    ```
 
 3. **Configure firewall:**

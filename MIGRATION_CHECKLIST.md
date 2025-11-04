@@ -18,7 +18,7 @@ Use this checklist to migrate from the old Salt-based Saltpeter to the new WebSo
 
 - [ ] **Verify Python version**
   ```bash
-  python3 --version  # Should be 3.7+ (tested with 3.11)
+  python3 --version  # Should be 3.6+
   ```
 
 - [ ] **Check available disk space**
@@ -71,19 +71,19 @@ Choose one deployment method:
 - [ ] **Copy wrapper to Salt file server**
   ```bash
   sudo mkdir -p /srv/salt/saltpeter
-  sudo cp saltpeter/wrapper.py /srv/salt/saltpeter/wrapper.py
+  sudo cp saltpeter/wrapper.py /srv/salt/saltpeter/sp_wrapper.py
   ```
 
 - [ ] **Deploy to all minions**
   ```bash
-  salt '*' cp.get_file salt://saltpeter/wrapper.py /usr/local/bin/saltpeter-wrapper.py
-  salt '*' cmd.run 'chmod +x /usr/local/bin/saltpeter-wrapper.py'
+  salt '*' cp.get_file salt://saltpeter/sp_wrapper.py /usr/local/bin/sp_wrapper.py
+  salt '*' cmd.run 'chmod +x /usr/local/bin/sp_wrapper.py'
   ```
 
 - [ ] **Verify deployment**
   ```bash
-  salt '*' cmd.run 'ls -l /usr/local/bin/saltpeter-wrapper.py'
-  salt '*' cmd.run 'head -1 /usr/local/bin/saltpeter-wrapper.py'
+  salt '*' cmd.run 'ls -l /usr/local/bin/sp_wrapper.py'
+  salt '*' cmd.run 'head -1 /usr/local/bin/sp_wrapper.py'
   ```
 
 ### Option B: Package Installation
