@@ -670,7 +670,7 @@ def main():
     config = manager.dict()
     state = manager.dict()
     global statelocks
-    statelocks = {}
+    statelocks = manager.dict()
     commands = manager.list()
     bad_crons = manager.list()
     timeline = manager.dict()
