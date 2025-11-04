@@ -1,0 +1,42 @@
+# Saltpeter Maintenance Configuration Example
+# 
+# This demonstrates the saltpeter_maintenance special configuration key
+# that controls maintenance mode and machine exclusions
+
+# Special maintenance configuration
+# This will NOT be interpreted as a regular cron job
+saltpeter_maintenance:
+  # global: If true, no new crons will be started
+  # Already running crons will be allowed to finish
+  # When no crons are running, Saltpeter will exit
+  global: false
+  
+  # machines: List of machines to exclude from all cron jobs
+  # These machines will be automatically removed from target lists
+  machines:
+    - server01.example.com
+    - server02.example.com
+
+# Regular cron job examples below
+
+backup_job:
+  targets: '*'
+  target_type: 'glob'
+  command: '/usr/local/bin/backup.sh'
+  timeout: 3600
+  min: '0'
+  hour: '2'
+  dom: '*'
+  mon: '*'
+  dow: '*'
+
+cleanup_job:
+  targets: 'web*'
+  target_type: 'glob'
+  command: '/usr/local/bin/cleanup.sh'
+  timeout: 1800
+  min: '30'
+  hour: '3'
+  dom: '*'
+  mon: '*'
+  dow: '*'

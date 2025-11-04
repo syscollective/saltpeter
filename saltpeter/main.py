@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 from saltpeter import api, version
+from saltpeter import websocket_server
 import json
 import os
 import argparse
@@ -119,8 +120,79 @@ def processstart(chunk,name,group,procname,state):
                 time=starttime, machine=target)
 
 
+def processresults_websocket(name, group, procname, running, state, targets, timeout=None):
+    """
+    Wait for WebSocket-based job results with optional timeout
+    This replaces the old Salt-based result polling
+    """
+    start_time = time.time()
+    check_interval = 1  # Check every second
+    
+    # Default timeout of 1 hour if not specified
+    if timeout is None:
+        timeout = 3600
+    
+    pending_targets = set(targets)
+    
+    while pending_targets:
+        # Check if timeout exceeded
+        if time.time() - start_time > timeout:
+            print(f"WebSocket: Timeout waiting for results from {pending_targets}", flush=True)
+            
+            # Mark remaining targets as timed out
+            now = datetime.now(timezone.utc)
+            with statelocks[name]:
+                tmpstate = state[name].copy()
+                if 'results' not in tmpstate:
+                    tmpstate['results'] = {}
+                
+                for tgt in pending_targets:
+                    if tgt in tmpstate['results']:
+                        starttime = tmpstate['results'][tgt].get('starttime', now)
+                    else:
+                        starttime = tmpstate.get('last_run', now)
+                    
+                    tmpstate['results'][tgt] = {
+                        'ret': "Job exceeded timeout",
+                        'retcode': 124,  # Timeout exit code
+                        'starttime': starttime,
+                        'endtime': now
+                    }
+                
+                state[name] = tmpstate
+            
+            # Log timeout for remaining targets
+            for tgt in pending_targets:
+                log(what='machine_result', cron=name, group=group, instance=procname,
+                    machine=tgt, code=124, out="Job exceeded timeout", time=now)
+            
+            break
+        
+        # Check which targets have completed
+        with statelocks[name]:
+            if name in state and 'results' in state[name]:
+                for tgt in list(pending_targets):
+                    if tgt in state[name]['results']:
+                        result = state[name]['results'][tgt]
+                        # Check if this target has completed (has endtime)
+                        if result.get('endtime') and result['endtime'] != '':
+                            pending_targets.remove(tgt)
+        
+        # If all targets completed, exit
+        if not pending_targets:
+            break
+        
+        # Wait before next check
+        time.sleep(check_interval)
+    
+    print(f"WebSocket: All results received for {procname}", flush=True)
+
 
 def processresults(client,commands,job,name,group,procname,running,state,targets):
+    """
+    Legacy function for Salt-based job monitoring
+    Kept for backwards compatibility or fallback
+    """
 
     import salt.runner
     opts = salt.config.master_config('/etc/salt/master')
@@ -270,15 +342,28 @@ def run(name, data, procname, running, state, commands, maintenance):
     salt = salt.client.LocalClient()
     targets = data['targets']
     target_type = data['target_type']
-    cmdargs = [data['command']]
-    env = {'SP_JOB_NAME': name, 'SP_JOB_INSTANCE_NAME': procname}
-    cmdargs.append('env=' + str(env))
-    if 'cwd' in data:
-        cmdargs.append('cwd=' + data['cwd'])
-    if 'user' in data:
-        cmdargs.append('runas=' + data['user'])
-    if 'timeout' in data:
-        cmdargs.append('timeout=' + str(data['timeout']))
+    
+    # Get wrapper script path
+    wrapper_path = os.path.join(os.path.dirname(__file__), 'wrapper.py')
+    
+    # Prepare wrapper command arguments
+    websocket_url = f"ws://{args.websocket_host}:{args.websocket_port}"
+    command = data['command']
+    cwd = data.get('cwd', '')
+    user = data.get('user', '')
+    
+    # Build the Salt command to run the wrapper
+    # The wrapper will handle the actual command execution
+    wrapper_cmd = f"python3 {wrapper_path} {websocket_url} {name} {procname} $(hostname) '{command}'"
+    if cwd:
+        wrapper_cmd += f" '{cwd}'"
+    if user:
+        wrapper_cmd += f" '{user}'"
+    
+    cmdargs = [wrapper_cmd]
+    
+    # Note: timeout is now handled by the WebSocket monitoring
+    timeout = data.get('timeout', 3600)  # Default 1 hour
 
     now = datetime.now(timezone.utc)
     running[procname] = {'started': now, 'name': name, 'machines': []}
@@ -286,6 +371,7 @@ def run(name, data, procname, running, state, commands, maintenance):
         tmpstate = state[name].copy()
         tmpstate['last_run'] = now
         tmpstate['overlap'] = False
+        tmpstate['group'] = data['group']  # Store group for WebSocket handler
         state[name] = tmpstate
     log(cron=name, group=data['group'], what='start', instance=procname, time=now)
 
@@ -361,15 +447,16 @@ def run(name, data, procname, running, state, commands, maintenance):
             if len(chunk) == data['batch_size'] or count == len(targets_list):
 
                 try:
-                    # this should be nonblocking
+                    # Run wrapper script via Salt (non-blocking, returns immediately)
                     job = salt.run_job(chunk, 'cmd.run', cmdargs,
-                                       tgt_type='list', listen=True)
+                                       tgt_type='list', listen=False)
 
                     # update running list and state
                     running[procname] = {'started': now, 'name': name, 'machines': chunk}
                     processstart(chunk, name, data['group'], procname, state)
-                    # this should be blocking
-                    processresults(salt, commands, job, name, data['group'], procname, running, state, chunk)
+                    
+                    # Wait for WebSocket results instead of Salt results
+                    processresults_websocket(name, data['group'], procname, running, state, chunk, timeout)
                     chunk = []
                 except Exception as e:
                     print('Exception triggered in run() at "batch_size" condition', e, flush=True)
@@ -379,11 +466,13 @@ def run(name, data, procname, running, state, commands, maintenance):
         starttime = datetime.now(timezone.utc)
 
         try:
+            # Run wrapper script via Salt (non-blocking, returns immediately)
             job = salt.run_job(targets_list, 'cmd.run', cmdargs,
-                               tgt_type='list', listen=True)
+                               tgt_type='list', listen=False)
             processstart(targets_list, name, data['group'], procname, state)
-            # this should be blocking
-            processresults(salt, commands, job, name, data['group'], procname, running, state, targets_list)
+            
+            # Wait for WebSocket results instead of Salt results
+            processresults_websocket(name, data['group'], procname, running, state, targets_list, timeout)
 
         except Exception as e:
             print('Exception triggered in run()', e, flush=True)
@@ -492,13 +581,16 @@ def gettimeline(client, start_date, end_date, req_id, timeline, index_name):
                     new_timeline_content.append({'cron': cron, 'timestamp': timestamp, 'ret_code': ret_code, 'msg_type': msg_type, 'job_instance':job_instance })
                 result = client.scroll(scroll_id=scroll_id, scroll='1m')
 
-    except TransportError as e:
-        # Handle the transport error
-        print(f"TransportError occurred: {e}", flush=True)
+    except Exception as e:
+        # Handle transport or other errors
+        print(f"Error occurred during timeline search: {e}", flush=True)
     finally:
         if scroll_id:
             # Clear the scroll context when done
-            client.clear_scroll(scroll_id=scroll_id)
+            try:
+                client.clear_scroll(scroll_id=scroll_id)
+            except:
+                pass
     
     new_timeline_content = sorted(new_timeline_content, key=lambda x: x['timestamp'])
 
@@ -521,6 +613,12 @@ def main():
 
     parser.add_argument('-p', '--port', type=int, default=8888,\
             help='HTTP api port')
+
+    parser.add_argument('-w', '--websocket-port', type=int, default=8889,\
+            help='WebSocket server port for job communication')
+
+    parser.add_argument('--websocket-host', default='0.0.0.0',\
+            help='WebSocket server host')
 
     parser.add_argument('-e', '--elasticsearch', default='',\
             help='Elasticsearch host')
@@ -567,6 +665,15 @@ def main():
     #timeline['content'] = []
     #timeline['serial'] = datetime.now(timezone.utc).timestamp()
     #timeline['id'] = ''
+    
+    # Start the WebSocket server
+    ws_server = multiprocessing.Process(
+        target=websocket_server.start_websocket_server,
+        args=(args.websocket_host, args.websocket_port, state, running, statelocks, log),
+        name='websocket_server'
+    )
+    ws_server.start()
+    print(f"WebSocket server started on ws://{args.websocket_host}:{args.websocket_port}", flush=True)
     
     #start the api
     if args.api:
