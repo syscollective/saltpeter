@@ -86,7 +86,19 @@ class WebSocketJobServer:
                     elif msg_type == 'heartbeat':
                         if client_id in self.connections:
                             self.connections[client_id]['last_seen'] = timestamp
-                        print(f"WebSocket: Heartbeat from {client_id}", flush=True)
+                        
+                        # Update state with last heartbeat time so monitoring can detect timeouts
+                        if job_name in self.state and self.statelocks and job_name in self.statelocks:
+                            with self.statelocks[job_name]:
+                                tmpstate = self.state[job_name].copy()
+                                if 'results' not in tmpstate:
+                                    tmpstate['results'] = {}
+                                if machine not in tmpstate['results']:
+                                    tmpstate['results'][machine] = {}
+                                tmpstate['results'][machine]['last_heartbeat'] = timestamp
+                                self.state[job_name] = tmpstate
+                        
+                        print(f"WebSocket: Heartbeat from {client_id} at {timestamp}", flush=True)
                         
                     elif msg_type == 'output':
                         stream = data.get('stream', 'stdout')

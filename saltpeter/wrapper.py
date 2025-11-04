@@ -90,26 +90,57 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                     data = json.loads(message)
                     
                     if data.get('type') == 'kill':
-                        print(f"Received kill signal from server", file=sys.stderr)
                         killed = True
+                        
+                        # Send acknowledgment
+                        try:
+                            await websocket.send(json.dumps({
+                                'type': 'output',
+                                'job_name': job_name,
+                                'job_instance': job_instance,
+                                'machine': machine_id,
+                                'stream': 'stderr',
+                                'data': '[WRAPPER] Received kill signal\n',
+                                'timestamp': datetime.now(timezone.utc).isoformat()
+                            }))
+                        except:
+                            pass
                         
                         # Terminate the process
                         if process and process.poll() is None:
                             import signal
-                            print(f"Terminating process {process.pid}", file=sys.stderr)
+                            
+                            # Close the pipes before terminating to avoid blocking on communicate()
+                            try:
+                                if process.stdout:
+                                    process.stdout.close()
+                                if process.stderr:
+                                    process.stderr.close()
+                            except:
+                                pass
+                            
                             process.terminate()
                             
                             # Give it 5 seconds to terminate gracefully
                             try:
                                 process.wait(timeout=5)
-                                print(f"Process terminated gracefully", file=sys.stderr)
                             except subprocess.TimeoutExpired:
-                                print(f"Process didn't terminate, killing it", file=sys.stderr)
                                 process.kill()
                                 process.wait()
-                                print(f"Process killed forcefully", file=sys.stderr)
-                        else:
-                            print(f"Process already terminated (retcode: {process.poll()})", file=sys.stderr)
+                        
+                        # Send debug message before breaking
+                        try:
+                            await websocket.send(json.dumps({
+                                'type': 'output',
+                                'job_name': job_name,
+                                'job_instance': job_instance,
+                                'machine': machine_id,
+                                'stream': 'stderr',
+                                'data': '[WRAPPER] Process terminated, preparing to send completion\n',
+                                'timestamp': datetime.now(timezone.utc).isoformat()
+                            }))
+                        except:
+                            pass
                         
                         break
                         
@@ -163,6 +194,20 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                     break
                 
                 await asyncio.sleep(0.05)
+            
+            # Send debug message that we've exited the loop
+            try:
+                await websocket.send(json.dumps({
+                    'type': 'output',
+                    'job_name': job_name,
+                    'job_instance': job_instance,
+                    'machine': machine_id,
+                    'stream': 'stderr',
+                    'data': f'[WRAPPER] Exited main loop, killed={killed}, retcode={process.poll()}\n',
+                    'timestamp': datetime.now(timezone.utc).isoformat()
+                }))
+            except:
+                pass
             
             # Read any remaining output (skip if process was killed, pipes are closed)
             stdout_remainder = None
@@ -218,10 +263,19 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                 # Use special return code for killed jobs
                 if final_retcode is None or final_retcode >= 0:
                     final_retcode = 143  # Standard SIGTERM exit code
-                print(f"Job was killed, using retcode {final_retcode}", file=sys.stderr)
+            
+            # Send debug message before completion
+            await websocket.send(json.dumps({
+                'type': 'output',
+                'job_name': job_name,
+                'job_instance': job_instance,
+                'machine': machine_id,
+                'stream': 'stderr',
+                'data': f'[WRAPPER] About to send completion message, retcode={final_retcode}\n',
+                'timestamp': datetime.now(timezone.utc).isoformat()
+            }))
             
             # Send completion message
-            print(f"Sending completion message: retcode={final_retcode}", file=sys.stderr)
             await websocket.send(json.dumps({
                 'type': 'complete',
                 'job_name': job_name,
@@ -231,7 +285,17 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                 'output': ''.join(output_buffer),
                 'timestamp': datetime.now(timezone.utc).isoformat()
             }))
-            print(f"Completion message sent successfully", file=sys.stderr)
+            
+            # Send debug message after completion
+            await websocket.send(json.dumps({
+                'type': 'output',
+                'job_name': job_name,
+                'job_instance': job_instance,
+                'machine': machine_id,
+                'stream': 'stderr',
+                'data': '[WRAPPER] Completion message sent successfully\n',
+                'timestamp': datetime.now(timezone.utc).isoformat()
+            }))
             
     except Exception as e:
         print(f"Error in WebSocket communication: {e}", file=sys.stderr)

@@ -186,9 +186,31 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                     if tgt in state[name]['results']:
                         result = state[name]['results'][tgt]
                         
-                        # Update last heartbeat time if we have activity
-                        if result.get('ret') or result.get('starttime'):
-                            last_heartbeat[tgt] = time.time()
+                        # Update last heartbeat time from state (set by WebSocket server)
+                        if 'last_heartbeat' in result and result['last_heartbeat']:
+                            # Convert ISO timestamp to Unix timestamp
+                            try:
+                                hb_time = result['last_heartbeat']
+                                if isinstance(hb_time, str):
+                                    hb_time = datetime.fromisoformat(hb_time)
+                                if isinstance(hb_time, datetime):
+                                    last_heartbeat[tgt] = hb_time.timestamp()
+                                else:
+                                    # Assume it's already a timestamp
+                                    last_heartbeat[tgt] = float(hb_time)
+                            except:
+                                pass
+                        
+                        # Initialize heartbeat timer on first check if we have a starttime
+                        if tgt not in last_heartbeat and result.get('starttime'):
+                            try:
+                                start = result['starttime']
+                                if isinstance(start, str):
+                                    start = datetime.fromisoformat(start)
+                                if isinstance(start, datetime):
+                                    last_heartbeat[tgt] = start.timestamp()
+                            except:
+                                last_heartbeat[tgt] = time.time()
                         
                         # Check if this target has completed (has endtime)
                         if result.get('endtime') and result['endtime'] != '':
