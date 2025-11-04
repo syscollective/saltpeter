@@ -10,14 +10,16 @@ from datetime import datetime, timezone
 import multiprocessing
 
 class WebSocketJobServer:
-    def __init__(self, host='0.0.0.0', port=8889, state=None, running=None, statelocks=None, log_func=None):
+    def __init__(self, host='0.0.0.0', port=8889, state=None, running=None, statelocks=None, log_func=None, commands=None):
         self.host = host
         self.port = port
         self.state = state
         self.running = running
         self.statelocks = statelocks
         self.log_func = log_func
+        self.commands = commands  # Shared command queue from main
         self.connections = {}  # Track active connections by job_instance + machine
+        self.command_check_task = None  # Background task for checking kill commands
         
     async def handle_client(self, websocket):
         """
@@ -204,6 +206,10 @@ class WebSocketJobServer:
                         if client_id in self.connections:
                             del self.connections[client_id]
                         
+                    elif msg_type == 'killed':
+                        # Wrapper acknowledges it was killed
+                        print(f"WebSocket: Wrapper {client_id} acknowledged kill signal", flush=True)
+                        
                     elif msg_type == 'error':
                         error_msg = data.get('error', 'Unknown error')
                         print(f"WebSocket: Error from {client_id}: {error_msg}", flush=True)
@@ -240,18 +246,65 @@ class WebSocketJobServer:
                 print(f"WebSocket: Cleaning up connection - {client_id}", flush=True)
                 del self.connections[client_id]
     
+    async def check_commands(self):
+        """Background task to check for kill commands and send them to wrappers"""
+        while True:
+            try:
+                if self.commands:
+                    # Check for kill commands
+                    for cmd in list(self.commands):
+                        if 'killcron' in cmd:
+                            job_name = cmd['killcron']
+                            print(f"WebSocket: Kill command received for job {job_name}", flush=True)
+                            
+                            # Find all connections for this job and send kill signal
+                            killed_count = 0
+                            for client_id, conn_info in list(self.connections.items()):
+                                if conn_info['job_name'] == job_name:
+                                    try:
+                                        await conn_info['websocket'].send(json.dumps({
+                                            'type': 'kill',
+                                            'job_name': job_name,
+                                            'job_instance': conn_info['job_instance'],
+                                            'machine': conn_info['machine'],
+                                            'timestamp': datetime.now(timezone.utc).isoformat()
+                                        }))
+                                        killed_count += 1
+                                        print(f"WebSocket: Sent kill signal to {client_id}", flush=True)
+                                    except Exception as e:
+                                        print(f"WebSocket: Error sending kill to {client_id}: {e}", flush=True)
+                            
+                            if killed_count > 0:
+                                print(f"WebSocket: Sent kill signal to {killed_count} wrapper(s) for job {job_name}", flush=True)
+                            else:
+                                print(f"WebSocket: No active connections found for job {job_name}", flush=True)
+                            
+                            # Remove command from queue
+                            self.commands.remove(cmd)
+                
+                await asyncio.sleep(0.5)  # Check every 500ms
+            except Exception as e:
+                print(f"WebSocket: Error in command checker: {e}", flush=True)
+                await asyncio.sleep(1)
+    
     async def start_server(self):
         """Start the WebSocket server"""
         async with websockets.serve(self.handle_client, self.host, self.port):
             print(f"WebSocket server started on ws://{self.host}:{self.port}", flush=True)
+            
+            # Start command checking task if we have a command queue
+            if self.commands is not None:
+                self.command_check_task = asyncio.create_task(self.check_commands())
+                print(f"WebSocket: Command checker started", flush=True)
+            
             await asyncio.Future()  # Run forever
     
     def run(self):
         """Run the WebSocket server (blocking)"""
         asyncio.run(self.start_server())
 
-def start_websocket_server(host, port, state, running, statelocks, log_func):
+def start_websocket_server(host, port, state, running, statelocks, log_func, commands=None):
     """Start WebSocket server in a separate process"""
     server = WebSocketJobServer(host=host, port=port, state=state, running=running, 
-                                statelocks=statelocks, log_func=log_func)
+                                statelocks=statelocks, log_func=log_func, commands=commands)
     server.run()

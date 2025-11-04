@@ -30,7 +30,9 @@ from datetime import datetime, timezone
 async def run_command_and_stream(websocket_url, job_name, job_instance, machine_id, command, cwd=None, user=None, timeout=None):
     """
     Run command in subprocess and stream output via WebSocket
+    Also listens for kill commands from the server
     """
+    process = None
     try:
         async with websockets.connect(websocket_url) as websocket:
             # Send initial connection message
@@ -74,11 +76,46 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
             
             last_heartbeat = time.time()
             output_buffer = []
+            killed = False
             
-            # Stream output and send heartbeats
+            # Stream output and send heartbeats while listening for kill commands
             while True:
                 # Check if process has finished
                 retcode = process.poll()
+                
+                # Check for incoming messages from server (non-blocking)
+                try:
+                    # Use wait_for with short timeout to not block
+                    message = await asyncio.wait_for(websocket.recv(), timeout=0.1)
+                    data = json.loads(message)
+                    
+                    if data.get('type') == 'kill':
+                        print(f"Received kill signal from server", file=sys.stderr)
+                        killed = True
+                        
+                        # Terminate the process
+                        if process and process.poll() is None:
+                            import signal
+                            print(f"Terminating process {process.pid}", file=sys.stderr)
+                            process.terminate()
+                            
+                            # Give it 5 seconds to terminate gracefully
+                            try:
+                                process.wait(timeout=5)
+                            except subprocess.TimeoutExpired:
+                                print(f"Process didn't terminate, killing it", file=sys.stderr)
+                                process.kill()
+                                process.wait()
+                        
+                        break
+                        
+                except asyncio.TimeoutError:
+                    # No message received, continue normally
+                    pass
+                except json.JSONDecodeError:
+                    print(f"Received invalid JSON from server", file=sys.stderr)
+                except Exception as e:
+                    print(f"Error checking for messages: {e}", file=sys.stderr)
                 
                 # Read available output
                 try:
@@ -121,7 +158,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                 if retcode is not None:
                     break
                 
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0.05)
             
             # Read any remaining output
             stdout_remainder, stderr_remainder = process.communicate()
@@ -152,13 +189,32 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                         'timestamp': datetime.now(timezone.utc).isoformat()
                     }))
             
+            # Determine final return code
+            final_retcode = process.returncode
+            if killed:
+                # Add message to output about being killed
+                kill_msg = "\n[Job terminated by user request]\n"
+                output_buffer.append(kill_msg)
+                await websocket.send(json.dumps({
+                    'type': 'output',
+                    'job_name': job_name,
+                    'job_instance': job_instance,
+                    'machine': machine_id,
+                    'stream': 'stderr',
+                    'data': kill_msg,
+                    'timestamp': datetime.now(timezone.utc).isoformat()
+                }))
+                # Use special return code for killed jobs
+                if final_retcode is None or final_retcode >= 0:
+                    final_retcode = 143  # Standard SIGTERM exit code
+            
             # Send completion message
             await websocket.send(json.dumps({
                 'type': 'complete',
                 'job_name': job_name,
                 'job_instance': job_instance,
                 'machine': machine_id,
-                'retcode': retcode,
+                'retcode': final_retcode,
                 'output': ''.join(output_buffer),
                 'timestamp': datetime.now(timezone.utc).isoformat()
             }))
@@ -178,6 +234,17 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                 }))
         except:
             pass
+        finally:
+            # Make sure process is terminated if it's still running
+            if process and process.poll() is None:
+                try:
+                    process.terminate()
+                    process.wait(timeout=5)
+                except:
+                    try:
+                        process.kill()
+                    except:
+                        pass
 
 def main():
     # Read configuration from environment variables
