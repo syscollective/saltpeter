@@ -185,6 +185,10 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
         # Wait before next check
         time.sleep(check_interval)
     
+    # Clean up running state when all targets are done
+    if procname in running:
+        del running[procname]
+    
     print(f"WebSocket: All results received for {procname}", flush=True)
 
 
@@ -368,8 +372,7 @@ def run(name, data, procname, running, state, commands, maintenance):
     
     # Build the Salt command to run the wrapper
     # The wrapper will read configuration from environment variables
-    wrapper_cmd = f"python3 {wrapper_path}"
-    cmdargs = [wrapper_cmd]
+    cmdargs = [wrapper_path]
     cmdargs.append('env=' + str(wrapper_env))
     
     # Note: timeout is now handled by the WebSocket monitoring

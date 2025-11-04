@@ -212,12 +212,24 @@ def main():
         except ValueError:
             print(f"Warning: Invalid timeout value '{timeout_str}', ignoring", file=sys.stderr)
     
+    # Fork to background so Salt sees immediate success
+    pid = os.fork()
+    if pid > 0:
+        # Parent process - return success to Salt immediately
+        print("Wrapper started successfully")
+        sys.exit(0)
+    
+    # Child process - run the command asynchronously
+    # Detach from parent
+    os.setsid()
+    
+    # Close standard file descriptors to detach from Salt
+    sys.stdout.close()
+    sys.stderr.close()
+    sys.stdin.close()
+    
     # Run the command asynchronously
     asyncio.run(run_command_and_stream(websocket_url, job_name, job_instance, machine_id, command, cwd, user, timeout))
-    
-    # Return success immediately to Salt
-    print("Wrapper started successfully")
-    sys.exit(0)
 
 if __name__ == "__main__":
     main()

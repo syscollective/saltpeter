@@ -89,6 +89,20 @@ class WebSocketJobServer:
                             self.connections[client_id]['output_buffer'].append(output_data)
                             self.connections[client_id]['last_seen'] = timestamp
                         
+                        # Update state with accumulated output
+                        if job_name in self.state and self.statelocks and job_name in self.statelocks:
+                            with self.statelocks[job_name]:
+                                tmpstate = self.state[job_name].copy()
+                                if 'results' not in tmpstate:
+                                    tmpstate['results'] = {}
+                                if machine not in tmpstate['results']:
+                                    tmpstate['results'][machine] = {'ret': '', 'retcode': '', 'starttime': timestamp, 'endtime': ''}
+                                
+                                # Append output to existing output
+                                current_output = tmpstate['results'][machine].get('ret', '')
+                                tmpstate['results'][machine]['ret'] = current_output + output_data
+                                self.state[job_name] = tmpstate
+                        
                         # Optionally log output in real-time
                         print(f"WebSocket: Output from {machine} ({stream}): {output_data.strip()}", flush=True)
                         
@@ -96,14 +110,16 @@ class WebSocketJobServer:
                         retcode = data.get('retcode', -1)
                         output = data.get('output', '')
                         
-                        # Get group info from running dict
+                        # Get accumulated output from buffer if available
+                        if client_id in self.connections and self.connections[client_id]['output_buffer']:
+                            output = ''.join(self.connections[client_id]['output_buffer'])
+                        
+                        # Get group info from running dict or state
                         group = 'unknown'
                         if job_instance in self.running:
-                            # Extract group from state or find it
+                            # Try to get group from state
                             if job_name in self.state:
-                                for cron_name, cron_state in self.state.items():
-                                    if cron_name == job_name and 'group' in cron_state:
-                                        group = cron_state.get('group', 'unknown')
+                                group = self.state[job_name].get('group', 'unknown')
                         
                         # Update state with final result
                         if job_name in self.state and self.statelocks and job_name in self.statelocks:
@@ -112,7 +128,10 @@ class WebSocketJobServer:
                                 if 'results' not in tmpstate:
                                     tmpstate['results'] = {}
                                 
-                                starttime = tmpstate['results'][machine].get('starttime', timestamp) if machine in tmpstate['results'] else timestamp
+                                # Get start time if we have it
+                                starttime = timestamp
+                                if machine in tmpstate['results'] and 'starttime' in tmpstate['results'][machine]:
+                                    starttime = tmpstate['results'][machine]['starttime']
                                 
                                 tmpstate['results'][machine] = {
                                     'ret': output,
@@ -128,6 +147,11 @@ class WebSocketJobServer:
                             if 'machines' in tmprunning and machine in tmprunning['machines']:
                                 tmprunning['machines'].remove(machine)
                                 self.running[job_instance] = tmprunning
+                                
+                                # If no more machines running, remove the job instance
+                                if not tmprunning['machines']:
+                                    del self.running[job_instance]
+                                    print(f"WebSocket: Job instance {job_instance} completed - all machines finished", flush=True)
                         
                         # Log the result
                         if self.log_func:
