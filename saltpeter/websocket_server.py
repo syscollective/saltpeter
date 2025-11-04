@@ -114,7 +114,6 @@ class WebSocketJobServer:
                         
                     elif msg_type == 'complete':
                         retcode = data.get('retcode', -1)
-                        output = data.get('output', '')
                         
                         # Validate that this job instance is actually running
                         if job_instance not in self.running:
@@ -132,10 +131,6 @@ class WebSocketJobServer:
                                 del self.connections[client_id]
                             continue
                         
-                        # Get accumulated output from buffer if available
-                        if client_id in self.connections and self.connections[client_id]['output_buffer']:
-                            output = ''.join(self.connections[client_id]['output_buffer'])
-                        
                         # Get group info from running dict or state
                         group = 'unknown'
                         if job_instance in self.running:
@@ -150,11 +145,14 @@ class WebSocketJobServer:
                                 if 'results' not in tmpstate:
                                     tmpstate['results'] = {}
                                 
-                                # Get start time if we have it
+                                # Get existing data if we have it (output was accumulated during 'output' messages)
                                 starttime = timestamp
-                                if machine in tmpstate['results'] and 'starttime' in tmpstate['results'][machine]:
-                                    starttime = tmpstate['results'][machine]['starttime']
+                                output = ''
+                                if machine in tmpstate['results']:
+                                    starttime = tmpstate['results'][machine].get('starttime', timestamp)
+                                    output = tmpstate['results'][machine].get('ret', '')
                                 
+                                # Update with final status
                                 tmpstate['results'][machine] = {
                                     'ret': output,
                                     'retcode': retcode,
@@ -164,6 +162,15 @@ class WebSocketJobServer:
                                 self.state[job_name] = tmpstate
                         else:
                             print(f"WebSocket: WARNING - Cannot update state for {job_name}", flush=True)
+                        
+                        # Get output for logging (use what's in state or buffer)
+                        log_output = ''
+                        if job_name in self.state and 'results' in self.state[job_name] and machine in self.state[job_name]['results']:
+                            log_output = self.state[job_name]['results'][machine].get('ret', '')
+                        # Get output for logging (use what's in state or buffer)
+                        log_output = ''
+                        if job_name in self.state and 'results' in self.state[job_name] and machine in self.state[job_name]['results']:
+                            log_output = self.state[job_name]['results'][machine].get('ret', '')
                         
                         # Remove machine from running list
                         if job_instance in self.running:
@@ -186,7 +193,7 @@ class WebSocketJobServer:
                                 instance=job_instance,
                                 machine=machine,
                                 code=retcode,
-                                out=output,
+                                out=log_output,
                                 time=timestamp
                             )
                         
