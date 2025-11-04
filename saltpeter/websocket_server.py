@@ -90,6 +90,8 @@ class WebSocketJobServer:
                         stream = data.get('stream', 'stdout')
                         output_data = data.get('data', '')
                         
+                        print(f"WebSocket: Received output from {machine}: {output_data.strip()}", flush=True)
+                        
                         # Validate that this job instance is running
                         if job_instance not in self.running:
                             continue
@@ -111,6 +113,9 @@ class WebSocketJobServer:
                                 current_output = tmpstate['results'][machine].get('ret', '')
                                 tmpstate['results'][machine]['ret'] = current_output + output_data
                                 self.state[job_name] = tmpstate
+                                print(f"WebSocket: Accumulated output for {job_name}[{machine}], total length: {len(tmpstate['results'][machine]['ret'])}", flush=True)
+                        else:
+                            print(f"WebSocket: WARNING - Cannot update state with output for {job_name}", flush=True)
                         
                     elif msg_type == 'complete':
                         retcode = data.get('retcode', -1)
@@ -160,8 +165,9 @@ class WebSocketJobServer:
                                     'endtime': timestamp
                                 }
                                 self.state[job_name] = tmpstate
+                                print(f"WebSocket: Updated state for {job_name}[{machine}] - retcode={retcode}, output_len={len(output)}, endtime={timestamp}", flush=True)
                         else:
-                            print(f"WebSocket: WARNING - Cannot update state for {job_name}", flush=True)
+                            print(f"WebSocket: WARNING - Cannot update state for {job_name} (in state: {job_name in self.state}, has statelocks: {self.statelocks is not None}, in statelocks: {job_name in self.statelocks if self.statelocks else 'N/A'})", flush=True)
                         
                         # Get output for logging (use what's in state or buffer)
                         log_output = ''
