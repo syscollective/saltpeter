@@ -134,6 +134,8 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
     
     pending_targets = set(targets)
     
+    print(f"WebSocket: Waiting for results from targets: {pending_targets}", flush=True)
+    
     while pending_targets:
         # Check if timeout exceeded
         if time.time() - start_time > timeout:
@@ -176,7 +178,14 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                         result = state[name]['results'][tgt]
                         # Check if this target has completed (has endtime)
                         if result.get('endtime') and result['endtime'] != '':
+                            print(f"WebSocket: Target {tgt} completed with endtime {result['endtime']}", flush=True)
                             pending_targets.remove(tgt)
+                        else:
+                            print(f"WebSocket: Target {tgt} result exists but no endtime: {result}", flush=True)
+                    else:
+                        print(f"WebSocket: Target {tgt} not yet in results. Available: {list(state[name]['results'].keys())}", flush=True)
+            else:
+                print(f"WebSocket: State check - name in state: {name in state}, has results: {'results' in state[name] if name in state else 'N/A'}", flush=True)
         
         # If all targets completed, exit
         if not pending_targets:

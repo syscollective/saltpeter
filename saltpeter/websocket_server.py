@@ -59,6 +59,11 @@ class WebSocketJobServer:
                         if client_id in self.connections:
                             self.connections[client_id]['pid'] = data.get('pid')
                             self.connections[client_id]['started'] = timestamp
+                        
+                        # Validate that this job instance is running
+                        if job_instance not in self.running:
+                            print(f"WebSocket: WARNING - Received start for unknown job instance {job_instance}", flush=True)
+                            continue
                             
                         # Update state
                         if job_name in self.state and self.statelocks and job_name in self.statelocks:
@@ -85,6 +90,11 @@ class WebSocketJobServer:
                         stream = data.get('stream', 'stdout')
                         output_data = data.get('data', '')
                         
+                        # Validate that this job instance is running
+                        if job_instance not in self.running:
+                            print(f"WebSocket: WARNING - Received output for unknown job instance {job_instance}", flush=True)
+                            continue
+                        
                         if client_id in self.connections:
                             self.connections[client_id]['output_buffer'].append(output_data)
                             self.connections[client_id]['last_seen'] = timestamp
@@ -109,6 +119,23 @@ class WebSocketJobServer:
                     elif msg_type == 'complete':
                         retcode = data.get('retcode', -1)
                         output = data.get('output', '')
+                        
+                        # Validate that this job instance is actually running
+                        if job_instance not in self.running:
+                            print(f"WebSocket: WARNING - Received completion for unknown job instance {job_instance}", flush=True)
+                            # Clean up connection anyway
+                            if client_id in self.connections:
+                                del self.connections[client_id]
+                            continue
+                        
+                        # Validate that this machine is in the running list for this instance
+                        if 'machines' not in self.running[job_instance] or machine not in self.running[job_instance]['machines']:
+                            print(f"WebSocket: WARNING - Machine {machine} not in running list for instance {job_instance}", flush=True)
+                            print(f"WebSocket: Running machines for {job_instance}: {self.running[job_instance].get('machines', [])}", flush=True)
+                            # Clean up connection anyway
+                            if client_id in self.connections:
+                                del self.connections[client_id]
+                            continue
                         
                         # Get accumulated output from buffer if available
                         if client_id in self.connections and self.connections[client_id]['output_buffer']:
@@ -140,6 +167,9 @@ class WebSocketJobServer:
                                     'endtime': timestamp
                                 }
                                 self.state[job_name] = tmpstate
+                                print(f"WebSocket: Updated state for {job_name}[{machine}] - endtime: {timestamp}", flush=True)
+                        else:
+                            print(f"WebSocket: WARNING - Cannot update state for {job_name} (in state: {job_name in self.state}, has lock: {job_name in self.statelocks if self.statelocks else False})", flush=True)
                         
                         # Remove machine from running list
                         if job_instance in self.running:
