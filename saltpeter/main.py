@@ -192,6 +192,7 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                         
                         # Check if this target has completed (has endtime)
                         if result.get('endtime') and result['endtime'] != '':
+                            print(f"WebSocket: Target {tgt} completed, removing from pending (retcode: {result.get('retcode')})", flush=True)
                             pending_targets.remove(tgt)
                             continue
                         
@@ -224,6 +225,7 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
         
         # If all targets completed, exit
         if not pending_targets:
+            print(f"WebSocket: All targets completed for {name}, exiting monitor loop", flush=True)
             break
         
         # Wait before next check

@@ -118,6 +118,8 @@ class WebSocketJobServer:
                     elif msg_type == 'complete':
                         retcode = data.get('retcode', -1)
                         
+                        print(f"WebSocket: Received complete message from {client_id}, retcode={retcode}", flush=True)
+                        
                         # Validate that this job instance is actually running
                         if job_instance not in self.running:
                             print(f"WebSocket: WARNING - Received completion for unknown job instance {job_instance}", flush=True)
@@ -163,6 +165,7 @@ class WebSocketJobServer:
                                     'endtime': timestamp
                                 }
                                 self.state[job_name] = tmpstate
+                                print(f"WebSocket: Updated state for {job_name}[{machine}] with endtime={timestamp}, retcode={retcode}", flush=True)
                         else:
                             print(f"WebSocket: WARNING - Cannot update state for {job_name}", flush=True)
                         

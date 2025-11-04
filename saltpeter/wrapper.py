@@ -102,10 +102,14 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                             # Give it 5 seconds to terminate gracefully
                             try:
                                 process.wait(timeout=5)
+                                print(f"Process terminated gracefully", file=sys.stderr)
                             except subprocess.TimeoutExpired:
                                 print(f"Process didn't terminate, killing it", file=sys.stderr)
                                 process.kill()
                                 process.wait()
+                                print(f"Process killed forcefully", file=sys.stderr)
+                        else:
+                            print(f"Process already terminated (retcode: {process.poll()})", file=sys.stderr)
                         
                         break
                         
@@ -160,8 +164,15 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                 
                 await asyncio.sleep(0.05)
             
-            # Read any remaining output
-            stdout_remainder, stderr_remainder = process.communicate()
+            # Read any remaining output (skip if process was killed, pipes are closed)
+            stdout_remainder = None
+            stderr_remainder = None
+            
+            if not killed:
+                try:
+                    stdout_remainder, stderr_remainder = process.communicate()
+                except Exception as e:
+                    print(f"Error reading remaining output: {e}", file=sys.stderr)
             
             if stdout_remainder:
                 for line in stdout_remainder.splitlines(keepends=True):
@@ -207,8 +218,10 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                 # Use special return code for killed jobs
                 if final_retcode is None or final_retcode >= 0:
                     final_retcode = 143  # Standard SIGTERM exit code
+                print(f"Job was killed, using retcode {final_retcode}", file=sys.stderr)
             
             # Send completion message
+            print(f"Sending completion message: retcode={final_retcode}", file=sys.stderr)
             await websocket.send(json.dumps({
                 'type': 'complete',
                 'job_name': job_name,
@@ -218,6 +231,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                 'output': ''.join(output_buffer),
                 'timestamp': datetime.now(timezone.utc).isoformat()
             }))
+            print(f"Completion message sent successfully", file=sys.stderr)
             
     except Exception as e:
         print(f"Error in WebSocket communication: {e}", file=sys.stderr)
