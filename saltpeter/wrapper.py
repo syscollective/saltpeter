@@ -184,7 +184,7 @@ def main():
     websocket_url = os.environ.get('SP_WEBSOCKET_URL')
     job_name = os.environ.get('SP_JOB_NAME')
     job_instance = os.environ.get('SP_JOB_INSTANCE')
-    machine_id = os.environ.get('SP_MACHINE_ID') or socket.gethostname()
+    machine_id = os.environ.get('SP_MACHINE_ID') or socket.getfqdn()
     command = os.environ.get('SP_COMMAND')
     cwd = os.environ.get('SP_CWD')
     user = os.environ.get('SP_USER')

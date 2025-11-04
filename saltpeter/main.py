@@ -125,8 +125,6 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
     Wait for WebSocket-based job results with optional timeout
     This replaces the old Salt-based result polling
     """
-    print(f"WebSocket: processresults_websocket called for {name} instance {procname}", flush=True)
-    
     start_time = time.time()
     check_interval = 1  # Check every second
     
@@ -135,8 +133,6 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
         timeout = 3600
     
     pending_targets = set(targets)
-    
-    print(f"WebSocket: Waiting for results from targets: {pending_targets}", flush=True)
     
     while pending_targets:
         # Check if timeout exceeded
@@ -180,14 +176,7 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                         result = state[name]['results'][tgt]
                         # Check if this target has completed (has endtime)
                         if result.get('endtime') and result['endtime'] != '':
-                            print(f"WebSocket: Target {tgt} completed with endtime {result['endtime']}", flush=True)
                             pending_targets.remove(tgt)
-                        else:
-                            print(f"WebSocket: Target {tgt} result exists but no endtime: {result}", flush=True)
-                    else:
-                        print(f"WebSocket: Target {tgt} not yet in results. Available: {list(state[name]['results'].keys())}", flush=True)
-            else:
-                print(f"WebSocket: State check - name in state: {name in state}, has results: {'results' in state[name] if name in state else 'N/A'}", flush=True)
         
         # If all targets completed, exit
         if not pending_targets:
@@ -199,8 +188,6 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
     # Clean up running state when all targets are done
     if procname in running:
         del running[procname]
-    
-    print(f"WebSocket: All results received for {procname}", flush=True)
 
 
 def processresults(client,commands,job,name,group,procname,running,state,targets):
