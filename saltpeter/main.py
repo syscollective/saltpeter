@@ -125,6 +125,8 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
     Wait for WebSocket-based job results with optional timeout
     This replaces the old Salt-based result polling
     """
+    print(f"WebSocket: processresults_websocket called for {name} instance {procname}", flush=True)
+    
     start_time = time.time()
     check_interval = 1  # Check every second
     

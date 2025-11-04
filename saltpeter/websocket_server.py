@@ -150,8 +150,10 @@ class WebSocketJobServer:
                         
                         # Update state with final result
                         if job_name in self.state and self.statelocks and job_name in self.statelocks:
+                            print(f"WebSocket: About to update state for {job_name}[{machine}]", flush=True)
                             with self.statelocks[job_name]:
                                 tmpstate = self.state[job_name].copy()
+                                print(f"WebSocket: Got state copy for {job_name}: results={tmpstate.get('results', {}).keys()}", flush=True)
                                 if 'results' not in tmpstate:
                                     tmpstate['results'] = {}
                                 
@@ -166,6 +168,7 @@ class WebSocketJobServer:
                                     'starttime': starttime,
                                     'endtime': timestamp
                                 }
+                                print(f"WebSocket: Setting state for {job_name} with endtime={timestamp}", flush=True)
                                 self.state[job_name] = tmpstate
                                 print(f"WebSocket: Updated state for {job_name}[{machine}] - endtime: {timestamp}", flush=True)
                         else:
