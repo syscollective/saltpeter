@@ -101,21 +101,24 @@ class WebSocketJobServer:
                             self.connections[client_id]['last_seen'] = timestamp
                         
                         # Update state with accumulated output
-                        if job_name in self.state and self.statelocks and job_name in self.statelocks:
-                            with self.statelocks[job_name]:
-                                tmpstate = self.state[job_name].copy()
-                                if 'results' not in tmpstate:
-                                    tmpstate['results'] = {}
-                                if machine not in tmpstate['results']:
-                                    tmpstate['results'][machine] = {'ret': '', 'retcode': '', 'starttime': timestamp, 'endtime': ''}
-                                
-                                # Append output to existing output
-                                current_output = tmpstate['results'][machine].get('ret', '')
-                                tmpstate['results'][machine]['ret'] = current_output + output_data
-                                self.state[job_name] = tmpstate
-                                print(f"WebSocket: Accumulated output for {job_name}[{machine}], total length: {len(tmpstate['results'][machine]['ret'])}", flush=True)
+                        if job_name in self.state:
+                            if self.statelocks and job_name in self.statelocks:
+                                with self.statelocks[job_name]:
+                                    tmpstate = self.state[job_name].copy()
+                                    if 'results' not in tmpstate:
+                                        tmpstate['results'] = {}
+                                    if machine not in tmpstate['results']:
+                                        tmpstate['results'][machine] = {'ret': '', 'retcode': '', 'starttime': timestamp, 'endtime': ''}
+                                    
+                                    # Append output to existing output
+                                    current_output = tmpstate['results'][machine].get('ret', '')
+                                    tmpstate['results'][machine]['ret'] = current_output + output_data
+                                    self.state[job_name] = tmpstate
+                                    print(f"WebSocket: Accumulated output for {job_name}[{machine}], total length: {len(tmpstate['results'][machine]['ret'])}", flush=True)
+                            else:
+                                print(f"WebSocket: No lock for {job_name}, statelocks keys: {list(self.statelocks.keys()) if self.statelocks else 'None'}", flush=True)
                         else:
-                            print(f"WebSocket: WARNING - Cannot update state with output for {job_name}", flush=True)
+                            print(f"WebSocket: {job_name} not in state, available: {list(self.state.keys())}", flush=True)
                         
                     elif msg_type == 'complete':
                         retcode = data.get('retcode', -1)
