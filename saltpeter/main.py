@@ -127,12 +127,14 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
     """
     start_time = time.time()
     check_interval = 1  # Check every second
+    heartbeat_timeout = 15  # 3 missed heartbeats (5 seconds each) = 15 seconds
     
     # Default timeout of 1 hour if not specified
     if timeout is None:
         timeout = 3600
     
     pending_targets = set(targets)
+    last_heartbeat = {}  # Track last activity time for each target
     
     while pending_targets:
         # Check if timeout exceeded
@@ -149,11 +151,15 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                 for tgt in pending_targets:
                     if tgt in tmpstate['results']:
                         starttime = tmpstate['results'][tgt].get('starttime', now)
+                        output = tmpstate['results'][tgt].get('ret', '')
                     else:
                         starttime = tmpstate.get('last_run', now)
+                        output = ''
+                    
+                    output += "\n[SALTPETER ERROR: Job exceeded timeout]\n"
                     
                     tmpstate['results'][tgt] = {
-                        'ret': "Job exceeded timeout",
+                        'ret': output,
                         'retcode': 124,  # Timeout exit code
                         'starttime': starttime,
                         'endtime': now
@@ -163,20 +169,58 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
             
             # Log timeout for remaining targets
             for tgt in pending_targets:
+                output_for_log = ''
+                if name in state and 'results' in state[name] and tgt in state[name]['results']:
+                    output_for_log = state[name]['results'][tgt].get('ret', '')
+                
                 log(what='machine_result', cron=name, group=group, instance=procname,
-                    machine=tgt, code=124, out="Job exceeded timeout", time=now)
+                    machine=tgt, code=124, out=output_for_log, time=now)
             
             break
         
-        # Check which targets have completed
+        # Check which targets have completed or timed out
+        now = datetime.now(timezone.utc)
         with statelocks[name]:
             if name in state and 'results' in state[name]:
                 for tgt in list(pending_targets):
                     if tgt in state[name]['results']:
                         result = state[name]['results'][tgt]
+                        
+                        # Update last heartbeat time if we have activity
+                        if result.get('ret') or result.get('starttime'):
+                            last_heartbeat[tgt] = time.time()
+                        
                         # Check if this target has completed (has endtime)
                         if result.get('endtime') and result['endtime'] != '':
                             pending_targets.remove(tgt)
+                            continue
+                        
+                        # Check for heartbeat timeout
+                        if tgt in last_heartbeat:
+                            time_since_heartbeat = time.time() - last_heartbeat[tgt]
+                            if time_since_heartbeat > heartbeat_timeout:
+                                print(f"WebSocket: Heartbeat timeout for {tgt} ({time_since_heartbeat:.1f}s since last activity)", flush=True)
+                                
+                                # Mark as failed with heartbeat timeout
+                                tmpstate = state[name].copy()
+                                starttime = result.get('starttime', now)
+                                output = result.get('ret', '')
+                                output += f"\n[SALTPETER ERROR: Job lost connection - no heartbeat for {time_since_heartbeat:.0f} seconds]\n"
+                                
+                                tmpstate['results'][tgt] = {
+                                    'ret': output,
+                                    'retcode': 253,  # Special code for heartbeat timeout
+                                    'starttime': starttime,
+                                    'endtime': now
+                                }
+                                state[name] = tmpstate
+                                
+                                # Log the failure
+                                log(what='machine_result', cron=name, group=group, instance=procname,
+                                    machine=tgt, code=253, out=output, time=now)
+                                
+                                # Remove from pending
+                                pending_targets.remove(tgt)
         
         # If all targets completed, exit
         if not pending_targets:

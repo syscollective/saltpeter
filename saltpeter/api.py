@@ -141,7 +141,6 @@ def send_data(con, cfgupdate, tmlupdate):
                     if 'endtime' in srcron['results'][m] and srcron['results'][m]['endtime'] != '':
                         srcron['results'][m]['endtime'] = srcron['results'][m]['endtime'].isoformat()
 
-            print(f"API: Sending state for {cron}: results={srcron.get('results', {})}", flush=True)
             con.write_message(json.dumps(dict({cron: srcron})))
 
     if tmlupdate:
