@@ -552,11 +552,7 @@ def run(name, data, procname, running, state, commands, maintenance):
                         # Give Salt a moment to start the job
                         time.sleep(0.5)
                         
-                        # Check for immediate failures
-                        import salt.runner
-                        opts = salt.config.master_config('/etc/salt/master')
-                        runner = salt.runner.RunnerClient(opts)
-                        
+                        # Check for immediate failures using the salt client
                         rets = salt.get_cli_returns(job['jid'], chunk, timeout=2)
                         for ret in list(rets):
                             for minion_id, minion_data in ret.items():
@@ -620,11 +616,7 @@ def run(name, data, procname, running, state, commands, maintenance):
                 # Give Salt a moment to start the job
                 time.sleep(0.5)
                 
-                # Check for immediate failures
-                import salt.runner
-                opts = salt.config.master_config('/etc/salt/master')
-                runner = salt.runner.RunnerClient(opts)
-                
+                # Check for immediate failures using the salt client
                 rets = salt.get_cli_returns(job['jid'], targets_list, timeout=2)
                 failed_targets = []
                 for ret in list(rets):
