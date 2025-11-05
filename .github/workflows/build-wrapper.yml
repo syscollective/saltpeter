@@ -21,15 +21,13 @@ jobs:
     name: Build Wrapper Binary
     runs-on: ubuntu-latest
     container:
-      image: ubuntu:20.04
-      options: --user root
+      image: python:3.11-slim-bullseye
     
     steps:
-      - name: Install git and basic tools
+      - name: Install build dependencies
         run: |
-          export DEBIAN_FRONTEND=noninteractive
           apt-get update
-          apt-get install -y git curl
+          apt-get install -y binutils
       
       - name: Checkout code
         uses: actions/checkout@v4
@@ -41,21 +39,13 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Detected version: $VERSION"
       
-      - name: Install Python and dependencies
+      - name: Install PyInstaller and dependencies
         run: |
-          export DEBIAN_FRONTEND=noninteractive
-          export TZ=Etc/UTC
-          apt-get install -y software-properties-common
-          add-apt-repository -y ppa:deadsnakes/ppa
-          apt-get update
-          apt-get install -y python3.11 python3.11-venv python3.11-dev
-          curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11
-          python3.11 -m pip install --upgrade pip
-          python3.11 -m pip install pyinstaller websockets
+          pip install --no-cache-dir pyinstaller websockets
       
       - name: Build wrapper binary with PyInstaller
         run: |
-          python3.11 -m PyInstaller --onefile \
+          pyinstaller --onefile \
             --name sp_wrapper \
             --distpath dist \
             --clean \
@@ -73,7 +63,7 @@ jobs:
           cat > dist/VERSION.txt << EOF
           Saltpeter Wrapper Binary
           Version: ${{ steps.get_version.outputs.version }}
-          Platform: linux-x86_64 (Ubuntu 20.04 base, glibc 2.31+)
+          Platform: linux-x86_64 (Debian 11 Bullseye base, glibc 2.31+)
           Python: 3.11 (embedded)
           Built: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
           Git Commit: ${{ github.sha }}
@@ -166,7 +156,7 @@ jobs:
           
           ### Platform Compatibility
           
-          Built on **Ubuntu 20.04** (in container) with **Python 3.11** (embedded).
+          Built on **Debian 11 (Bullseye)** with **Python 3.11** (embedded).
           
           Compatible with:
           - ✅ Ubuntu 20.04 or newer
