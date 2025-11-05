@@ -27,6 +27,7 @@ jobs:
     steps:
       - name: Install git and basic tools
         run: |
+          export DEBIAN_FRONTEND=noninteractive
           apt-get update
           apt-get install -y git curl
       
@@ -42,6 +43,8 @@ jobs:
       
       - name: Install Python and dependencies
         run: |
+          export DEBIAN_FRONTEND=noninteractive
+          export TZ=Etc/UTC
           apt-get install -y software-properties-common
           add-apt-repository -y ppa:deadsnakes/ppa
           apt-get update
