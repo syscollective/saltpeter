@@ -413,36 +413,53 @@ def run(name, data, procname, running, state, commands, maintenance):
     targets = data['targets']
     target_type = data['target_type']
     
-    # Get wrapper script path - use job-specific path if provided, otherwise use default
-    wrapper_path = data.get('wrapper_path', args.wrapper_path)
+    # Check if wrapper should be used (default: True)
+    use_wrapper = data.get('use_wrapper', True)
     
-    # Prepare environment variables for the wrapper
-    websocket_url = f"ws://{args.websocket_host}:{args.websocket_port}"
-    
-    # Build environment variables to pass to the wrapper
-    # These will be passed via Salt's cmd.run with env parameter
-    wrapper_env = {
-        'SP_WEBSOCKET_URL': websocket_url,
-        'SP_JOB_NAME': name,
-        'SP_JOB_INSTANCE_NAME': procname,  # For backwards compatibility
-        'SP_JOB_INSTANCE': procname,
-        'SP_COMMAND': data['command']
-    }
-    
-    if 'cwd' in data:
-        wrapper_env['SP_CWD'] = data['cwd']
-    if 'user' in data:
-        wrapper_env['SP_USER'] = data['user']
-    if 'timeout' in data:
-        wrapper_env['SP_TIMEOUT'] = str(data['timeout'])
-    
-    # Build the Salt command to run the wrapper
-    # The wrapper will read configuration from environment variables
-    cmdargs = [wrapper_path]
-    cmdargs.append('env=' + str(wrapper_env))
-    
-    # Note: timeout is now handled by the WebSocket monitoring
-    timeout = data.get('timeout', 3600)  # Default 1 hour
+    # Prepare command arguments based on wrapper usage
+    if use_wrapper:
+        # Get wrapper script path - use job-specific path if provided, otherwise use default
+        wrapper_path = data.get('wrapper_path', args.wrapper_path)
+        
+        # Prepare environment variables for the wrapper
+        websocket_url = f"ws://{args.websocket_host}:{args.websocket_port}"
+        
+        # Build environment variables to pass to the wrapper
+        wrapper_env = {
+            'SP_WEBSOCKET_URL': websocket_url,
+            'SP_JOB_NAME': name,
+            'SP_JOB_INSTANCE_NAME': procname,  # For backwards compatibility
+            'SP_JOB_INSTANCE': procname,
+            'SP_COMMAND': data['command']
+        }
+        
+        if 'cwd' in data:
+            wrapper_env['SP_CWD'] = data['cwd']
+        if 'user' in data:
+            wrapper_env['SP_USER'] = data['user']
+        if 'timeout' in data:
+            wrapper_env['SP_TIMEOUT'] = str(data['timeout'])
+        
+        # Build the Salt command to run the wrapper
+        cmdargs = [wrapper_path]
+        cmdargs.append('env=' + str(wrapper_env))
+        
+        # Timeout is handled by WebSocket monitoring
+        timeout = data.get('timeout', 3600)  # Default 1 hour
+    else:
+        # Legacy Salt-only mode (no wrapper)
+        cmdargs = [data['command']]
+        env = {'SP_JOB_NAME': name, 'SP_JOB_INSTANCE_NAME': procname}
+        cmdargs.append('env=' + str(env))
+        if 'cwd' in data:
+            cmdargs.append('cwd=' + data['cwd'])
+        if 'user' in data:
+            cmdargs.append('runas=' + data['user'])
+        if 'timeout' in data:
+            cmdargs.append('timeout=' + str(data['timeout']))
+            timeout = data['timeout']
+        else:
+            timeout = 3600
 
     now = datetime.now(timezone.utc)
     running[procname] = {'started': now, 'name': name, 'machines': []}
@@ -526,16 +543,65 @@ def run(name, data, procname, running, state, commands, maintenance):
             if len(chunk) == data['batch_size'] or count == len(targets_list):
 
                 try:
-                    # Run wrapper script via Salt (non-blocking, returns immediately)
+                    # Run command via Salt (wrapper or direct)
                     job = salt.run_job(chunk, 'cmd.run', cmdargs,
                                        tgt_type='list', listen=False)
+                    
+                    # Check for immediate Salt failures (wrapper missing, permission errors, etc.)
+                    if use_wrapper and job and 'jid' in job:
+                        # Give Salt a moment to start the job
+                        time.sleep(0.5)
+                        
+                        # Check for immediate failures
+                        import salt.runner
+                        opts = salt.config.master_config('/etc/salt/master')
+                        runner = salt.runner.RunnerClient(opts)
+                        
+                        rets = salt.get_cli_returns(job['jid'], chunk, timeout=2)
+                        for ret in list(rets):
+                            for minion_id, minion_data in ret.items():
+                                if minion_id in chunk:
+                                    # Check if Salt returned an error (wrapper not found, etc.)
+                                    if 'retcode' in minion_data and minion_data['retcode'] != 0:
+                                        # Immediate failure - wrapper missing or other error
+                                        error_output = minion_data.get('ret', 'Unknown Salt error')
+                                        error_code = minion_data.get('retcode', 255)
+                                        
+                                        print(f"Salt immediate failure on {minion_id}: {error_output}", flush=True)
+                                        
+                                        # Update state immediately with the error
+                                        with statelocks[name]:
+                                            tmpstate = state[name].copy()
+                                            if 'results' not in tmpstate:
+                                                tmpstate['results'] = {}
+                                            tmpstate['results'][minion_id] = {
+                                                'ret': f"Salt execution error:\n{error_output}",
+                                                'retcode': error_code,
+                                                'starttime': now,
+                                                'endtime': datetime.now(timezone.utc)
+                                            }
+                                            state[name] = tmpstate
+                                        
+                                        # Log the error
+                                        log(what='machine_result', cron=name, group=data['group'], 
+                                            instance=procname, machine=minion_id,
+                                            code=error_code, out=f"Salt execution error:\n{error_output}", 
+                                            time=datetime.now(timezone.utc))
+                                        
+                                        # Remove from chunk so we don't wait for it
+                                        chunk.remove(minion_id)
 
                     # update running list and state
-                    running[procname] = {'started': now, 'name': name, 'machines': chunk}
-                    processstart(chunk, name, data['group'], procname, state)
+                    if chunk:  # Only if there are still targets to monitor
+                        running[procname] = {'started': now, 'name': name, 'machines': chunk}
+                        processstart(chunk, name, data['group'], procname, state)
+                        
+                        # Use appropriate result handler based on wrapper usage
+                        if use_wrapper:
+                            processresults_websocket(name, data['group'], procname, running, state, chunk, timeout)
+                        else:
+                            processresults(salt, commands, job, name, data['group'], procname, running, state, chunk)
                     
-                    # Wait for WebSocket results instead of Salt results
-                    processresults_websocket(name, data['group'], procname, running, state, chunk, timeout)
                     chunk = []
                 except Exception as e:
                     print('Exception triggered in run() at "batch_size" condition', e, flush=True)
@@ -545,13 +611,68 @@ def run(name, data, procname, running, state, commands, maintenance):
         starttime = datetime.now(timezone.utc)
 
         try:
-            # Run wrapper script via Salt (non-blocking, returns immediately)
+            # Run command via Salt (wrapper or direct)
             job = salt.run_job(targets_list, 'cmd.run', cmdargs,
                                tgt_type='list', listen=False)
-            processstart(targets_list, name, data['group'], procname, state)
             
-            # Wait for WebSocket results instead of Salt results
-            processresults_websocket(name, data['group'], procname, running, state, targets_list, timeout)
+            # Check for immediate Salt failures (wrapper missing, permission errors, etc.)
+            if use_wrapper and job and 'jid' in job:
+                # Give Salt a moment to start the job
+                time.sleep(0.5)
+                
+                # Check for immediate failures
+                import salt.runner
+                opts = salt.config.master_config('/etc/salt/master')
+                runner = salt.runner.RunnerClient(opts)
+                
+                rets = salt.get_cli_returns(job['jid'], targets_list, timeout=2)
+                failed_targets = []
+                for ret in list(rets):
+                    for minion_id, minion_data in ret.items():
+                        if minion_id in targets_list:
+                            # Check if Salt returned an error (wrapper not found, etc.)
+                            if 'retcode' in minion_data and minion_data['retcode'] != 0:
+                                # Immediate failure - wrapper missing or other error
+                                error_output = minion_data.get('ret', 'Unknown Salt error')
+                                error_code = minion_data.get('retcode', 255)
+                                
+                                print(f"Salt immediate failure on {minion_id}: {error_output}", flush=True)
+                                
+                                # Update state immediately with the error
+                                with statelocks[name]:
+                                    tmpstate = state[name].copy()
+                                    if 'results' not in tmpstate:
+                                        tmpstate['results'] = {}
+                                    tmpstate['results'][minion_id] = {
+                                        'ret': f"Salt execution error:\n{error_output}",
+                                        'retcode': error_code,
+                                        'starttime': now,
+                                        'endtime': datetime.now(timezone.utc)
+                                    }
+                                    state[name] = tmpstate
+                                
+                                # Log the error
+                                log(what='machine_result', cron=name, group=data['group'], 
+                                    instance=procname, machine=minion_id,
+                                    code=error_code, out=f"Salt execution error:\n{error_output}", 
+                                    time=datetime.now(timezone.utc))
+                                
+                                failed_targets.append(minion_id)
+                
+                # Remove failed targets from monitoring list
+                for failed in failed_targets:
+                    if failed in targets_list:
+                        targets_list.remove(failed)
+            
+            # Start monitoring for remaining targets
+            if targets_list:  # Only if there are still targets to monitor
+                processstart(targets_list, name, data['group'], procname, state)
+                
+                # Use appropriate result handler based on wrapper usage
+                if use_wrapper:
+                    processresults_websocket(name, data['group'], procname, running, state, targets_list, timeout)
+                else:
+                    processresults(salt, commands, job, name, data['group'], procname, running, state, targets_list)
 
         except Exception as e:
             print('Exception triggered in run()', e, flush=True)
