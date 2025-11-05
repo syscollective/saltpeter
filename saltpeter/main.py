@@ -148,57 +148,71 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
         check_count = 0
         while pending_targets:
             check_count += 1
-            # Check Salt for returns (no timeout - wait indefinitely)
-            rets = list(salt_client.get_cli_returns(job_id, list(pending_targets), timeout=5))
+            
+            # Use get_iter_returns like the legacy code does
+            # This properly includes retcode in the return structure
+            rets = salt_client.get_iter_returns(job_id, list(pending_targets), 
+                                                block=False, expect_minions=True, timeout=1)
             
             if check_count % 10 == 0:
                 print(f"Still waiting for {len(pending_targets)} target(s) to respond: {list(pending_targets)}", flush=True)
             
-            if rets:
-                print(f"Got {len(rets)} return(s) from Salt", flush=True)
-            
             for ret in rets:
-                print(f"Processing return: {ret}", flush=True)
-                for minion_id, minion_data in ret.items():
-                    if minion_id in pending_targets:
-                        ret_data = minion_data.get('ret', '')
-                        ret_code = minion_data.get('retcode', None)
+                if ret is None:
+                    continue
+                    
+                # Extract minion_id from the return
+                minion_id = list(ret.keys())[0]
+                minion_data = ret[minion_id]
+                
+                if minion_id not in pending_targets:
+                    continue
+                
+                print(f"Got return from {minion_id}: {minion_data}", flush=True)
+                
+                # Check if this is a failed return (Salt couldn't execute)
+                if 'failed' in minion_data and minion_data['failed'] == True:
+                    # Salt failed to execute - treat as error
+                    error_output = minion_data.get('ret', 'Salt execution failed')
+                    error_code = 255
+                    
+                    print(f"Wrapper execution failed on {minion_id} (Salt failed): {error_output}", flush=True)
+                    
+                    # Update state with the error
+                    now = datetime.now(timezone.utc)
+                    with statelocks[name]:
+                        tmpstate = state[name].copy()
+                        if 'results' not in tmpstate:
+                            tmpstate['results'] = {}
                         
-                        print(f"Minion {minion_id}: retcode={ret_code}, ret={ret_data[:100] if ret_data else 'None'}...", flush=True)
+                        starttime = tmpstate['results'].get(minion_id, {}).get('starttime', now)
                         
-                        # Check if this is a failure condition
-                        # Salt might not include retcode if cmd.run failed to execute
-                        is_error = False
-                        error_output = ''
-                        error_code = 255  # Default error code
-                        
-                        if ret_code is not None and ret_code != 0:
-                            # Explicit non-zero retcode
-                            is_error = True
-                            error_output = ret_data if ret_data else 'Unknown Salt error'
-                            error_code = ret_code
-                        elif ret_code is None and ret_data and isinstance(ret_data, str):
-                            # No retcode but got error message - check if it's an error
-                            # Common error patterns from Salt/Python
-                            error_patterns = [
-                                "can't open file",
-                                "No such file or directory",
-                                "Permission denied",
-                                "command not found",
-                                "cannot execute",
-                                "Traceback",
-                                "SyntaxError",
-                                "ImportError",
-                                "ModuleNotFoundError"
-                            ]
-                            if any(pattern in ret_data for pattern in error_patterns):
-                                is_error = True
-                                error_output = ret_data
-                                error_code = 127 if "No such file" in ret_data or "command not found" in ret_data else 255
-                        
-                        if is_error:
-                            # Wrapper execution failed
-                            print(f"Wrapper execution failed on {minion_id} (retcode={error_code}): {error_output[:200]}", flush=True)
+                        tmpstate['results'][minion_id] = {
+                            'ret': f"Wrapper execution failed:\n{error_output}",
+                            'retcode': error_code,
+                            'starttime': starttime,
+                            'endtime': now
+                        }
+                        state[name] = tmpstate
+                    
+                    # Log the error
+                    log(what='machine_result', cron=name, group=group, 
+                        instance=procname, machine=minion_id,
+                        code=error_code, out=f"Wrapper execution failed:\n{error_output}", 
+                        time=now)
+                    
+                    # Remove from pending
+                    pending_targets.discard(minion_id)
+                    
+                else:
+                    # Got a return with retcode
+                    ret_code = minion_data.get('retcode', None)
+                    ret_data = minion_data.get('ret', '')
+                    
+                    if ret_code is not None:
+                        if ret_code != 0:
+                            # Non-zero exit code - wrapper failed to execute
+                            print(f"Wrapper execution failed on {minion_id} (retcode={ret_code}): {ret_data}", flush=True)
                             
                             # Update state with the error
                             now = datetime.now(timezone.utc)
@@ -210,8 +224,8 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                                 starttime = tmpstate['results'].get(minion_id, {}).get('starttime', now)
                                 
                                 tmpstate['results'][minion_id] = {
-                                    'ret': f"Wrapper execution failed:\n{error_output}",
-                                    'retcode': error_code,
+                                    'ret': f"Wrapper execution failed:\n{ret_data}",
+                                    'retcode': ret_code,
                                     'starttime': starttime,
                                     'endtime': now
                                 }
@@ -220,22 +234,19 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                             # Log the error
                             log(what='machine_result', cron=name, group=group, 
                                 instance=procname, machine=minion_id,
-                                code=error_code, out=f"Wrapper execution failed:\n{error_output}", 
+                                code=ret_code, out=f"Wrapper execution failed:\n{ret_data}", 
                                 time=now)
                             
                             # Remove from pending
                             pending_targets.discard(minion_id)
                             
-                        elif ret_code == 0:
-                            # Wrapper started successfully (returned 0 from fork)
-                            print(f"Salt confirmed wrapper started on {minion_id}", flush=True)
+                        else:
+                            # retcode == 0: Wrapper started successfully
+                            print(f"Salt confirmed wrapper started on {minion_id} (retcode=0)", flush=True)
                             targets_confirmed_started.add(minion_id)
                             pending_targets.discard(minion_id)
                             # Initialize heartbeat timer NOW that we know it's running
                             last_heartbeat[minion_id] = time.time()
-                        elif ret_code is None and not is_error:
-                            # Still waiting for return with retcode - keep checking
-                            pass
             
             # Small sleep to avoid tight loop
             if pending_targets:
