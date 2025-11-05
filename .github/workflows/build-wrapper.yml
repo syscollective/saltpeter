@@ -19,7 +19,7 @@ on:
 jobs:
   build:
     name: Build Wrapper Binary
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     
     steps:
       - name: Checkout code
@@ -63,15 +63,15 @@ jobs:
           cat > dist/VERSION.txt << EOF
           Saltpeter Wrapper Binary
           Version: ${{ steps.get_version.outputs.version }}
-          Platform: linux-x86_64 (Ubuntu 20.04 base, glibc 2.31+)
+          Platform: linux-x86_64 (Ubuntu 22.04 base, glibc 2.35+)
           Python: 3.11 (embedded)
           Built: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
           Git Commit: ${{ github.sha }}
           Git Ref: ${{ github.ref }}
           
           Compatible with:
-          - Ubuntu 20.04+ / Debian 11+ / RHEL 8+
-          - Any Linux x86_64 with glibc 2.31 or newer
+          - Ubuntu 22.04+ / Debian 12+ / RHEL 9+
+          - Any Linux x86_64 with glibc 2.35 or newer
           EOF
       
       - name: Upload artifact
@@ -156,13 +156,13 @@ jobs:
           
           ### Platform Compatibility
           
-          Built on **Ubuntu 20.04** with **Python 3.11** (embedded).
+          Built on **Ubuntu 22.04** with **Python 3.11** (embedded).
           
           Compatible with:
-          - ✅ Ubuntu 20.04 or newer
-          - ✅ Debian 11 (Bullseye) or newer
-          - ✅ RHEL 8 or newer / Rocky Linux / AlmaLinux
-          - ✅ Any Linux x86_64 with glibc 2.31 or newer
+          - ✅ Ubuntu 22.04 or newer
+          - ✅ Debian 12 (Bookworm) or newer
+          - ✅ RHEL 9 or newer / Rocky Linux / AlmaLinux
+          - ✅ Any Linux x86_64 with glibc 2.35 or newer
           
           To check your glibc version: `ldd --version`
           
