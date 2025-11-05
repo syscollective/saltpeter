@@ -125,7 +125,7 @@ def send_data(con, cfgupdate, tmlupdate):
             else:
                 lastst[cron]['result_ok'] = False
 
-    con.write_message((json.dumps(dict({'running': srrng, 'last_state': lastst}))))
+    con.write_message(json.dumps(dict({'running': srrng, 'last_state': lastst}), default=str))
     for cron in cfg['crons']:
         if cron in con.subscriptions:
             srcron = st[cron].copy()
@@ -141,10 +141,10 @@ def send_data(con, cfgupdate, tmlupdate):
                     if 'endtime' in srcron['results'][m] and srcron['results'][m]['endtime'] != '':
                         srcron['results'][m]['endtime'] = srcron['results'][m]['endtime'].isoformat()
 
-            con.write_message(json.dumps(dict({cron: srcron})))
+            con.write_message(json.dumps(dict({cron: srcron}), default=str))
 
     if tmlupdate:
-        con.write_message((json.dumps(dict({'timeline': tml.copy()}))))
+        con.write_message(json.dumps(dict({'timeline': tml.copy()}), default=str))
 
 
 def ws_update():
