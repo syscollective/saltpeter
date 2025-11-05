@@ -14,7 +14,6 @@ on:
       - master
     paths:
       - 'saltpeter/wrapper.py'
-      - 'saltpeter/version.py'
       - '.github/workflows/build-wrapper.yml'
   workflow_dispatch:
 
