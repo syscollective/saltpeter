@@ -145,15 +145,26 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
     if salt_client and job_id:
         print(f"Waiting for Salt to confirm wrapper execution for job {job_id}...", flush=True)
         
+        check_count = 0
         while pending_targets:
+            check_count += 1
             # Check Salt for returns (no timeout - wait indefinitely)
             rets = list(salt_client.get_cli_returns(job_id, list(pending_targets), timeout=5))
             
+            if check_count % 10 == 0:
+                print(f"Still waiting for {len(pending_targets)} target(s) to respond: {list(pending_targets)}", flush=True)
+            
+            if rets:
+                print(f"Got {len(rets)} return(s) from Salt", flush=True)
+            
             for ret in rets:
+                print(f"Processing return: {ret}", flush=True)
                 for minion_id, minion_data in ret.items():
                     if minion_id in pending_targets:
                         ret_data = minion_data.get('ret', '')
                         ret_code = minion_data.get('retcode', None)
+                        
+                        print(f"Minion {minion_id}: retcode={ret_code}, ret={ret_data[:100] if ret_data else 'None'}...", flush=True)
                         
                         # Check if wrapper execution failed
                         if ret_code is not None and ret_code != 0:
