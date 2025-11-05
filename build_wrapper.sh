@@ -91,4 +91,3 @@ echo "To deploy via Salt:"
 echo "  sudo cp dist/sp_wrapper /srv/salt/sp_wrapper"
 echo "  salt '*' cp.get_file salt://sp_wrapper /usr/local/bin/sp_wrapper"
 echo "  salt '*' cmd.run 'chmod +x /usr/local/bin/sp_wrapper'"
-

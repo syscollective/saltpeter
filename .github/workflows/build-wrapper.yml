@@ -7,7 +7,6 @@ on:
       - async-agent
     paths:
       - 'saltpeter/wrapper.py'
-      - 'saltpeter/version.py'
       - '.github/workflows/build-wrapper.yml'
   pull_request:
     branches:
