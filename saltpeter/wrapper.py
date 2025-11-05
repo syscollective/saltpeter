@@ -354,16 +354,31 @@ def main():
     if pid > 0:
         # Parent process - return success to Salt immediately
         print("Wrapper started successfully")
+        sys.stdout.flush()  # Ensure output is sent before exit
         sys.exit(0)
     
-    # Child process - run the command asynchronously
-    # Detach from parent
+    # Child process - become session leader to detach from parent
     os.setsid()
     
+    # Double fork to prevent zombie processes and fully detach
+    pid2 = os.fork()
+    if pid2 > 0:
+        # First child exits
+        sys.exit(0)
+    
+    # Second child (grandchild) - fully detached daemon
     # Close standard file descriptors to detach from Salt
     sys.stdout.close()
     sys.stderr.close()
     sys.stdin.close()
+    
+    # Redirect to /dev/null to prevent any issues
+    devnull = os.open('/dev/null', os.O_RDWR)
+    os.dup2(devnull, 0)  # stdin
+    os.dup2(devnull, 1)  # stdout
+    os.dup2(devnull, 2)  # stderr
+    if devnull > 2:
+        os.close(devnull)
     
     # Run the command asynchronously
     asyncio.run(run_command_and_stream(websocket_url, job_name, job_instance, machine_id, command, cwd, user, timeout))
