@@ -125,7 +125,7 @@ jobs:
         run: |
           mkdir -p release
           cd artifacts/sp_wrapper
-          tar -czf ../../release/sp_wrapper.tar.gz .
+          tar -czf ../../release/sp_wrapper.tar.gz sp_wrapper VERSION.txt
           cd ../..
           ls -lh release/
       
