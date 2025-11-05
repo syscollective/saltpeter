@@ -296,6 +296,44 @@ class WebSocketJobServer:
                             
                             # Remove command from queue
                             self.commands.remove(cmd)
+                        
+                        elif 'killmachine' in cmd:
+                            kill_info = cmd['killmachine']
+                            job_name = kill_info.get('cron')
+                            machine_name = kill_info.get('machine')
+                            
+                            if not job_name or not machine_name:
+                                print(f"WebSocket: Invalid killmachine command - missing cron or machine: {kill_info}", flush=True)
+                                self.commands.remove(cmd)
+                                continue
+                            
+                            print(f"WebSocket: Kill command received for job {job_name} on machine {machine_name}", flush=True)
+                            
+                            # Find the specific connection for this job and machine
+                            killed = False
+                            for client_id, conn_info in list(self.connections.items()):
+                                if conn_info['job_name'] == job_name and conn_info['machine'] == machine_name:
+                                    try:
+                                        await conn_info['websocket'].send(json.dumps({
+                                            'type': 'kill',
+                                            'job_name': job_name,
+                                            'job_instance': conn_info['job_instance'],
+                                            'machine': conn_info['machine'],
+                                            'timestamp': datetime.now(timezone.utc).isoformat()
+                                        }))
+                                        killed = True
+                                        print(f"WebSocket: Sent kill signal to {client_id}", flush=True)
+                                    except Exception as e:
+                                        print(f"WebSocket: Error sending kill to {client_id}: {e}", flush=True)
+                                    break  # Only kill the first matching connection
+                            
+                            if killed:
+                                print(f"WebSocket: Sent kill signal to job {job_name} on machine {machine_name}", flush=True)
+                            else:
+                                print(f"WebSocket: No active connection found for job {job_name} on machine {machine_name}", flush=True)
+                            
+                            # Remove command from queue
+                            self.commands.remove(cmd)
                 
                 await asyncio.sleep(0.5)  # Check every 500ms
             except Exception as e:
