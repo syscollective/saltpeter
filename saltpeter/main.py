@@ -909,7 +909,7 @@ def main():
     # Start the WebSocket server (pass commands queue for bidirectional communication)
     ws_server = multiprocessing.Process(
         target=websocket_server.start_websocket_server,
-        args=(args.websocket_host, args.websocket_port, state, running, statelocks, log, commands),
+        args=('0.0.0.0', args.websocket_port, state, running, statelocks, log, commands),
         name='websocket_server'
     )
     ws_server.start()
