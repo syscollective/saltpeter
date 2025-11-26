@@ -66,6 +66,13 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
         start_sent = False
         last_retry = 0
         
+        # Sequence tracking
+        next_seq = 0
+        last_acked_seq = -1
+        waiting_for_ack = False
+        ack_timeout = 5.0  # Seconds to wait for ACK before retry
+        last_send_time = 0
+        
         # Add initial connection message to pending queue
         pending_messages.append({
             'type': 'connect',
@@ -101,17 +108,20 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                         )
                         last_retry = current_time
                         
-                        # Send all pending messages
-                        for msg in pending_messages:
+                        # Send connect message first (no sequence)
+                        for msg in [m for m in pending_messages if m['type'] == 'connect']:
                             try:
                                 await websocket.send(json.dumps(msg))
+                                # Wait for connect ACK
+                                ack_msg = await asyncio.wait_for(websocket.recv(), timeout=2)
+                                ack_data = json.loads(ack_msg)
+                                if ack_data.get('type') == 'ack' and ack_data.get('ack_type') == 'connect':
+                                    # Remove connect message from pending
+                                    pending_messages = [m for m in pending_messages if m['type'] != 'connect']
                             except:
-                                # If send fails, connection is bad
+                                # If send/ack fails, connection is bad
                                 websocket = None
                                 break
-                        
-                        if websocket is not None:
-                            pending_messages.clear()
                             
                     except Exception:
                         # Connection failed, will retry after interval
@@ -126,7 +136,26 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                         message = await asyncio.wait_for(websocket.recv(), timeout=0.1)
                         data = json.loads(message)
                         
-                        if data.get('type') == 'kill':
+                        if data.get('type') == 'ack':
+                            # Process acknowledgement
+                            acked_seq = data.get('seq', -1)
+                            if acked_seq >= 0 and acked_seq == last_acked_seq + 1:
+                                last_acked_seq = acked_seq
+                                waiting_for_ack = False
+                                # Remove acknowledged message from pending
+                                if pending_messages and pending_messages[0].get('seq') == acked_seq:
+                                    pending_messages.pop(0)
+                        
+                        elif data.get('type') == 'nack':
+                            # Server detected out-of-order, resync sequence
+                            expected_seq = data.get('expected_seq', 0)
+                            if expected_seq <= next_seq:
+                                # Reset to expected sequence
+                                next_seq = expected_seq
+                                last_acked_seq = expected_seq - 1
+                                waiting_for_ack = False
+                        
+                        elif data.get('type') == 'kill':
                             killed = True
 
                             # Terminate the process
@@ -169,24 +198,38 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                                 stream_type = 'stdout' if stream == process.stdout else 'stderr'
                                 output_buffer.append(line)
                                 
-                                # Send output chunk
-                                output_msg = {
-                                    'type': 'output',
-                                    'job_name': job_name,
-                                    'job_instance': job_instance,
-                                    'machine': machine_id,
-                                    'stream': stream_type,
-                                    'data': line,
-                                    'timestamp': datetime.now(timezone.utc).isoformat()
-                                }
-                                try:
-                                    await websocket.send(json.dumps(output_msg))
-                                except:
-                                    # Connection lost, add to pending and mark for reconnect
-                                    pending_messages.append(output_msg)
-                                    websocket = None
+                                # Send output chunk with sequence (backpressure: only if not waiting for ACK)
+                                if not waiting_for_ack:
+                                    output_msg = {
+                                        'type': 'output',
+                                        'job_name': job_name,
+                                        'job_instance': job_instance,
+                                        'machine': machine_id,
+                                        'stream': stream_type,
+                                        'data': line,
+                                        'seq': next_seq,
+                                        'timestamp': datetime.now(timezone.utc).isoformat()
+                                    }
+                                    try:
+                                        await websocket.send(json.dumps(output_msg))
+                                        waiting_for_ack = True
+                                        last_send_time = time.time()
+                                        pending_messages.append(output_msg)
+                                        next_seq += 1
+                                    except:
+                                        # Connection lost, mark for reconnect
+                                        websocket = None
+                                        waiting_for_ack = False
+                                        next_seq -= 1  # Retry this sequence
                     except Exception:
                         pass
+                    
+                    # Check for ACK timeout and resend if needed
+                    if waiting_for_ack and time.time() - last_send_time > ack_timeout:
+                        # No ACK received, assume connection issue
+                        websocket = None
+                        waiting_for_ack = False
+                        next_seq -= 1  # Retry this sequence
                     
                     # Send heartbeat every 5 seconds
                     if websocket is not None:
@@ -236,8 +279,10 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                     'machine': machine_id,
                     'stream': 'stdout',
                     'data': line,
+                    'seq': next_seq,
                     'timestamp': datetime.now(timezone.utc).isoformat()
                 })
+                next_seq += 1
         
         if stderr_remainder:
             for line in stderr_remainder.splitlines(keepends=True):
@@ -249,8 +294,10 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                     'machine': machine_id,
                     'stream': 'stderr',
                     'data': line,
+                    'seq': next_seq,
                     'timestamp': datetime.now(timezone.utc).isoformat()
                 })
+                next_seq += 1
         
         # Determine final return code
         final_retcode = process.returncode
@@ -265,8 +312,10 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                 'machine': machine_id,
                 'stream': 'stderr',
                 'data': kill_msg,
+                'seq': next_seq,
                 'timestamp': datetime.now(timezone.utc).isoformat()
             })
+            next_seq += 1
             # Use special return code for killed jobs
             if final_retcode is None or final_retcode >= 0:
                 final_retcode = 143  # Standard SIGTERM exit code
@@ -279,10 +328,11 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
             'machine': machine_id,
             'retcode': final_retcode,
             'output': ''.join(output_buffer),
+            'seq': next_seq,
             'timestamp': datetime.now(timezone.utc).isoformat()
         })
         
-        # Retry sending completion and pending messages until successful
+        # Retry sending completion and pending messages until successful with ACK
         max_completion_retries = 30  # Try for 60 seconds
         for attempt in range(max_completion_retries):
             try:
@@ -292,11 +342,21 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                         timeout=2
                     )
                 
-                # Send all pending messages including completion
+                # Send all pending messages including completion and wait for ACKs
                 for msg in pending_messages:
                     await websocket.send(json.dumps(msg))
+                    # Wait for ACK for each message
+                    try:
+                        ack_msg = await asyncio.wait_for(websocket.recv(), timeout=2)
+                        ack_data = json.loads(ack_msg)
+                        if ack_data.get('type') == 'nack':
+                            # Server wants resend, will retry entire batch
+                            raise Exception('NACK received')
+                    except asyncio.TimeoutError:
+                        # No ACK, will retry
+                        raise Exception('ACK timeout')
                 
-                # Success - exit retry loop
+                # Success - all messages ACKed, exit retry loop
                 break
                 
             except Exception:

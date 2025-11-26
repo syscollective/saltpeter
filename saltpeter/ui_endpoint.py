@@ -21,7 +21,7 @@ class UIEndpoint:
         self.bad_crons = bad_crons
         self.timeline = timeline
         
-        self.ws_connections = []
+        self.ws_connections = {}  # Changed to dict to track per-connection state
         self.cfgserial = ''
         self.tmlserial = ''
     
@@ -31,12 +31,19 @@ class UIEndpoint:
         await ws.prepare(request)
         
         print('New WS connection from UI')
-        self.ws_connections.append(ws)
-        subscriptions = []
+        
+        # Track connection state
+        connection_state = {
+            'subscriptions': [],
+            'output_positions': {},  # {cron: {machine: last_sent_position}}
+            'last_cfg_serial': '',
+            'last_tml_serial': ''
+        }
+        self.ws_connections[id(ws)] = {'ws': ws, 'state': connection_state}
         
         try:
             # Send initial data
-            await self.send_data_http(ws, subscriptions, cfg_update=True, tml_update=True)
+            await self.send_data_http(ws, connection_state, cfg_update=True, tml_update=True)
             
             async for msg in ws:
                 if msg.type == web.WSMsgType.TEXT:
@@ -45,13 +52,31 @@ class UIEndpoint:
                         
                         if 'subscribe' in data:
                             cron = data['subscribe']
-                            subscriptions.append(cron)
-                            await self.send_data_http(ws, subscriptions, cfg_update=False, tml_update=False)
+                            connection_state['subscriptions'].append(cron)
+                            # Initialize output position tracking for this subscription
+                            if cron not in connection_state['output_positions']:
+                                connection_state['output_positions'][cron] = {}
+                            await self.send_data_http(ws, connection_state, cfg_update=False, tml_update=False)
                             
                         elif 'unsubscribe' in data:
                             cron = data['unsubscribe']
-                            if cron in subscriptions:
-                                subscriptions.remove(cron)
+                            if cron in connection_state['subscriptions']:
+                                connection_state['subscriptions'].remove(cron)
+                            # Clean up output position tracking
+                            if cron in connection_state['output_positions']:
+                                del connection_state['output_positions'][cron]
+                                
+                        elif 'ack' in data:
+                            # Client acknowledges receipt of output chunk
+                            ack_info = data['ack']
+                            cron = ack_info.get('cron')
+                            machine = ack_info.get('machine')
+                            position = ack_info.get('position')
+                            
+                            if cron and machine and position is not None:
+                                if cron in connection_state['output_positions']:
+                                    connection_state['output_positions'][cron][machine] = position
+                                    print(f'UI WS: Ack from client for {cron}[{machine}] position={position}')
                                 
                         elif 'run' in data:
                             cron = data['run']
@@ -80,20 +105,21 @@ class UIEndpoint:
         except Exception as e:
             print(f'Error in UI WebSocket handler: {e}')
         finally:
-            if ws in self.ws_connections:
-                self.ws_connections.remove(ws)
+            if id(ws) in self.ws_connections:
+                del self.ws_connections[id(ws)]
             print('UI WS connection closed')
         
         return ws
     
-    async def send_data_http(self, ws, subscriptions, cfg_update, tml_update):
-        """Send data to a specific WebSocket connection (aiohttp version)"""
+    async def send_data_http(self, ws, connection_state, cfg_update, tml_update):
+        """Send data to a specific WebSocket connection (aiohttp version) with incremental output streaming"""
         try:
             if cfg_update:
                 await ws.send_str(json.dumps({
                     'config': dict(self.config),
                     'sp_version': __version__
                 }))
+                connection_state['last_cfg_serial'] = self.config.get('serial', '')
             
             # Send running state
             srrng = self.running.copy()
@@ -128,7 +154,10 @@ class UIEndpoint:
                 'last_state': lastst
             }, default=str))
             
-            # Send subscribed cron details
+            # Send subscribed cron details with incremental output
+            subscriptions = connection_state['subscriptions']
+            output_positions = connection_state['output_positions']
+            
             for cron in self.config['crons']:
                 if cron in subscriptions:
                     srcron = self.state[cron].copy()
@@ -137,17 +166,48 @@ class UIEndpoint:
                     if 'last_run' in srcron:
                         srcron['last_run'] = srcron['last_run'].isoformat()
                     
+                    # Handle incremental output streaming
                     if 'results' in srcron:
-                        for m in srcron['results']:
-                            if 'starttime' in srcron['results'][m] and srcron['results'][m]['starttime'] != '':
-                                srcron['results'][m]['starttime'] = srcron['results'][m]['starttime'].isoformat()
-                            if 'endtime' in srcron['results'][m] and srcron['results'][m]['endtime'] != '':
-                                srcron['results'][m]['endtime'] = srcron['results'][m]['endtime'].isoformat()
+                        if cron not in output_positions:
+                            output_positions[cron] = {}
+                        
+                        for machine in srcron['results']:
+                            if 'starttime' in srcron['results'][machine] and srcron['results'][machine]['starttime'] != '':
+                                srcron['results'][machine]['starttime'] = srcron['results'][machine]['starttime'].isoformat()
+                            if 'endtime' in srcron['results'][machine] and srcron['results'][machine]['endtime'] != '':
+                                srcron['results'][machine]['endtime'] = srcron['results'][machine]['endtime'].isoformat()
+                            
+                            # Stream only new output since last position
+                            full_output = srcron['results'][machine].get('ret', '')
+                            last_position = output_positions[cron].get(machine, 0)
+                            
+                            if len(full_output) > last_position:
+                                # Send incremental chunk
+                                new_chunk = full_output[last_position:]
+                                chunk_msg = {
+                                    'type': 'output_chunk',
+                                    'cron': cron,
+                                    'machine': machine,
+                                    'chunk': new_chunk,
+                                    'position': last_position,
+                                    'total_length': len(full_output),
+                                    'is_complete': srcron['results'][machine].get('endtime', '') != ''
+                                }
+                                await ws.send_str(json.dumps(chunk_msg))
+                                
+                                # Update position after sending (client should ack)
+                                # We optimistically update but client can nack if needed
+                                output_positions[cron][machine] = len(full_output)
+                            
+                            # For the main status update, send summary without full output
+                            srcron['results'][machine]['ret'] = ''  # Don't send full output in main message
+                            srcron['results'][machine]['output_length'] = len(full_output)
                     
                     await ws.send_str(json.dumps({cron: srcron}, default=str))
             
             if tml_update:
                 await ws.send_str(json.dumps({'timeline': self.timeline.copy()}, default=str))
+                connection_state['last_tml_serial'] = self.timeline.get('id', '')
                 
         except Exception as e:
             print(f'Error sending data to UI websocket: {e}')
@@ -171,17 +231,23 @@ class UIEndpoint:
             if len(self.ws_connections) > 0:
                 # Send updates to all connections
                 disconnected = []
-                for ws in self.ws_connections:
+                for conn_id, conn_info in list(self.ws_connections.items()):
+                    ws = conn_info['ws']
+                    connection_state = conn_info['state']
                     try:
-                        await self.send_data_http(ws, [], cfg_update, tml_update)
+                        # Only send cfg/tml updates if changed for this connection
+                        send_cfg = cfg_update and connection_state['last_cfg_serial'] != self.config.get('serial', '')
+                        send_tml = tml_update and connection_state['last_tml_serial'] != self.timeline.get('id', '')
+                        
+                        await self.send_data_http(ws, connection_state, send_cfg, send_tml)
                     except Exception as e:
                         print(f'Error broadcasting to websocket: {e}')
-                        disconnected.append(ws)
+                        disconnected.append(conn_id)
                 
                 # Clean up disconnected clients
-                for ws in disconnected:
-                    if ws in self.ws_connections:
-                        self.ws_connections.remove(ws)
+                for conn_id in disconnected:
+                    if conn_id in self.ws_connections:
+                        del self.ws_connections[conn_id]
     
     # HTTP handlers
     async def handle_version(self, request):

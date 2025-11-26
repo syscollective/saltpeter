@@ -53,9 +53,18 @@ class WebSocketJobServer:
                             'job_instance': job_instance,
                             'machine': machine,
                             'last_seen': timestamp,
-                            'output_buffer': []
+                            'output_buffer': [],
+                            'next_expected_seq': 0,  # Next sequence number we expect
+                            'last_acked_seq': -1,    # Last sequence we acknowledged
+                            'pending_acks': []       # Sequences pending acknowledgement
                         }
                         print(f"WebSocket: Client connected - {client_id}", flush=True)
+                        # Send connection acknowledgement
+                        await websocket.send(json.dumps({
+                            'type': 'ack',
+                            'ack_type': 'connect',
+                            'timestamp': datetime.now(timezone.utc).isoformat()
+                        }))
                         
                     elif msg_type == 'start':
                         if client_id in self.connections:
@@ -103,14 +112,60 @@ class WebSocketJobServer:
                     elif msg_type == 'output':
                         stream = data.get('stream', 'stdout')
                         output_data = data.get('data', '')
+                        seq = data.get('seq', None)  # Sequence number
                         
                         # Validate that this job instance is running
                         if job_instance not in self.running:
                             continue
                         
                         if client_id in self.connections:
-                            self.connections[client_id]['output_buffer'].append(output_data)
-                            self.connections[client_id]['last_seen'] = timestamp
+                            conn = self.connections[client_id]
+                            
+                            # Check sequence number if provided
+                            if seq is not None:
+                                expected_seq = conn['next_expected_seq']
+                                
+                                if seq < expected_seq:
+                                    # Duplicate message - already processed
+                                    print(f"WebSocket: Duplicate output seq {seq} from {client_id} (expected {expected_seq})", flush=True)
+                                    # Send ack anyway
+                                    await websocket.send(json.dumps({
+                                        'type': 'ack',
+                                        'ack_type': 'output',
+                                        'seq': seq,
+                                        'timestamp': datetime.now(timezone.utc).isoformat()
+                                    }))
+                                    continue
+                                    
+                                elif seq > expected_seq:
+                                    # Out of order - request resend
+                                    print(f"WebSocket: Out of order output seq {seq} from {client_id} (expected {expected_seq})", flush=True)
+                                    await websocket.send(json.dumps({
+                                        'type': 'nack',
+                                        'nack_type': 'out_of_order',
+                                        'expected_seq': expected_seq,
+                                        'received_seq': seq,
+                                        'timestamp': datetime.now(timezone.utc).isoformat()
+                                    }))
+                                    continue
+                                
+                                # Correct sequence - process it
+                                conn['next_expected_seq'] = seq + 1
+                            
+                            conn['output_buffer'].append(output_data)
+                            conn['last_seen'] = timestamp
+                            
+                            # Send acknowledgement
+                            ack_msg = {
+                                'type': 'ack',
+                                'ack_type': 'output',
+                                'timestamp': datetime.now(timezone.utc).isoformat()
+                            }
+                            if seq is not None:
+                                ack_msg['seq'] = seq
+                                conn['last_acked_seq'] = seq
+                            
+                            await websocket.send(json.dumps(ack_msg))
                         
                         # Update state with accumulated output
                         if job_name in self.state:
@@ -125,12 +180,27 @@ class WebSocketJobServer:
                                     # Append output to existing output
                                     current_output = tmpstate['results'][machine].get('ret', '')
                                     tmpstate['results'][machine]['ret'] = current_output + output_data
+                                    # Store last sequence for recovery
+                                    if seq is not None:
+                                        tmpstate['results'][machine]['last_output_seq'] = seq
                                     self.state[job_name] = tmpstate
                         
                     elif msg_type == 'complete':
                         retcode = data.get('retcode', -1)
+                        seq = data.get('seq', None)
                         
-                        print(f"WebSocket: Received complete message from {client_id}, retcode={retcode}", flush=True)
+                        print(f"WebSocket: Received complete message from {client_id}, retcode={retcode}, seq={seq}", flush=True)
+                        
+                        # Send acknowledgement
+                        ack_msg = {
+                            'type': 'ack',
+                            'ack_type': 'complete',
+                            'timestamp': datetime.now(timezone.utc).isoformat()
+                        }
+                        if seq is not None:
+                            ack_msg['seq'] = seq
+                        
+                        await websocket.send(json.dumps(ack_msg))
                         
                         # Validate that this job instance is actually running
                         if job_instance not in self.running:
