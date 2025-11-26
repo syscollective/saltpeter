@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
-from saltpeter import api, version
-from saltpeter import websocket_server
+from saltpeter import ui_endpoint, version
+from saltpeter import machines_endpoint
 import json
 import os
 import argparse
@@ -906,18 +906,18 @@ def main():
     #timeline['serial'] = datetime.now(timezone.utc).timestamp()
     #timeline['id'] = ''
     
-    # Start the WebSocket server (pass commands queue for bidirectional communication)
+    # Start the WebSocket server for machine communication (pass commands queue for bidirectional communication)
     ws_server = multiprocessing.Process(
-        target=websocket_server.start_websocket_server,
+        target=machines_endpoint.start_websocket_server,
         args=('0.0.0.0', args.websocket_port, state, running, statelocks, log, commands),
-        name='websocket_server'
+        name='machines_endpoint'
     )
     ws_server.start()
     print(f"WebSocket server started on ws://{args.websocket_host}:{args.websocket_port}", flush=True)
     
-    #start the api
+    #start the UI endpoint
     if args.api:
-        a = multiprocessing.Process(target=api.start, args=(args.port,config,running,state,commands,bad_crons,timeline), name='api')
+        a = multiprocessing.Process(target=ui_endpoint.start, args=(args.port,config,running,state,commands,bad_crons,timeline), name='ui_endpoint')
         a.start()
 
     if args.elasticsearch != '':
