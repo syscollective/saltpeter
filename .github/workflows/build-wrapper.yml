@@ -7,12 +7,14 @@ on:
       - async-agent
     paths:
       - 'saltpeter/wrapper.py'
+      - 'saltpeter/version.py'
       - '.github/workflows/build-wrapper.yml'
   pull_request:
     branches:
       - master
     paths:
       - 'saltpeter/wrapper.py'
+      - 'saltpeter/version.py'
       - '.github/workflows/build-wrapper.yml'
   workflow_dispatch:
 
@@ -48,6 +50,8 @@ jobs:
           pyinstaller --onefile \
             --name sp_wrapper \
             --distpath dist \
+            --add-data "saltpeter/version.py:saltpeter" \
+            --hidden-import=saltpeter.version \
             --clean \
             saltpeter/wrapper.py
       
@@ -55,6 +59,8 @@ jobs:
         run: |
           # Test that the binary exists and is executable
           chmod +x dist/sp_wrapper
+          # Test --version flag
+          dist/sp_wrapper --version
           # Test that it shows error when missing required env vars (quick smoke test)
           dist/sp_wrapper || true
       

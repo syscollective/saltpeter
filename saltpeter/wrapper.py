@@ -29,7 +29,17 @@ import time
 import socket
 import argparse
 from datetime import datetime, timezone
-from .version import __version__
+
+# Handle both package import and direct execution
+try:
+    from .version import __version__
+except ImportError:
+    # When run as script, try absolute import
+    try:
+        from saltpeter.version import __version__
+    except ImportError:
+        # Fallback if version.py not accessible
+        __version__ = 'unknown'
 
 async def run_command_and_stream(websocket_url, job_name, job_instance, machine_id, command, cwd=None, user=None, timeout=None):
     """
