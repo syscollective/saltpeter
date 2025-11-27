@@ -15,8 +15,7 @@ Environment Variables:
     SP_CWD - Working directory (optional)
     SP_USER - User to run command as (optional)
     SP_TIMEOUT - Command timeout in seconds (optional)
-    SP_OUTPUT_INTERVAL_MS - Minimum interval between output messages in milliseconds (default: 1000)
-    SP_OUTPUT_MAX_SIZE_KB - Maximum output buffer size in kilobytes before forcing send (default: 1024)
+    SP_OUTPUT_INTERVAL_MS - Minimum interval between output messages in milliseconds (optional, default: 1000)
     SP_DEBUG_LOG - Path to debug log file for wrapper troubleshooting (optional, e.g., /tmp/sp_wrapper_debug.log)
 """
 
@@ -52,11 +51,11 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
     websocket = None
     retry_interval = 2
     
-    # Output buffering configuration from ENV vars
+    # Output buffering configuration
+    # WebSocket default frame limit is 1MB (1048576 bytes)
     output_interval_ms = int(os.environ.get('SP_OUTPUT_INTERVAL_MS', '1000'))  # Default 1 second
-    output_max_size_kb = int(os.environ.get('SP_OUTPUT_MAX_SIZE_KB', '1024'))  # Default 1 MB
     output_interval = output_interval_ms / 1000.0  # Convert to seconds
-    output_max_size = output_max_size_kb * 1024  # Convert to bytes
+    output_max_size = 500 * 1024  # Hardcoded: 500KB to stay well under 1MB frame limit
     
     try:
         # Prepare subprocess arguments
@@ -400,28 +399,31 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                             except:
                                 websocket = None
                                 waiting_for_ack = False
-                    
-                    # Send heartbeat every 5 seconds
-                    if websocket is not None:
-                        current_time = time.time()
-                        if current_time - last_heartbeat >= 5:
-                            heartbeat_msg = {
-                                'type': 'heartbeat',
-                                'job_name': job_name,
-                                'job_instance': job_instance,
-                                'machine': machine_id,
-                                'timestamp': datetime.now(timezone.utc).isoformat()
-                            }
-                            try:
-                                await websocket.send(json.dumps(heartbeat_msg))
-                                last_heartbeat = current_time
-                            except:
-                                # Connection lost
-                                websocket = None
-                    
+                
                 except Exception:
                     # Any error means connection is bad
                     websocket = None
+                
+                # Send heartbeat every 5 seconds - do this regardless of other state
+                current_time = time.time()
+                if current_time - last_heartbeat >= 5:
+                    if websocket is not None:
+                        heartbeat_msg = {
+                            'type': 'heartbeat',
+                            'job_name': job_name,
+                            'job_instance': job_instance,
+                            'machine': machine_id,
+                            'timestamp': datetime.now(timezone.utc).isoformat()
+                        }
+                        try:
+                            await websocket.send(json.dumps(heartbeat_msg))
+                            last_heartbeat = current_time
+                        except:
+                            # Connection lost
+                            websocket = None
+                    else:
+                        # Update heartbeat timer even if disconnected to avoid spam when reconnecting
+                        last_heartbeat = current_time
             
             # If process finished, break
             if retcode is not None:
