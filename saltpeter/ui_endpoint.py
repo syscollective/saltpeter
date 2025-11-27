@@ -116,6 +116,7 @@ class UIEndpoint:
         try:
             if cfg_update:
                 await ws.send_str(json.dumps({
+                    'type': 'config',
                     'config': dict(self.config),
                     'sp_version': __version__
                 }))
@@ -149,8 +150,9 @@ class UIEndpoint:
                     else:
                         lastst[cron]['result_ok'] = False
             
-            # Send in old format for backward compatibility (no type field needed for legacy messages)
+            # Send in new protocol format with type field
             await ws.send_str(json.dumps({
+                'type': 'status',
                 'running': srrng,
                 'last_state': lastst,
                 'sp_version': __version__
