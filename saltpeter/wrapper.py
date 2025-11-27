@@ -27,7 +27,9 @@ import os
 import json
 import time
 import socket
+import argparse
 from datetime import datetime, timezone
+from .version import __version__
 
 async def run_command_and_stream(websocket_url, job_name, job_instance, machine_id, command, cwd=None, user=None, timeout=None):
     """
@@ -539,6 +541,11 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                     pass
 
 def main():
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Saltpeter Wrapper Script')
+    parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')
+    args = parser.parse_args()
+    
     # Read configuration from environment variables
     websocket_url = os.environ.get('SP_WEBSOCKET_URL')
     job_name = os.environ.get('SP_JOB_NAME')
