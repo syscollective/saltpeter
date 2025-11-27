@@ -75,6 +75,11 @@ class WebSocketJobServer:
                         if job_instance not in self.running:
                             print(f"WebSocket: WARNING - Received start for unknown job instance {job_instance}", flush=True)
                             continue
+                        
+                        # Validate machine is in the expected machines list for this instance
+                        if 'machines' in self.running[job_instance] and machine not in self.running[job_instance]['machines']:
+                            print(f"WebSocket: WARNING - Machine {machine} not in expected list for {job_instance}", flush=True)
+                            continue
                             
                         # Update state
                         if job_name in self.state and self.statelocks and job_name in self.statelocks:
@@ -168,22 +173,32 @@ class WebSocketJobServer:
                             await websocket.send(json.dumps(ack_msg))
                         
                         # Update state with accumulated output
-                        # Always update state, even if job not fully initialized yet
-                        if self.statelocks and job_name in self.statelocks:
-                            with self.statelocks[job_name]:
-                                tmpstate = self.state.get(job_name, {}).copy() if job_name in self.state else {}
-                                if 'results' not in tmpstate:
-                                    tmpstate['results'] = {}
-                                if machine not in tmpstate['results']:
-                                    tmpstate['results'][machine] = {'ret': '', 'retcode': '', 'starttime': timestamp, 'endtime': ''}
-                                
-                                # Append output to existing output
-                                current_output = tmpstate['results'][machine].get('ret', '')
-                                tmpstate['results'][machine]['ret'] = current_output + output_data
-                                # Store last sequence for recovery
-                                if seq is not None:
-                                    tmpstate['results'][machine]['last_output_seq'] = seq
-                                self.state[job_name] = tmpstate
+                        # Validate job_instance is in running dict (started by main.py)
+                        if job_instance not in self.running:
+                            print(f"WebSocket: WARNING - Received output for unknown job instance {job_instance}", flush=True)
+                            continue
+                        
+                        # Validate machine is in the expected machines list for this instance
+                        if 'machines' in self.running[job_instance] and machine not in self.running[job_instance]['machines']:
+                            print(f"WebSocket: WARNING - Machine {machine} not in expected list for {job_instance}", flush=True)
+                            continue
+                        
+                        if job_name in self.state:
+                            if self.statelocks and job_name in self.statelocks:
+                                with self.statelocks[job_name]:
+                                    tmpstate = self.state[job_name].copy()
+                                    if 'results' not in tmpstate:
+                                        tmpstate['results'] = {}
+                                    if machine not in tmpstate['results']:
+                                        tmpstate['results'][machine] = {'ret': '', 'retcode': '', 'starttime': timestamp, 'endtime': ''}
+                                    
+                                    # Append output to existing output
+                                    current_output = tmpstate['results'][machine].get('ret', '')
+                                    tmpstate['results'][machine]['ret'] = current_output + output_data
+                                    # Store last sequence for recovery
+                                    if seq is not None:
+                                        tmpstate['results'][machine]['last_output_seq'] = seq
+                                    self.state[job_name] = tmpstate
                     
                     elif msg_type == 'sync_request':
                         # Client requests sync - tell them what we last received

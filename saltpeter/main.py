@@ -669,14 +669,16 @@ def run(name, data, procname, running, state, commands, maintenance):
             if len(chunk) == data['batch_size'] or count == len(targets_list):
 
                 try:
+                    # Initialize state structure BEFORE running Salt
+                    running[procname] = {'started': now, 'name': name, 'machines': chunk}
+                    processstart(chunk, name, data['group'], procname, state)
+                    
                     # Run command via Salt (wrapper or direct)
                     job = salt.run_job(chunk, 'cmd.run', cmdargs,
                                        tgt_type='list', listen=False)
 
                     # update running list and state
                     if chunk:  # Only if there are still targets to monitor
-                        running[procname] = {'started': now, 'name': name, 'machines': chunk}
-                        processstart(chunk, name, data['group'], procname, state)
                         
                         # Use appropriate result handler based on wrapper usage
                         if use_wrapper:
@@ -693,6 +695,10 @@ def run(name, data, procname, running, state, commands, maintenance):
     else:
         running[procname] = {'started': now, 'name': name, 'machines': targets_list}
         starttime = datetime.now(timezone.utc)
+        
+        # Initialize state structure BEFORE running Salt to prevent race condition
+        # where wrappers send output before state is ready
+        processstart(targets_list, name, data['group'], procname, state)
 
         try:
             # Run command via Salt (wrapper or direct)
@@ -701,7 +707,6 @@ def run(name, data, procname, running, state, commands, maintenance):
             
             # Start monitoring for remaining targets
             if targets_list:  # Only if there are still targets to monitor
-                processstart(targets_list, name, data['group'], procname, state)
                 
                 # Use appropriate result handler based on wrapper usage
                 if use_wrapper:
