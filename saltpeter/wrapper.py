@@ -47,6 +47,42 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
     Subprocess runs independently - WebSocket retries every 2 seconds if disconnected
     Also listens for kill commands from the server
     """
+    
+    def create_output_messages(output_data, seq_start):
+        """Split large output into chunks and create messages. Returns (messages, next_seq)"""
+        messages = []
+        seq = seq_start
+        
+        if len(output_data) <= max_chunk_size:
+            messages.append({
+                'type': 'output',
+                'job_name': job_name,
+                'job_instance': job_instance,
+                'machine': machine_id,
+                'stream': 'stdout',
+                'data': output_data,
+                'seq': seq,
+                'timestamp': datetime.now(timezone.utc).isoformat()
+            })
+            seq += 1
+        else:
+            # Split into chunks
+            for i in range(0, len(output_data), max_chunk_size):
+                chunk = output_data[i:i+max_chunk_size]
+                messages.append({
+                    'type': 'output',
+                    'job_name': job_name,
+                    'job_instance': job_instance,
+                    'machine': machine_id,
+                    'stream': 'stdout',
+                    'data': chunk,
+                    'seq': seq,
+                    'timestamp': datetime.now(timezone.utc).isoformat()
+                })
+                seq += 1
+        
+        return messages, seq
+    
     process = None
     websocket = None
     retry_interval = 2
@@ -56,6 +92,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
     output_interval_ms = int(os.environ.get('SP_OUTPUT_INTERVAL_MS', '1000'))  # Default 1 second
     output_interval = output_interval_ms / 1000.0  # Convert to seconds
     output_max_size = 500 * 1024  # Hardcoded: 500KB to stay well under 1MB frame limit
+    max_chunk_size = 500 * 1024  # Hardcoded: split messages larger than 500KB
     
     try:
         # Prepare subprocess arguments
@@ -350,26 +387,20 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                     size_to_send = (buffer_size >= output_max_size)
                     
                     if output_buffer and (time_to_send or size_to_send) and not waiting_for_ack and websocket is not None:
-                        # Combine all buffered output into one message
+                        # Combine all buffered output
                         combined_output = ''.join(line for _, line in output_buffer)
                         
-                        print(f'[WRAPPER DEBUG] Sending buffer: seq={next_seq}, len={len(combined_output)}, reason={"time" if time_to_send else "size"}', file=sys.stderr, flush=True)
+                        # Create messages (may be chunked if large)
+                        output_messages, next_seq = create_output_messages(combined_output, next_seq)
                         
-                        output_msg = {
-                            'type': 'output',
-                            'job_name': job_name,
-                            'job_instance': job_instance,
-                            'machine': machine_id,
-                            'stream': 'stdout',  # Combined stream
-                            'data': combined_output,
-                            'seq': next_seq,
-                            'timestamp': datetime.now(timezone.utc).isoformat()
-                        }
-                        pending_messages.append(output_msg)
-                        next_seq += 1
+                        print(f'[WRAPPER DEBUG] Sending buffer: {len(output_messages)} message(s), total_len={len(combined_output)}, reason={"time" if time_to_send else "size"}', file=sys.stderr, flush=True)
                         
+                        # Add all messages to pending queue
+                        pending_messages.extend(output_messages)
+                        
+                        # Send first message (others will be sent on reconnect if needed)
                         try:
-                            await websocket.send(json.dumps(output_msg))
+                            await websocket.send(json.dumps(output_messages[0]))
                             waiting_for_ack = True
                             last_send_time = current_time
                             last_output_send_time = current_time
@@ -435,18 +466,8 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
         # Force send even if waiting_for_ack (this is the final flush)
         if output_buffer:
             combined_output = ''.join(line for _, line in output_buffer)
-            output_msg = {
-                'type': 'output',
-                'job_name': job_name,
-                'job_instance': job_instance,
-                'machine': machine_id,
-                'stream': 'stdout',
-                'data': combined_output,
-                'seq': next_seq,
-                'timestamp': datetime.now(timezone.utc).isoformat()
-            }
-            pending_messages.append(output_msg)
-            next_seq += 1
+            output_messages, next_seq = create_output_messages(combined_output, next_seq)
+            pending_messages.extend(output_messages)
             output_buffer = []
         
         # Read any remaining output (skip if killed, pipes are closed)
@@ -459,21 +480,12 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
             except Exception:
                 pass
         
-        # Add all remaining output as one message
+        # Add all remaining output
         if stdout_remainder or stderr_remainder:
             combined_remainder = (stdout_remainder or '') + (stderr_remainder or '')
             if combined_remainder:
-                pending_messages.append({
-                    'type': 'output',
-                    'job_name': job_name,
-                    'job_instance': job_instance,
-                    'machine': machine_id,
-                    'stream': 'stdout',
-                    'data': combined_remainder,
-                    'seq': next_seq,
-                    'timestamp': datetime.now(timezone.utc).isoformat()
-                })
-                next_seq += 1
+                remainder_messages, next_seq = create_output_messages(combined_remainder, next_seq)
+                pending_messages.extend(remainder_messages)
         
         # Determine final return code
         final_retcode = process.returncode
