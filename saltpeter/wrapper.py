@@ -80,6 +80,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
         waiting_for_ack = False
         last_send_time = 0
         last_output_send_time = 0  # Track when we last sent output
+        in_flight_seq = None  # Track which message is currently waiting for ACK
         
         # Add initial connection message to pending queue
         pending_messages.append({
@@ -160,9 +161,9 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                             if acked_seq >= 0 and acked_seq == last_acked_seq + 1:
                                 last_acked_seq = acked_seq
                                 waiting_for_ack = False
+                                in_flight_seq = None
                                 # Remove acknowledged message from pending
-                                if pending_messages and pending_messages[0].get('seq') == acked_seq:
-                                    pending_messages.pop(0)
+                                pending_messages = [m for m in pending_messages if m.get('seq') != acked_seq]
                         
                         elif data.get('type') == 'nack':
                             # Server detected out-of-order, resync sequence
@@ -176,6 +177,23 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                         elif data.get('type') == 'kill':
                             killed = True
 
+                            # Flush any buffered output BEFORE closing pipes
+                            if output_buffer and websocket is not None:
+                                combined_output = ''.join(line for _, line in output_buffer)
+                                output_msg = {
+                                    'type': 'output',
+                                    'job_name': job_name,
+                                    'job_instance': job_instance,
+                                    'machine': machine_id,
+                                    'stream': 'stdout',
+                                    'data': combined_output,
+                                    'seq': next_seq,
+                                    'timestamp': datetime.now(timezone.utc).isoformat()
+                                }
+                                pending_messages.append(output_msg)
+                                next_seq += 1
+                                output_buffer = []
+                            
                             # Terminate the process
                             if process and process.poll() is None:
                                 # Close the pipes before terminating to avoid blocking on communicate()
@@ -215,6 +233,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                             if line:
                                 stream_type = 'stdout' if stream == process.stdout else 'stderr'
                                 output_buffer.append((stream_type, line))
+                                print(f'[WRAPPER DEBUG] Buffered line: {repr(line[:50])}... (buffer_size={sum(len(l) for _, l in output_buffer)})', file=sys.stderr, flush=True)
                     except Exception:
                         pass
                     
@@ -227,6 +246,8 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                     if output_buffer and (time_to_send or size_to_send) and not waiting_for_ack and websocket is not None:
                         # Combine all buffered output into one message
                         combined_output = ''.join(line for _, line in output_buffer)
+                        
+                        print(f'[WRAPPER DEBUG] Sending buffer: seq={next_seq}, len={len(combined_output)}, reason={"time" if time_to_send else "size"}', file=sys.stderr, flush=True)
                         
                         output_msg = {
                             'type': 'output',
@@ -244,6 +265,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                         try:
                             await websocket.send(json.dumps(output_msg))
                             waiting_for_ack = True
+                            in_flight_seq = next_seq - 1  # Track which seq is in flight
                             last_send_time = current_time
                             last_output_send_time = current_time
                             output_buffer = []  # Clear buffer after sending
@@ -281,8 +303,9 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
             
             await asyncio.sleep(0.05)
         
-        # Process finished - send any remaining buffered output first
-        if output_buffer and websocket is not None and not waiting_for_ack:
+        # Process finished - ensure ALL buffered output is sent
+        # Force send even if waiting_for_ack (this is the final flush)
+        if output_buffer:
             combined_output = ''.join(line for _, line in output_buffer)
             output_msg = {
                 'type': 'output',

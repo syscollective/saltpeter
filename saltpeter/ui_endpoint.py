@@ -64,11 +64,9 @@ class UIEndpoint:
                                     # Initialize output position tracking for this subscription
                                     if cron not in connection_state['output_positions']:
                                         connection_state['output_positions'][cron] = {}
-                                    # Reset positions to 0 for fresh subscription
-                                    # This ensures full output is sent from the beginning
-                                    if cron in self.state and 'results' in self.state[cron]:
-                                        for machine in self.state[cron]['results']:
-                                            connection_state['output_positions'][cron][machine] = 0
+                                    # Don't reset positions - let incremental logic handle it
+                                    # New connections start with empty positions (defaults to 0)
+                                    # Existing connections keep their positions
                                     print(f'UI WS: Client subscribed to {cron}')
                             
                             # Send details for subscribed crons immediately
