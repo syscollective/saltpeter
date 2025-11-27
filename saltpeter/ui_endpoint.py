@@ -218,12 +218,11 @@ class UIEndpoint:
                                 }
                                 await ws.send_str(json.dumps(chunk_msg))
                                 
-                                # Update position after sending (client should ack)
-                                # We optimistically update but client can nack if needed
+                                # Update position after sending
                                 output_positions[cron][machine] = len(full_output)
                             
-                            # For the main status update, send summary without full output
-                            srcron['results'][machine]['ret'] = ''  # Don't send full output in main message
+                            # Clear ret field - output is sent via output_chunk messages
+                            srcron['results'][machine]['ret'] = ''
                             srcron['results'][machine]['output_length'] = len(full_output)
                     
                     # Send cron details with type field
