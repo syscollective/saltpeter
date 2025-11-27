@@ -17,6 +17,7 @@ Environment Variables:
     SP_TIMEOUT - Command timeout in seconds (optional)
     SP_OUTPUT_INTERVAL_MS - Minimum interval between output messages in milliseconds (default: 1000)
     SP_OUTPUT_MAX_SIZE_KB - Maximum output buffer size in kilobytes before forcing send (default: 1024)
+    SP_DEBUG_LOG - Path to debug log file for wrapper troubleshooting (optional, e.g., /tmp/sp_wrapper_debug.log)
 """
 
 import asyncio
@@ -551,10 +552,10 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                     pass
 
 def main():
-    # Parse command line arguments
+    # Parse command line arguments (ignore unknown args from Salt invocation)
     parser = argparse.ArgumentParser(description='Saltpeter Wrapper Script')
     parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')
-    args = parser.parse_args()
+    args, unknown = parser.parse_known_args()
     
     # Read configuration from environment variables
     websocket_url = os.environ.get('SP_WEBSOCKET_URL')
@@ -608,14 +609,26 @@ def main():
     # Second child (grandchild) - fully detached daemon
     # Close standard file descriptors to detach from Salt
     sys.stdout.close()
-    sys.stderr.close()
     sys.stdin.close()
     
-    # Redirect to /dev/null to prevent any issues
+    # Check if debug logging is enabled (default to /tmp/sp_wrapper_debug.log)
+    debug_log = os.environ.get('SP_DEBUG_LOG', '/tmp/sp_wrapper_debug.log')
+    
+    # Redirect stderr to debug log file
+    try:
+        stderr_fd = os.open(debug_log, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+        os.dup2(stderr_fd, 2)
+        if stderr_fd > 2:
+            os.close(stderr_fd)
+        print(f'[WRAPPER] Debug logging to {debug_log}', file=sys.stderr, flush=True)
+    except Exception as e:
+        # If debug log fails, fall back to /dev/null
+        sys.stderr.close()
+    
+    # Redirect stdin/stdout to /dev/null
     devnull = os.open('/dev/null', os.O_RDWR)
     os.dup2(devnull, 0)  # stdin
     os.dup2(devnull, 1)  # stdout
-    os.dup2(devnull, 2)  # stderr
     if devnull > 2:
         os.close(devnull)
     
