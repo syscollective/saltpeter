@@ -64,6 +64,11 @@ class UIEndpoint:
                                     # Initialize output position tracking for this subscription
                                     if cron not in connection_state['output_positions']:
                                         connection_state['output_positions'][cron] = {}
+                                    # Reset positions to 0 for fresh subscription
+                                    # This ensures full output is sent from the beginning
+                                    if cron in self.state and 'results' in self.state[cron]:
+                                        for machine in self.state[cron]['results']:
+                                            connection_state['output_positions'][cron][machine] = 0
                                     print(f'UI WS: Client subscribed to {cron}')
                             
                             # Send details for subscribed crons immediately
@@ -204,6 +209,8 @@ class UIEndpoint:
                             full_output = srcron['results'][machine].get('ret', '')
                             last_position = output_positions[cron].get(machine, 0)
                             
+                            print(f'[OUTPUT DEBUG] {cron}/{machine}: full_output_len={len(full_output)}, last_position={last_position}')
+                            
                             if len(full_output) > last_position:
                                 # Send incremental chunk
                                 new_chunk = full_output[last_position:]
@@ -216,10 +223,28 @@ class UIEndpoint:
                                     'total_length': len(full_output),
                                     'is_complete': srcron['results'][machine].get('endtime', '') != ''
                                 }
+                                print(f'[OUTPUT DEBUG] Sending chunk: position={last_position}, chunk_len={len(new_chunk)}, total={len(full_output)}')
                                 await ws.send_str(json.dumps(chunk_msg))
                                 
                                 # Update position after sending
                                 output_positions[cron][machine] = len(full_output)
+                            elif len(full_output) < last_position:
+                                # Output was reset (new run) - reset position to 0
+                                print(f'[OUTPUT DEBUG] Output smaller than position - resetting: {len(full_output)} < {last_position}')
+                                output_positions[cron][machine] = 0
+                                # Resend from beginning
+                                if len(full_output) > 0:
+                                    chunk_msg = {
+                                        'type': 'output_chunk',
+                                        'cron': cron,
+                                        'machine': machine,
+                                        'chunk': full_output,
+                                        'position': 0,
+                                        'total_length': len(full_output),
+                                        'is_complete': srcron['results'][machine].get('endtime', '') != ''
+                                    }
+                                    await ws.send_str(json.dumps(chunk_msg))
+                                    output_positions[cron][machine] = len(full_output)
                             
                             # Clear ret field - output is sent via output_chunk messages
                             srcron['results'][machine]['ret'] = ''
