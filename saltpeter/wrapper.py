@@ -15,6 +15,8 @@ Environment Variables:
     SP_CWD - Working directory (optional)
     SP_USER - User to run command as (optional)
     SP_TIMEOUT - Command timeout in seconds (optional)
+    SP_OUTPUT_INTERVAL_MS - Minimum interval between output messages in milliseconds (default: 1000)
+    SP_OUTPUT_MAX_SIZE_KB - Maximum output buffer size in kilobytes before forcing send (default: 1024)
 """
 
 import asyncio
@@ -36,6 +38,12 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
     process = None
     websocket = None
     retry_interval = 2
+    
+    # Output buffering configuration from ENV vars
+    output_interval_ms = int(os.environ.get('SP_OUTPUT_INTERVAL_MS', '1000'))  # Default 1 second
+    output_max_size_kb = int(os.environ.get('SP_OUTPUT_MAX_SIZE_KB', '1024'))  # Default 1 MB
+    output_interval = output_interval_ms / 1000.0  # Convert to seconds
+    output_max_size = output_max_size_kb * 1024  # Convert to bytes
     
     try:
         # Prepare subprocess arguments
@@ -70,8 +78,8 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
         next_seq = 0
         last_acked_seq = -1
         waiting_for_ack = False
-        ack_timeout = 5.0  # Seconds to wait for ACK before retry
         last_send_time = 0
+        last_output_send_time = 0  # Track when we last sent output
         
         # Add initial connection message to pending queue
         pending_messages.append({
@@ -118,6 +126,16 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                                 if ack_data.get('type') == 'ack' and ack_data.get('ack_type') == 'connect':
                                     # Remove connect message from pending
                                     pending_messages = [m for m in pending_messages if m['type'] != 'connect']
+                                    
+                                    # After reconnect, resend all pending unsent messages
+                                    unsent = [m for m in pending_messages if m.get('type') == 'output' and m.get('seq', 0) > last_acked_seq]
+                                    for unsent_msg in unsent:
+                                        try:
+                                            await websocket.send(json.dumps(unsent_msg))
+                                            # Don't wait for ACK here - let normal flow handle it
+                                        except:
+                                            websocket = None
+                                            break
                             except:
                                 # If send/ack fails, connection is bad
                                 websocket = None
@@ -190,46 +208,50 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                     try:
                         # Non-blocking read from stdout/stderr
                         import select
-                        readable, _, _ = select.select([process.stdout, process.stderr], [], [], 0.1)
+                        readable, _, _ = select.select([process.stdout, process.stderr], [], [], 1.0)
                         
                         for stream in readable:
                             line = stream.readline()
                             if line:
                                 stream_type = 'stdout' if stream == process.stdout else 'stderr'
-                                output_buffer.append(line)
-                                
-                                # Send output chunk with sequence (backpressure: only if not waiting for ACK)
-                                if not waiting_for_ack:
-                                    output_msg = {
-                                        'type': 'output',
-                                        'job_name': job_name,
-                                        'job_instance': job_instance,
-                                        'machine': machine_id,
-                                        'stream': stream_type,
-                                        'data': line,
-                                        'seq': next_seq,
-                                        'timestamp': datetime.now(timezone.utc).isoformat()
-                                    }
-                                    try:
-                                        await websocket.send(json.dumps(output_msg))
-                                        waiting_for_ack = True
-                                        last_send_time = time.time()
-                                        pending_messages.append(output_msg)
-                                        next_seq += 1
-                                    except:
-                                        # Connection lost, mark for reconnect
-                                        websocket = None
-                                        waiting_for_ack = False
-                                        next_seq -= 1  # Retry this sequence
+                                output_buffer.append((stream_type, line))
                     except Exception:
                         pass
                     
-                    # Check for ACK timeout and resend if needed
-                    if waiting_for_ack and time.time() - last_send_time > ack_timeout:
-                        # No ACK received, assume connection issue
-                        websocket = None
-                        waiting_for_ack = False
-                        next_seq -= 1  # Retry this sequence
+                    # Check if we should send buffered output (time or size based)
+                    current_time = time.time()
+                    buffer_size = sum(len(line) for _, line in output_buffer)
+                    time_to_send = (current_time - last_output_send_time >= output_interval)
+                    size_to_send = (buffer_size >= output_max_size)
+                    
+                    if output_buffer and (time_to_send or size_to_send) and not waiting_for_ack and websocket is not None:
+                        # Combine all buffered output into one message
+                        combined_output = ''.join(line for _, line in output_buffer)
+                        
+                        output_msg = {
+                            'type': 'output',
+                            'job_name': job_name,
+                            'job_instance': job_instance,
+                            'machine': machine_id,
+                            'stream': 'stdout',  # Combined stream
+                            'data': combined_output,
+                            'seq': next_seq,
+                            'timestamp': datetime.now(timezone.utc).isoformat()
+                        }
+                        pending_messages.append(output_msg)
+                        next_seq += 1
+                        
+                        try:
+                            await websocket.send(json.dumps(output_msg))
+                            waiting_for_ack = True
+                            last_send_time = current_time
+                            last_output_send_time = current_time
+                            output_buffer = []  # Clear buffer after sending
+                        except:
+                            # Connection lost, mark for reconnect
+                            # Keep output_buffer - will retry on reconnect
+                            websocket = None
+                            waiting_for_ack = False
                     
                     # Send heartbeat every 5 seconds
                     if websocket is not None:
@@ -259,7 +281,24 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
             
             await asyncio.sleep(0.05)
         
-        # Process finished - read any remaining output (skip if killed, pipes are closed)
+        # Process finished - send any remaining buffered output first
+        if output_buffer and websocket is not None and not waiting_for_ack:
+            combined_output = ''.join(line for _, line in output_buffer)
+            output_msg = {
+                'type': 'output',
+                'job_name': job_name,
+                'job_instance': job_instance,
+                'machine': machine_id,
+                'stream': 'stdout',
+                'data': combined_output,
+                'seq': next_seq,
+                'timestamp': datetime.now(timezone.utc).isoformat()
+            }
+            pending_messages.append(output_msg)
+            next_seq += 1
+            output_buffer = []
+        
+        # Read any remaining output (skip if killed, pipes are closed)
         stdout_remainder = None
         stderr_remainder = None
         
@@ -269,31 +308,17 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
             except Exception:
                 pass
         
-        if stdout_remainder:
-            for line in stdout_remainder.splitlines(keepends=True):
-                output_buffer.append(line)
+        # Add all remaining output as one message
+        if stdout_remainder or stderr_remainder:
+            combined_remainder = (stdout_remainder or '') + (stderr_remainder or '')
+            if combined_remainder:
                 pending_messages.append({
                     'type': 'output',
                     'job_name': job_name,
                     'job_instance': job_instance,
                     'machine': machine_id,
                     'stream': 'stdout',
-                    'data': line,
-                    'seq': next_seq,
-                    'timestamp': datetime.now(timezone.utc).isoformat()
-                })
-                next_seq += 1
-        
-        if stderr_remainder:
-            for line in stderr_remainder.splitlines(keepends=True):
-                output_buffer.append(line)
-                pending_messages.append({
-                    'type': 'output',
-                    'job_name': job_name,
-                    'job_instance': job_instance,
-                    'machine': machine_id,
-                    'stream': 'stderr',
-                    'data': line,
+                    'data': combined_remainder,
                     'seq': next_seq,
                     'timestamp': datetime.now(timezone.utc).isoformat()
                 })
@@ -304,7 +329,6 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
         if killed:
             # Add message to output about being killed
             kill_msg = "\n[Job terminated by user request]\n"
-            output_buffer.append(kill_msg)
             pending_messages.append({
                 'type': 'output',
                 'job_name': job_name,

@@ -169,7 +169,8 @@ class UIEndpoint:
                             if cron not in rng_names:
                                 if 'retcode' not in tgt or (tgt['retcode'] != 0 and tgt['retcode'] != "0"):
                                     false_result_number += 1
-                        if false_result_number == len(srst[cron]['results']):
+                        # Mark as failed if ANY target failed
+                        if false_result_number > 0:
                             lastst[cron]['result_ok'] = False
                     else:
                         lastst[cron]['result_ok'] = False
