@@ -149,9 +149,11 @@ class UIEndpoint:
                     else:
                         lastst[cron]['result_ok'] = False
             
+            # Send in old format for backward compatibility (no type field needed for legacy messages)
             await ws.send_str(json.dumps({
                 'running': srrng,
-                'last_state': lastst
+                'last_state': lastst,
+                'sp_version': __version__
             }, default=str))
             
             # Send subscribed cron details with incremental output
