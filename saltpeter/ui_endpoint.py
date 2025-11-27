@@ -51,20 +51,39 @@ class UIEndpoint:
                         data = json.loads(msg.data)
                         
                         if 'subscribe' in data:
-                            cron = data['subscribe']
-                            connection_state['subscriptions'].append(cron)
-                            # Initialize output position tracking for this subscription
-                            if cron not in connection_state['output_positions']:
-                                connection_state['output_positions'][cron] = {}
+                            cron_list = data['subscribe']
+                            # Support both string and array
+                            if isinstance(cron_list, str):
+                                cron_list = [cron_list]
+                            elif not isinstance(cron_list, list):
+                                cron_list = [cron_list]
+                            
+                            for cron in cron_list:
+                                if cron not in connection_state['subscriptions']:
+                                    connection_state['subscriptions'].append(cron)
+                                    # Initialize output position tracking for this subscription
+                                    if cron not in connection_state['output_positions']:
+                                        connection_state['output_positions'][cron] = {}
+                                    print(f'UI WS: Client subscribed to {cron}')
+                            
+                            # Send details for subscribed crons immediately
                             await self.send_data_http(ws, connection_state, cfg_update=False, tml_update=False)
                             
                         elif 'unsubscribe' in data:
-                            cron = data['unsubscribe']
-                            if cron in connection_state['subscriptions']:
-                                connection_state['subscriptions'].remove(cron)
-                            # Clean up output position tracking
-                            if cron in connection_state['output_positions']:
-                                del connection_state['output_positions'][cron]
+                            cron_list = data['unsubscribe']
+                            # Support both string and array
+                            if isinstance(cron_list, str):
+                                cron_list = [cron_list]
+                            elif not isinstance(cron_list, list):
+                                cron_list = [cron_list]
+                            
+                            for cron in cron_list:
+                                if cron in connection_state['subscriptions']:
+                                    connection_state['subscriptions'].remove(cron)
+                                    print(f'UI WS: Client unsubscribed from {cron}')
+                                # Clean up output position tracking
+                                if cron in connection_state['output_positions']:
+                                    del connection_state['output_positions'][cron]
                                 
                         elif 'ack' in data:
                             # Client acknowledges receipt of output chunk
@@ -207,7 +226,12 @@ class UIEndpoint:
                             srcron['results'][machine]['ret'] = ''  # Don't send full output in main message
                             srcron['results'][machine]['output_length'] = len(full_output)
                     
-                    await ws.send_str(json.dumps({cron: srcron}, default=str))
+                    # Send cron details with type field
+                    await ws.send_str(json.dumps({
+                        'type': 'details',
+                        'cron': cron,
+                        'data': srcron
+                    }, default=str))
             
             if tml_update:
                 await ws.send_str(json.dumps({'timeline': self.timeline.copy()}, default=str))
