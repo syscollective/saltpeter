@@ -208,8 +208,6 @@ class UIEndpoint:
                             full_output = srcron['results'][machine].get('ret', '')
                             last_position = output_positions[cron].get(machine, 0)
                             
-                            print(f'[OUTPUT DEBUG] {cron}/{machine}: full_output_len={len(full_output)}, last_position={last_position}')
-                            
                             if len(full_output) > last_position:
                                 # Send incremental chunk
                                 new_chunk = full_output[last_position:]
@@ -222,7 +220,6 @@ class UIEndpoint:
                                     'total_length': len(full_output),
                                     'is_complete': srcron['results'][machine].get('endtime', '') != ''
                                 }
-                                print(f'[OUTPUT DEBUG] Sending chunk: position={last_position}, chunk_len={len(new_chunk)}, total={len(full_output)}')
                                 await ws.send_str(json.dumps(chunk_msg))
                                 
                                 # Update position after sending

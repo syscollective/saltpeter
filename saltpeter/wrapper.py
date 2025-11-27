@@ -303,14 +303,23 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                     try:
                         # Non-blocking read from stdout/stderr
                         import select
-                        readable, _, _ = select.select([process.stdout, process.stderr], [], [], 1.0)
+                        readable, _, _ = select.select([process.stdout, process.stderr], [], [], 0.1)
                         
                         for stream in readable:
-                            line = stream.readline()
-                            if line:
+                            # Read ALL available lines from this stream, not just one
+                            while True:
+                                line = stream.readline()
+                                if not line:
+                                    break
                                 stream_type = 'stdout' if stream == process.stdout else 'stderr'
                                 output_buffer.append((stream_type, line))
                                 print(f'[WRAPPER DEBUG] Buffered line: {repr(line[:50])}... (buffer_size={sum(len(l) for _, l in output_buffer)})', file=sys.stderr, flush=True)
+                                
+                                # Check if more data is immediately available
+                                # If not, break to avoid blocking on readline()
+                                ready, _, _ = select.select([stream], [], [], 0)
+                                if not ready:
+                                    break
                     except Exception:
                         pass
                     
