@@ -184,6 +184,25 @@ class WebSocketJobServer:
                                     if seq is not None:
                                         tmpstate['results'][machine]['last_output_seq'] = seq
                                     self.state[job_name] = tmpstate
+                    
+                    elif msg_type == 'sync_request':
+                        # Client requests sync - tell them what we last received
+                        client_last_acked = data.get('last_acked_seq', -1)
+                        client_next_seq = data.get('next_seq', 0)
+                        
+                        server_last_seq = -1
+                        if client_id in self.connections:
+                            server_last_seq = self.connections[client_id].get('last_acked_seq', -1)
+                        
+                        print(f"WebSocket: Sync request from {client_id}: client_acked={client_last_acked}, client_next={client_next_seq}, server_last={server_last_seq}", flush=True)
+                        
+                        sync_response = {
+                            'type': 'sync_response',
+                            'last_seq': server_last_seq,
+                            'timestamp': datetime.now(timezone.utc).isoformat()
+                        }
+                        
+                        await websocket.send(json.dumps(sync_response))
                         
                     elif msg_type == 'complete':
                         retcode = data.get('retcode', -1)
