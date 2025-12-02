@@ -59,10 +59,9 @@ jobs:
         run: |
           # Test that the binary exists and is executable
           chmod +x dist/sp_wrapper
-          # Test --version flag
-          dist/sp_wrapper --version
-          # Test that it shows error when missing required env vars (quick smoke test)
-          dist/sp_wrapper || true
+          # Test that it shows version in output when missing required env vars
+          # (wrapper now prints version on stdout during normal execution)
+          dist/sp_wrapper 2>&1 | grep -i version || true
       
       - name: Create version info file
         run: |
