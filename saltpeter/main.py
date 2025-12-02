@@ -261,6 +261,13 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
             last_heartbeat[tgt] = time.time()
     
     # Second phase: Monitor WebSocket results for confirmed targets only
+    if not targets_confirmed_started:
+        # No targets started successfully - all failed during Salt confirmation
+        print(f"WebSocket: No targets started successfully for {name}, cleaning up", flush=True)
+        if procname in running:
+            del running[procname]
+        return
+    
     print(f"Monitoring WebSocket results for {len(targets_confirmed_started)} confirmed target(s)...", flush=True)
     pending_targets = targets_confirmed_started.copy()
     job_start_time = time.time()  # Reset timer for actual job execution timeout

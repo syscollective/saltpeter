@@ -579,6 +579,9 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                     pass
 
 def main():
+    # Print version first (always output to stdout for testing/verification)
+    print(f"Saltpeter Wrapper version {__version__}")
+    
     # Read configuration from environment variables
     websocket_url = os.environ.get('SP_WEBSOCKET_URL')
     job_name = os.environ.get('SP_JOB_NAME')
@@ -614,8 +617,8 @@ def main():
     # Fork to background so Salt sees immediate success
     pid = os.fork()
     if pid > 0:
-        # Parent process - return success to Salt immediately with version
-        print(f"Wrapper started successfully (version {__version__})")
+        # Parent process - return success to Salt immediately
+        print("Wrapper started successfully")
         sys.stdout.flush()  # Ensure output is sent before exit
         sys.exit(0)
     

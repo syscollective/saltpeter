@@ -6,6 +6,7 @@ WebSocket server for receiving job updates from wrapper scripts
 import asyncio
 import websockets
 import json
+import time
 from datetime import datetime, timezone
 import multiprocessing
 
@@ -20,6 +21,7 @@ class WebSocketJobServer:
         self.commands = commands  # Shared command queue from main
         self.connections = {}  # Track active connections by job_instance + machine
         self.command_check_task = None  # Background task for checking kill commands
+        self.kill_timeouts = {}  # Track kill commands with grace period: {job_name: timestamp}
         
     async def handle_client(self, websocket):
         """
@@ -271,17 +273,25 @@ class WebSocketJobServer:
                                 # Get existing data if we have it (output was accumulated during 'output' messages)
                                 starttime = timestamp
                                 output = ''
+                                wrapper_version = None
+                                last_heartbeat = None
                                 if machine in tmpstate['results']:
                                     starttime = tmpstate['results'][machine].get('starttime', timestamp)
                                     output = tmpstate['results'][machine].get('ret', '')
+                                    wrapper_version = tmpstate['results'][machine].get('wrapper_version')
+                                    last_heartbeat = tmpstate['results'][machine].get('last_heartbeat')
                                 
-                                # Update with final status
+                                # Update with final status, preserving wrapper_version and last_heartbeat
                                 tmpstate['results'][machine] = {
                                     'ret': output,
                                     'retcode': retcode,
                                     'starttime': starttime,
                                     'endtime': timestamp
                                 }
+                                if wrapper_version:
+                                    tmpstate['results'][machine]['wrapper_version'] = wrapper_version
+                                if last_heartbeat:
+                                    tmpstate['results'][machine]['last_heartbeat'] = last_heartbeat
                                 self.state[job_name] = tmpstate
                                 print(f"WebSocket: Updated state for {job_name}[{machine}] with endtime={timestamp}, retcode={retcode}", flush=True)
                         else:
@@ -378,6 +388,9 @@ class WebSocketJobServer:
                             job_name = cmd['killcron']
                             print(f"WebSocket: Kill command received for job {job_name}", flush=True)
                             
+                            # Track kill time for grace period enforcement
+                            self.kill_timeouts[job_name] = time.time()
+                            
                             # Find all connections for this job and send kill signal
                             killed_count = 0
                             for client_id, conn_info in list(self.connections.items()):
@@ -440,6 +453,38 @@ class WebSocketJobServer:
                             
                             # Remove command from queue
                             self.commands.remove(cmd)
+                
+                # Check for kill grace period timeouts (10 seconds)
+                current_time = time.time()
+                for job_name, kill_time in list(self.kill_timeouts.items()):
+                    if current_time - kill_time >= 10:
+                        # Grace period expired - forcefully complete any remaining targets
+                        print(f"WebSocket: Kill grace period expired for {job_name}, forcefully completing", flush=True)
+                        
+                        # Find all running instances of this job and mark them as killed
+                        if job_name in self.state and self.statelocks and job_name in self.statelocks:
+                            with self.statelocks[job_name]:
+                                tmpstate = self.state[job_name].copy()
+                                if 'results' in tmpstate:
+                                    now = datetime.now(timezone.utc)
+                                    for machine, result in tmpstate['results'].items():
+                                        # Only update if not already completed
+                                        if not result.get('endtime') or result.get('endtime') == '':
+                                            print(f"WebSocket: Forcefully completing {job_name} on {machine}", flush=True)
+                                            result['endtime'] = now
+                                            result['retcode'] = 143  # SIGTERM exit code
+                                            if 'ret' not in result:
+                                                result['ret'] = ''
+                                            result['ret'] += "\n[Job terminated by user request - grace period expired]\n"
+                                    self.state[job_name] = tmpstate
+                        
+                        # Remove from kill_timeouts
+                        del self.kill_timeouts[job_name]
+                        
+                        # Clean up any lingering connections for this job
+                        for client_id in list(self.connections.keys()):
+                            if self.connections[client_id]['job_name'] == job_name:
+                                del self.connections[client_id]
                 
                 await asyncio.sleep(0.5)  # Check every 500ms
             except Exception as e:
