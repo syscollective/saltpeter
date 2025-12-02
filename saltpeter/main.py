@@ -40,7 +40,7 @@ def readconfig(configdir):
                 bad_files.remove(f)
         except Exception as e:
             if f not in bad_files:
-                print('Could not parse file %s: %s' % (f,e), flush=True)
+                print('[MAIN] Could not parse file %s: %s' % (f,e), flush=True)
                 bad_files.append(f)
     return (crons, saltpeter_maintenance)
 
@@ -60,7 +60,7 @@ def parsecron(name, data, time=datetime.now(timezone.utc)):
             utc = False
     except KeyError as e:
         if name not in bad_crons:
-            print('Missing required %s property from "%s"' % (e,name), flush=True)
+            print('[MAIN] Missing required %s property from "%s"' % (e,name), flush=True)
             bad_crons.append(name)
         return False
     ret = {}
@@ -82,8 +82,8 @@ def parsecron(name, data, time=datetime.now(timezone.utc)):
         entry = CronTab('%s %s %s %s %s %s %s' % (sec, minute, hour, dom, mon, dow, year))
     except Exception as e:
         if name not in bad_crons:
-            print('Could not parse execution time in "%s":' % name, flush=True)
-            print(e, flush=True)
+            print('[MAIN] Could not parse execution time in "%s":' % name, flush=True)
+            print('[MAIN]', e, flush=True)
             bad_crons.append(name)
         return False
 
@@ -146,7 +146,7 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
     
     # First phase: Wait for Salt to confirm wrapper execution (indefinitely)
     if salt_client and job_id:
-        print(f"Waiting for Salt to confirm wrapper execution for job {job_id}...", flush=True)
+        print(f"[JOB:{procname}] Waiting for Salt to confirm wrapper execution for job {job_id}...", flush=True)
         
         check_count = 0
         while pending_targets:
@@ -158,7 +158,7 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                                                 block=False, expect_minions=True, timeout=1)
             
             if check_count % 10 == 0:
-                print(f"Still waiting for {len(pending_targets)} target(s) to respond: {list(pending_targets)}", flush=True)
+                print(f"[JOB:{procname}] Still waiting for {len(pending_targets)} target(s) to respond: {list(pending_targets)}", flush=True)
             
             for ret in rets:
                 if ret is None:
@@ -171,7 +171,7 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                 if minion_id not in pending_targets:
                     continue
                 
-                print(f"Got return from {minion_id}: {minion_data}", flush=True)
+                print(f"[JOB:{procname}] Got return from {minion_id}: {minion_data}", flush=True)
                 
                 # Check if this is a failed return (Salt couldn't execute)
                 if 'failed' in minion_data and minion_data['failed'] == True:
@@ -179,7 +179,7 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                     error_output = minion_data.get('ret', 'Salt execution failed')
                     error_code = 255
                     
-                    print(f"Wrapper execution failed on {minion_id} (Salt failed): {error_output}", flush=True)
+                    print(f"[JOB:{procname}] Wrapper execution failed on {minion_id} (Salt failed): {error_output}", flush=True)
                     
                     # Update state with the error
                     now = datetime.now(timezone.utc)
@@ -215,7 +215,7 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                     if ret_code is not None:
                         if ret_code != 0:
                             # Non-zero exit code - wrapper failed to execute
-                            print(f"Wrapper execution failed on {minion_id} (retcode={ret_code}): {ret_data}", flush=True)
+                            print(f"[JOB:{procname}] Wrapper execution failed on {minion_id} (retcode={ret_code}): {ret_data}", flush=True)
                             
                             # Update state with the error
                             now = datetime.now(timezone.utc)
@@ -245,7 +245,7 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                             
                         else:
                             # retcode == 0: Wrapper started successfully
-                            print(f"Salt confirmed wrapper started on {minion_id} (retcode=0)", flush=True)
+                            print(f"[JOB:{procname}] Salt confirmed wrapper started on {minion_id} (retcode=0)", flush=True)
                             targets_confirmed_started.add(minion_id)
                             pending_targets.discard(minion_id)
                             # Initialize heartbeat timer NOW that we know it's running
@@ -263,19 +263,19 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
     # Second phase: Monitor WebSocket results for confirmed targets only
     if not targets_confirmed_started:
         # No targets started successfully - all failed during Salt confirmation
-        print(f"WebSocket: No targets started successfully for {name}, cleaning up", flush=True)
+        print(f"[JOB:{procname}] No targets started successfully for {name}, cleaning up", flush=True)
         if procname in running:
             del running[procname]
         return
     
-    print(f"Monitoring WebSocket results for {len(targets_confirmed_started)} confirmed target(s)...", flush=True)
+    print(f"[JOB:{procname}] Monitoring WebSocket results for {len(targets_confirmed_started)} confirmed target(s)...", flush=True)
     pending_targets = targets_confirmed_started.copy()
     job_start_time = time.time()  # Reset timer for actual job execution timeout
     
     while pending_targets:
         # Check if timeout exceeded (from when jobs actually started, not Salt submission)
         if time.time() - job_start_time > timeout:
-            print(f"WebSocket: Timeout waiting for results from {pending_targets}", flush=True)
+            print(f"[JOB:{procname}] Timeout waiting for results from {pending_targets}", flush=True)
             
             # Mark remaining targets as timed out
             now = datetime.now(timezone.utc)
@@ -350,7 +350,7 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                         
                         # Check if this target has completed (has endtime)
                         if result.get('endtime') and result['endtime'] != '':
-                            print(f"WebSocket: Target {tgt} completed, removing from pending (retcode: {result.get('retcode')})", flush=True)
+                            print(f"[JOB:{procname}] Target {tgt} completed, removing from pending (retcode: {result.get('retcode')})", flush=True)
                             pending_targets.remove(tgt)
                             continue
                         
@@ -358,7 +358,7 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                         if tgt in last_heartbeat:
                             time_since_heartbeat = time.time() - last_heartbeat[tgt]
                             if time_since_heartbeat > heartbeat_timeout:
-                                print(f"WebSocket: Heartbeat timeout for {tgt} ({time_since_heartbeat:.1f}s since last activity)", flush=True)
+                                print(f"[JOB:{procname}] Heartbeat timeout for {tgt} ({time_since_heartbeat:.1f}s since last activity)", flush=True)
                                 
                                 # Mark as failed with heartbeat timeout
                                 tmpstate = state[name].copy()
@@ -383,7 +383,7 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
         
         # If all targets completed, exit
         if not pending_targets:
-            print(f"WebSocket: All targets completed for {name}, exiting monitor loop", flush=True)
+            print(f"[JOB:{procname}] All targets completed for {name}, exiting monitor loop", flush=True)
             break
         
         # Wait before next check
@@ -426,9 +426,9 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
 
         if i is not None:
             m = list(i)[0]
-            print(name, i[m], flush=True)
+            print('[JOB]', name, i[m], flush=True)
             if 'failed' in i[m] and i[m]['failed'] == True:
-                print(f"Getting info about job {name} jid: {jid} every 10 seconds", flush=True)
+                print(f"[JOB:{procname}] Getting info about job {name} jid: {jid} every 10 seconds", flush=True)
                 failed_returns = True
                 continue
             else:
@@ -700,7 +700,7 @@ def run(name, data, procname, running, state, commands, maintenance):
                     
                     chunk = []
                 except Exception as e:
-                    print('Exception triggered in run() at "batch_size" condition', e, flush=True)
+                    print('[MAIN] Exception triggered in run() at "batch_size" condition', e, flush=True)
                     chunk = []
     else:
         running[procname] = {'started': now, 'name': name, 'machines': targets_list}
@@ -727,7 +727,7 @@ def run(name, data, procname, running, state, commands, maintenance):
                     processresults(salt, commands, job, name, data['group'], procname, running, state, targets_list)
 
         except Exception as e:
-            print('Exception triggered in run()', e, flush=True)
+            print('[MAIN] Exception triggered in run()', e, flush=True)
 
     log(cron=name, group=data['group'], what='end', instance=procname, time=datetime.now(timezone.utc))
 
@@ -743,7 +743,7 @@ def log(what, cron, group, instance, time, machine='', code=0, out='', status=''
         logfile_name = args.logdir+'/'+cron+'.log'
         logfile = open(logfile_name,'a')
     except Exception as e:
-        print(f"Could not open logfile {logfile_name}: ", e, flush=True)
+        print(f"[MAIN] Could not open logfile {logfile_name}: ", e, flush=True)
         return
 
     if what == 'start':
@@ -776,7 +776,7 @@ def log(what, cron, group, instance, time, machine='', code=0, out='', status=''
             es.index(index=index_name, doc_type='_doc', body=doc, request_timeout=20)
         except Exception as e:
             #print("Can't write to elasticsearch", doc, flush=True)
-            print(e, flush=True)
+            print('[MAIN]', e, flush=True)
 
     if use_opensearch:
         doc = { 'job_name': cron, "group": group, "job_instance": instance, '@timestamp': time,
@@ -787,7 +787,7 @@ def log(what, cron, group, instance, time, machine='', code=0, out='', status=''
             opensearch.index(index=index_name, body=doc, request_timeout=20)
         except Exception as e:
             #print("Can't write to opensearch", doc)
-            print(e, flush=True)
+            print('[MAIN]', e, flush=True)
 
 def gettimeline(client, start_date, end_date, req_id, timeline, index_name):
     # Build the query with a date range filter
@@ -835,7 +835,7 @@ def gettimeline(client, start_date, end_date, req_id, timeline, index_name):
 
     except Exception as e:
         # Handle transport or other errors
-        print(f"Error occurred during timeline search: {e}", flush=True)
+        print(f"[MAIN] Error occurred during timeline search: {e}", flush=True)
     finally:
         if scroll_id:
             # Clear the scroll context when done
@@ -891,7 +891,7 @@ def main():
     args = parser.parse_args()
 
     if args.version:
-        print("Saltpeter version ", version.__version__)
+        print("[MAIN] Saltpeter version ", version.__version__)
         exit(0)
 
 
@@ -928,7 +928,7 @@ def main():
         name='machines_endpoint'
     )
     ws_server.start()
-    print(f"WebSocket server started on ws://{args.websocket_host}:{args.websocket_port}", flush=True)
+    print(f"[MAIN] WebSocket server started on ws://{args.websocket_host}:{args.websocket_port}", flush=True)
     
     #start the UI endpoint
     if args.api:
@@ -981,7 +981,7 @@ def main():
         if maintenance['global']:
             now = datetime.now(timezone.utc)
             if (now - last_maintenance_log).total_seconds() >= 20:
-                print("Maintenance mode active, no crons will be started.", flush=True)
+                print("[MAIN] Maintenance mode active, no crons will be started.", flush=True)
                 last_maintenance_log = now
         else:
             for name in config['crons'].copy():
@@ -1008,7 +1008,7 @@ def main():
                     if name not in last_run or last_run[name] < prev:
                         last_run[name] = now 
                         procname = name+'_'+str(int(time.time()))
-                        print('Firing %s!' % procname, flush=True)
+                        print('[MAIN] Firing %s!' % procname, flush=True)
 
                         #running[procname] = {'empty': True}
                         p = multiprocessing.Process(target=run,\
@@ -1030,7 +1030,7 @@ def main():
                 if entry == process.name:
                     found = True
             if found == False:
-                print('Deleting process %s as it must have finished' % entry, flush=True)
+                print('[MAIN] Deleting process %s as it must have finished' % entry, flush=True)
                 del(processlist[entry])
                 if entry in running:
                     del(running[entry])

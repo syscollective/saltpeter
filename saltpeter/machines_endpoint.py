@@ -31,7 +31,14 @@ class WebSocketJobServer:
         This handler works with both old and new versions.
         """
         client_id = None
+        remote_address = None
         try:
+            # Get remote address for debugging
+            try:
+                remote_address = websocket.remote_address if hasattr(websocket, 'remote_address') else 'unknown'
+            except:
+                remote_address = 'unknown'
+                
             async for message in websocket:
                 try:
                     data = json.loads(message)
@@ -60,7 +67,7 @@ class WebSocketJobServer:
                             'last_acked_seq': -1,    # Last sequence we acknowledged
                             'pending_acks': []       # Sequences pending acknowledgement
                         }
-                        print(f"WebSocket: Client connected - {client_id}", flush=True)
+                        print(f"[MACHINES WS] Client connected - {client_id}", flush=True)
                         # Send connection acknowledgement
                         await websocket.send(json.dumps({
                             'type': 'ack',
@@ -76,12 +83,12 @@ class WebSocketJobServer:
                         
                         # Validate that this job instance is running
                         if job_instance not in self.running:
-                            print(f"WebSocket: WARNING - Received start for unknown job instance {job_instance}", flush=True)
+                            print(f"[MACHINES WS] WARNING - Received start for unknown job instance {job_instance}", flush=True)
                             continue
                         
                         # Validate machine is in the expected machines list for this instance
                         if 'machines' in self.running[job_instance] and machine not in self.running[job_instance]['machines']:
-                            print(f"WebSocket: WARNING - Machine {machine} not in expected list for {job_instance}", flush=True)
+                            print(f"[MACHINES WS] WARNING - Machine {machine} not in expected list for {job_instance}", flush=True)
                             continue
                             
                         # Update state
@@ -99,7 +106,7 @@ class WebSocketJobServer:
                                 tmpstate['results'][machine]['wrapper_version'] = data.get('version', 'unknown')
                                 self.state[job_name] = tmpstate
                         
-                        print(f"WebSocket: Job started - {client_id} (PID: {data.get('pid')}, Version: {data.get('version', 'unknown')})", flush=True)
+                        print(f"[MACHINES WS] Job started - {client_id} (PID: {data.get('pid')}, Version: {data.get('version', 'unknown')})", flush=True)
                         
                     elif msg_type == 'heartbeat':
                         if client_id in self.connections:
@@ -116,7 +123,7 @@ class WebSocketJobServer:
                                 tmpstate['results'][machine]['last_heartbeat'] = timestamp
                                 self.state[job_name] = tmpstate
                         
-                        print(f"WebSocket: Heartbeat from {client_id} at {timestamp}", flush=True)
+                        print(f"[MACHINES WS] Heartbeat from {client_id} at {timestamp}", flush=True)
                         
                     elif msg_type == 'output':
                         stream = data.get('stream', 'stdout')
@@ -136,7 +143,7 @@ class WebSocketJobServer:
                                 
                                 if seq < expected_seq:
                                     # Duplicate message - already processed
-                                    print(f"WebSocket: Duplicate output seq {seq} from {client_id} (expected {expected_seq})", flush=True)
+                                    print(f"[MACHINES WS] Duplicate output seq {seq} from {client_id} (expected {expected_seq})", flush=True)
                                     # Send ack anyway
                                     await websocket.send(json.dumps({
                                         'type': 'ack',
@@ -148,7 +155,7 @@ class WebSocketJobServer:
                                     
                                 elif seq > expected_seq:
                                     # Out of order - request resend
-                                    print(f"WebSocket: Out of order output seq {seq} from {client_id} (expected {expected_seq})", flush=True)
+                                    print(f"[MACHINES WS] Out of order output seq {seq} from {client_id} (expected {expected_seq})", flush=True)
                                     await websocket.send(json.dumps({
                                         'type': 'nack',
                                         'nack_type': 'out_of_order',
@@ -179,12 +186,12 @@ class WebSocketJobServer:
                         # Update state with accumulated output
                         # Validate job_instance is in running dict (started by main.py)
                         if job_instance not in self.running:
-                            print(f"WebSocket: WARNING - Received output for unknown job instance {job_instance}", flush=True)
+                            print(f"[MACHINES WS] WARNING - Received output for unknown job instance {job_instance}", flush=True)
                             continue
                         
                         # Validate machine is in the expected machines list for this instance
                         if 'machines' in self.running[job_instance] and machine not in self.running[job_instance]['machines']:
-                            print(f"WebSocket: WARNING - Machine {machine} not in expected list for {job_instance}", flush=True)
+                            print(f"[MACHINES WS] WARNING - Machine {machine} not in expected list for {job_instance}", flush=True)
                             continue
                         
                         if job_name in self.state:
@@ -213,7 +220,7 @@ class WebSocketJobServer:
                         if client_id in self.connections:
                             server_last_seq = self.connections[client_id].get('last_acked_seq', -1)
                         
-                        print(f"WebSocket: Sync request from {client_id}: client_acked={client_last_acked}, client_next={client_next_seq}, server_last={server_last_seq}", flush=True)
+                        print(f"[MACHINES WS] Sync request from {client_id}: client_acked={client_last_acked}, client_next={client_next_seq}, server_last={server_last_seq}", flush=True)
                         
                         sync_response = {
                             'type': 'sync_response',
@@ -227,7 +234,7 @@ class WebSocketJobServer:
                         retcode = data.get('retcode', -1)
                         seq = data.get('seq', None)
                         
-                        print(f"WebSocket: Received complete message from {client_id}, retcode={retcode}, seq={seq}", flush=True)
+                        print(f"[MACHINES WS] Received complete message from {client_id}, retcode={retcode}, seq={seq}", flush=True)
                         
                         # Send acknowledgement
                         ack_msg = {
@@ -242,7 +249,7 @@ class WebSocketJobServer:
                         
                         # Validate that this job instance is actually running
                         if job_instance not in self.running:
-                            print(f"WebSocket: WARNING - Received completion for unknown job instance {job_instance}", flush=True)
+                            print(f"[MACHINES WS] WARNING - Received completion for unknown job instance {job_instance}", flush=True)
                             # Clean up connection anyway
                             if client_id in self.connections:
                                 del self.connections[client_id]
@@ -250,7 +257,7 @@ class WebSocketJobServer:
                         
                         # Validate that this machine is in the running list for this instance
                         if 'machines' not in self.running[job_instance] or machine not in self.running[job_instance]['machines']:
-                            print(f"WebSocket: WARNING - Machine {machine} not in running list for instance {job_instance} (expected: {self.running[job_instance].get('machines', [])})", flush=True)
+                            print(f"[MACHINES WS] WARNING - Machine {machine} not in running list for instance {job_instance} (expected: {self.running[job_instance].get('machines', [])})", flush=True)
                             # Clean up connection anyway
                             if client_id in self.connections:
                                 del self.connections[client_id]
@@ -293,9 +300,9 @@ class WebSocketJobServer:
                                 if last_heartbeat:
                                     tmpstate['results'][machine]['last_heartbeat'] = last_heartbeat
                                 self.state[job_name] = tmpstate
-                                print(f"WebSocket: Updated state for {job_name}[{machine}] with endtime={timestamp}, retcode={retcode}", flush=True)
+                                print(f"[MACHINES WS] Updated state for {job_name}[{machine}] with endtime={timestamp}, retcode={retcode}", flush=True)
                         else:
-                            print(f"WebSocket: WARNING - Cannot update state for {job_name}", flush=True)
+                            print(f"[MACHINES WS] WARNING - Cannot update state for {job_name}", flush=True)
                         
                         # Get output for logging (use what's in state or buffer)
                         log_output = ''
@@ -316,7 +323,7 @@ class WebSocketJobServer:
                                 # If no more machines running, remove the job instance
                                 if not tmprunning['machines']:
                                     del self.running[job_instance]
-                                    print(f"WebSocket: Job instance {job_instance} completed - all machines finished", flush=True)
+                                    print(f"[MACHINES WS] Job instance {job_instance} completed - all machines finished", flush=True)
                         
                         # Log the result
                         if self.log_func:
@@ -331,7 +338,7 @@ class WebSocketJobServer:
                                 time=timestamp
                             )
                         
-                        print(f"WebSocket: Job completed - {client_id} (exit code: {retcode})", flush=True)
+                        print(f"[MACHINES WS] Job completed - {client_id} (exit code: {retcode})", flush=True)
                         
                         # Clean up connection
                         if client_id in self.connections:
@@ -339,11 +346,11 @@ class WebSocketJobServer:
                         
                     elif msg_type == 'killed':
                         # Wrapper acknowledges it was killed
-                        print(f"WebSocket: Wrapper {client_id} acknowledged kill signal", flush=True)
+                        print(f"[MACHINES WS] Wrapper {client_id} acknowledged kill signal", flush=True)
                         
                     elif msg_type == 'error':
                         error_msg = data.get('error', 'Unknown error')
-                        print(f"WebSocket: Error from {client_id}: {error_msg}", flush=True)
+                        print(f"[MACHINES WS] Error from {client_id}: {error_msg}", flush=True)
                         
                         # Log error
                         if self.log_func:
@@ -363,18 +370,21 @@ class WebSocketJobServer:
                             del self.connections[client_id]
                     
                 except json.JSONDecodeError as e:
-                    print(f"WebSocket: Invalid JSON received: {e}", flush=True)
+                    print(f"[MACHINES WS] Invalid JSON received: {e}", flush=True)
                 except Exception as e:
-                    print(f"WebSocket: Error processing message: {e}", flush=True)
+                    print(f"[MACHINES WS] Error processing message: {e}", flush=True)
                     
         except websockets.exceptions.ConnectionClosed:
-            print(f"WebSocket: Connection closed - {client_id}", flush=True)
+            if client_id:
+                print(f"[MACHINES WS] Connection closed - {client_id}", flush=True)
+            else:
+                print(f"[MACHINES WS] Connection closed before identification (from {remote_address})", flush=True)
         except Exception as e:
-            print(f"WebSocket: Error in client handler: {e}", flush=True)
+            print(f"[MACHINES WS] Error in client handler: {e}", flush=True)
         finally:
             # Clean up connection on disconnect
             if client_id and client_id in self.connections:
-                print(f"WebSocket: Cleaning up connection - {client_id}", flush=True)
+                print(f"[MACHINES WS] Cleaning up connection - {client_id}", flush=True)
                 del self.connections[client_id]
     
     async def check_commands(self):
@@ -386,7 +396,7 @@ class WebSocketJobServer:
                     for cmd in list(self.commands):
                         if 'killcron' in cmd:
                             job_name = cmd['killcron']
-                            print(f"WebSocket: Kill command received for job {job_name}", flush=True)
+                            print(f"[MACHINES WS] Kill command received for job {job_name}", flush=True)
                             
                             # Track kill time for grace period enforcement
                             self.kill_timeouts[job_name] = time.time()
@@ -404,14 +414,14 @@ class WebSocketJobServer:
                                             'timestamp': datetime.now(timezone.utc).isoformat()
                                         }))
                                         killed_count += 1
-                                        print(f"WebSocket: Sent kill signal to {client_id}", flush=True)
+                                        print(f"[MACHINES WS] Sent kill signal to {client_id}", flush=True)
                                     except Exception as e:
-                                        print(f"WebSocket: Error sending kill to {client_id}: {e}", flush=True)
+                                        print(f"[MACHINES WS] Error sending kill to {client_id}: {e}", flush=True)
                             
                             if killed_count > 0:
-                                print(f"WebSocket: Sent kill signal to {killed_count} wrapper(s) for job {job_name}", flush=True)
+                                print(f"[MACHINES WS] Sent kill signal to {killed_count} wrapper(s) for job {job_name}", flush=True)
                             else:
-                                print(f"WebSocket: No active connections found for job {job_name}", flush=True)
+                                print(f"[MACHINES WS] No active connections found for job {job_name}", flush=True)
                             
                             # Remove command from queue
                             self.commands.remove(cmd)
@@ -422,11 +432,11 @@ class WebSocketJobServer:
                             machine_name = kill_info.get('machine')
                             
                             if not job_name or not machine_name:
-                                print(f"WebSocket: Invalid killmachine command - missing cron or machine: {kill_info}", flush=True)
+                                print(f"[MACHINES WS] Invalid killmachine command - missing cron or machine: {kill_info}", flush=True)
                                 self.commands.remove(cmd)
                                 continue
                             
-                            print(f"WebSocket: Kill command received for job {job_name} on machine {machine_name}", flush=True)
+                            print(f"[MACHINES WS] Kill command received for job {job_name} on machine {machine_name}", flush=True)
                             
                             # Find the specific connection for this job and machine
                             killed = False
@@ -441,15 +451,15 @@ class WebSocketJobServer:
                                             'timestamp': datetime.now(timezone.utc).isoformat()
                                         }))
                                         killed = True
-                                        print(f"WebSocket: Sent kill signal to {client_id}", flush=True)
+                                        print(f"[MACHINES WS] Sent kill signal to {client_id}", flush=True)
                                     except Exception as e:
-                                        print(f"WebSocket: Error sending kill to {client_id}: {e}", flush=True)
+                                        print(f"[MACHINES WS] Error sending kill to {client_id}: {e}", flush=True)
                                     break  # Only kill the first matching connection
                             
                             if killed:
-                                print(f"WebSocket: Sent kill signal to job {job_name} on machine {machine_name}", flush=True)
+                                print(f"[MACHINES WS] Sent kill signal to job {job_name} on machine {machine_name}", flush=True)
                             else:
-                                print(f"WebSocket: No active connection found for job {job_name} on machine {machine_name}", flush=True)
+                                print(f"[MACHINES WS] No active connection found for job {job_name} on machine {machine_name}", flush=True)
                             
                             # Remove command from queue
                             self.commands.remove(cmd)
@@ -459,7 +469,7 @@ class WebSocketJobServer:
                 for job_name, kill_time in list(self.kill_timeouts.items()):
                     if current_time - kill_time >= 10:
                         # Grace period expired - forcefully complete any remaining targets
-                        print(f"WebSocket: Kill grace period expired for {job_name}, forcefully completing", flush=True)
+                        print(f"[MACHINES WS] Kill grace period expired for {job_name}, forcefully completing", flush=True)
                         
                         # Find all running instances of this job and mark them as killed
                         if job_name in self.state and self.statelocks and job_name in self.statelocks:
@@ -470,7 +480,7 @@ class WebSocketJobServer:
                                     for machine, result in tmpstate['results'].items():
                                         # Only update if not already completed
                                         if not result.get('endtime') or result.get('endtime') == '':
-                                            print(f"WebSocket: Forcefully completing {job_name} on {machine}", flush=True)
+                                            print(f"[MACHINES WS] Forcefully completing {job_name} on {machine}", flush=True)
                                             result['endtime'] = now
                                             result['retcode'] = 143  # SIGTERM exit code
                                             if 'ret' not in result:
@@ -488,18 +498,18 @@ class WebSocketJobServer:
                 
                 await asyncio.sleep(0.5)  # Check every 500ms
             except Exception as e:
-                print(f"WebSocket: Error in command checker: {e}", flush=True)
+                print(f"[MACHINES WS] Error in command checker: {e}", flush=True)
                 await asyncio.sleep(1)
     
     async def start_server(self):
         """Start the WebSocket server"""
         async with websockets.serve(self.handle_client, self.host, self.port):
-            print(f"WebSocket server started on ws://{self.host}:{self.port}", flush=True)
+            print(f"[MACHINES WS] Server started on ws://{self.host}:{self.port}", flush=True)
             
             # Start command checking task if we have a command queue
             if self.commands is not None:
                 self.command_check_task = asyncio.create_task(self.check_commands())
-                print(f"WebSocket: Command checker started", flush=True)
+                print(f"[MACHINES WS] Command checker started", flush=True)
             
             await asyncio.Future()  # Run forever
     

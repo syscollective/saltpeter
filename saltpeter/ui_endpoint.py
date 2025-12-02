@@ -30,7 +30,7 @@ class UIEndpoint:
         ws = web.WebSocketResponse()
         await ws.prepare(request)
         
-        print('New WS connection from UI')
+        print('[UI WS] New connection from UI')
         
         # Track connection state
         connection_state = {
@@ -67,7 +67,7 @@ class UIEndpoint:
                                     # Don't reset positions - let incremental logic handle it
                                     # New connections start with empty positions (defaults to 0)
                                     # Existing connections keep their positions
-                                    print(f'UI WS: Client subscribed to {cron}')
+                                    print(f'[UI WS] Client subscribed to {cron}')
                             
                             # Send details for subscribed crons immediately
                             await self.send_data_http(ws, connection_state, cfg_update=False, tml_update=False)
@@ -83,7 +83,7 @@ class UIEndpoint:
                             for cron in cron_list:
                                 if cron in connection_state['subscriptions']:
                                     connection_state['subscriptions'].remove(cron)
-                                    print(f'UI WS: Client unsubscribed from {cron}')
+                                    print(f'[UI WS] Client unsubscribed from {cron}')
                                 # Clean up output position tracking
                                 if cron in connection_state['output_positions']:
                                     del connection_state['output_positions'][cron]
@@ -98,7 +98,7 @@ class UIEndpoint:
                             if cron and machine and position is not None:
                                 if cron in connection_state['output_positions']:
                                     connection_state['output_positions'][cron][machine] = position
-                                    print(f'UI WS: Ack from client for {cron}[{machine}] position={position}')
+                                    print(f'[UI WS] Ack from client for {cron}[{machine}] position={position}')
                                 
                         elif 'run' in data:
                             cron = data['run']
@@ -117,19 +117,19 @@ class UIEndpoint:
                             self.commands.append({'get_timeline': timeline_params})
                             
                     except json.JSONDecodeError as e:
-                        print(f'Could not parse UI message as JSON: {e}')
+                        print(f'[UI WS] Could not parse message as JSON: {e}')
                     except Exception as e:
-                        print(f'Error processing UI message: {e}')
+                        print(f'[UI WS] Error processing message: {e}')
                         
                 elif msg.type == web.WSMsgType.ERROR:
-                    print(f'UI WebSocket error: {ws.exception()}')
+                    print(f'[UI WS] WebSocket error: {ws.exception()}')
                     
         except Exception as e:
-            print(f'Error in UI WebSocket handler: {e}')
+            print(f'[UI WS] Error in WebSocket handler: {e}')
         finally:
             if id(ws) in self.ws_connections:
                 del self.ws_connections[id(ws)]
-            print('UI WS connection closed')
+            print('[UI WS] Connection closed')
         
         return ws
     
@@ -258,7 +258,7 @@ class UIEndpoint:
                 connection_state['last_tml_serial'] = self.timeline.get('id', '')
                 
         except Exception as e:
-            print(f'Error sending data to UI websocket: {e}')
+            print(f'[UI WS] Error sending data to websocket: {e}')
     
     async def broadcast_updates(self):
         """Periodically broadcast updates to all connected clients"""
@@ -289,7 +289,7 @@ class UIEndpoint:
                         
                         await self.send_data_http(ws, connection_state, send_cfg, send_tml)
                     except Exception as e:
-                        print(f'Error broadcasting to websocket: {e}')
+                        print(f'[UI WS] Error broadcasting to websocket: {e}')
                         disconnected.append(conn_id)
                 
                 # Clean up disconnected clients
@@ -364,7 +364,7 @@ class UIEndpoint:
         site = web.TCPSite(runner, '0.0.0.0', self.port)
         await site.start()
         
-        print(f"UI endpoint started on port {self.port} (HTTP + WebSocket on /ws)")
+        print(f"[UI WS] Endpoint started on port {self.port} (HTTP + WebSocket on /ws)")
         
         # Start broadcast task
         broadcast_task = asyncio.create_task(self.broadcast_updates())
