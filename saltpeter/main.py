@@ -604,6 +604,9 @@ def run(name, data, procname, running, state, commands, maintenance):
         tmpstate['last_run'] = now
         tmpstate['overlap'] = False
         tmpstate['group'] = data['group']  # Store group for WebSocket handler
+        # Clear previous results when starting a fresh run
+        if 'results' in tmpstate:
+            del tmpstate['results']
         state[name] = tmpstate
     log(cron=name, group=data['group'], what='start', instance=procname, time=now)
 
