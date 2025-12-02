@@ -131,11 +131,14 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
     """
     start_time = time.time()
     check_interval = 1  # Check every second
-    heartbeat_timeout = 15  # 3 missed heartbeats (5 seconds each) = 15 seconds
     
     # Default timeout of 1 hour if not specified
     if timeout is None:
         timeout = 3600
+    
+    # Heartbeat timeout should be the same as job timeout
+    # Communication is retried until the job timeout is reached
+    heartbeat_timeout = timeout
     
     pending_targets = set(targets)
     last_heartbeat = {}  # Track last activity time for each target

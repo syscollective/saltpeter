@@ -27,7 +27,6 @@ import os
 import json
 import time
 import socket
-import argparse
 from datetime import datetime, timezone
 
 # Handle both package import and direct execution
@@ -46,6 +45,9 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
     Run command in subprocess and stream output via WebSocket
     Subprocess runs independently - WebSocket retries every 2 seconds if disconnected
     Also listens for kill commands from the server
+    
+    Heartbeats are sent every 5 seconds. Communication is retried until the 
+    job's configured timeout is reached, at which point the job is killed.
     """
     
     def create_output_messages(output_data, seq_start):
@@ -86,6 +88,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
     process = None
     websocket = None
     retry_interval = 2
+    heartbeat_interval = 5  # Fixed 5-second heartbeat interval
     
     # Output buffering configuration
     # WebSocket default frame limit is 1MB (1048576 bytes)
@@ -147,6 +150,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
             'job_instance': job_instance,
             'machine': machine_id,
             'pid': process.pid,
+            'version': __version__,
             'timestamp': datetime.now(timezone.utc).isoformat()
         })
         
@@ -435,9 +439,9 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                     # Any error means connection is bad
                     websocket = None
                 
-                # Send heartbeat every 5 seconds - do this regardless of other state
+                # Send heartbeat at calculated interval - do this regardless of other state
                 current_time = time.time()
-                if current_time - last_heartbeat >= 5:
+                if current_time - last_heartbeat >= heartbeat_interval:
                     if websocket is not None:
                         heartbeat_msg = {
                             'type': 'heartbeat',
@@ -575,11 +579,6 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                     pass
 
 def main():
-    # Parse command line arguments (ignore unknown args from Salt invocation)
-    parser = argparse.ArgumentParser(description='Saltpeter Wrapper Script')
-    parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')
-    args, unknown = parser.parse_known_args()
-    
     # Read configuration from environment variables
     websocket_url = os.environ.get('SP_WEBSOCKET_URL')
     job_name = os.environ.get('SP_JOB_NAME')
@@ -615,8 +614,8 @@ def main():
     # Fork to background so Salt sees immediate success
     pid = os.fork()
     if pid > 0:
-        # Parent process - return success to Salt immediately
-        print("Wrapper started successfully")
+        # Parent process - return success to Salt immediately with version
+        print(f"Wrapper started successfully (version {__version__})")
         sys.stdout.flush()  # Ensure output is sent before exit
         sys.exit(0)
     

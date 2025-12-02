@@ -70,6 +70,7 @@ class WebSocketJobServer:
                         if client_id in self.connections:
                             self.connections[client_id]['pid'] = data.get('pid')
                             self.connections[client_id]['started'] = timestamp
+                            self.connections[client_id]['version'] = data.get('version')
                         
                         # Validate that this job instance is running
                         if job_instance not in self.running:
@@ -93,9 +94,10 @@ class WebSocketJobServer:
                                 tmpstate['results'][machine]['ret'] = ''
                                 tmpstate['results'][machine]['retcode'] = ''
                                 tmpstate['results'][machine]['endtime'] = ''
+                                tmpstate['results'][machine]['wrapper_version'] = data.get('version', 'unknown')
                                 self.state[job_name] = tmpstate
                         
-                        print(f"WebSocket: Job started - {client_id} (PID: {data.get('pid')})", flush=True)
+                        print(f"WebSocket: Job started - {client_id} (PID: {data.get('pid')}, Version: {data.get('version', 'unknown')})", flush=True)
                         
                     elif msg_type == 'heartbeat':
                         if client_id in self.connections:
