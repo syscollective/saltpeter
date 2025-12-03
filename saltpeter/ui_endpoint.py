@@ -90,15 +90,15 @@ class UIEndpoint:
                                 
                         elif 'ack' in data:
                             # Client acknowledges receipt of output chunk
+                            # Note: We don't update output_positions based on acks - server is authoritative
+                            # Acks are for flow control/logging only
                             ack_info = data['ack']
                             cron = ack_info.get('cron')
                             machine = ack_info.get('machine')
                             position = ack_info.get('position')
                             
                             if cron and machine and position is not None:
-                                if cron in connection_state['output_positions']:
-                                    connection_state['output_positions'][cron][machine] = position
-                                    print(f'[UI WS] Ack from client for {cron}[{machine}] position={position}')
+                                print(f'[UI WS] Ack from client for {cron}[{machine}] position={position}')
                                 
                         elif 'run' in data:
                             cron = data['run']
@@ -241,10 +241,17 @@ class UIEndpoint:
                                     }
                                     await ws.send_str(json.dumps(chunk_msg))
                                     output_positions[cron][machine] = len(full_output)
-                            
-                            # Clear ret field - output is sent via output_chunk messages
-                            srcron['results'][machine]['ret'] = ''
-                            srcron['results'][machine]['output_length'] = len(full_output)
+                    
+                    # Clear ret from details message (output sent via output_chunk)
+                    # Need to make a deep copy to avoid modifying the shared state
+                    if 'results' in srcron:
+                        srcron = srcron.copy()  # Shallow copy of top level
+                        srcron['results'] = {}
+                        for machine, result in self.state[cron].get('results', {}).items():
+                            srcron['results'][machine] = result.copy()  # Copy each result
+                            srcron['results'][machine]['ret'] = ''  # Clear output from details
+                            if 'ret' in result:
+                                srcron['results'][machine]['output_length'] = len(result['ret'])
                     
                     # Send cron details with type field
                     await ws.send_str(json.dumps({
