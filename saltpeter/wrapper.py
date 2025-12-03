@@ -581,18 +581,20 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                 
                 # Send all pending messages including completion and wait for ACKs
                 print(f'[WRAPPER DEBUG] Sending {len(pending_messages)} pending messages', file=sys.stderr, flush=True)
-                for msg in pending_messages:
+                acked_indices = []  # Track which messages were successfully ACKed
+                for idx, msg in enumerate(pending_messages):
                     await websocket.send(json.dumps(msg))
                     print(f'[WRAPPER DEBUG] Sent {msg["type"]} seq={msg.get("seq", "none")}', file=sys.stderr, flush=True)
                     # Wait for ACK for each message
                     try:
-                        ack_msg = await asyncio.wait_for(websocket.recv(), timeout=2)
+                        ack_msg = await asyncio.wait_for(websocket.recv(), timeout=5)  # Increased from 2s
                         ack_data = json.loads(ack_msg)
                         if ack_data.get('type') == 'nack':
                             # Server wants resend, will retry entire batch
                             print(f'[WRAPPER DEBUG] NACK received during completion', file=sys.stderr, flush=True)
                             raise Exception('NACK received')
                         print(f'[WRAPPER DEBUG] ACK received for {msg["type"]}', file=sys.stderr, flush=True)
+                        acked_indices.append(idx)
                     except asyncio.TimeoutError:
                         # No ACK, will retry
                         print(f'[WRAPPER DEBUG] ACK timeout for {msg["type"]}', file=sys.stderr, flush=True)
@@ -605,6 +607,11 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
             except Exception as e:
                 print(f'[WRAPPER DEBUG] Completion send failed: {e}', file=sys.stderr, flush=True)
                 websocket = None
+                # Remove ACKed messages from pending to avoid retransmission
+                if acked_indices:
+                    pending_messages = [msg for idx, msg in enumerate(pending_messages) if idx not in acked_indices]
+                    print(f'[WRAPPER DEBUG] Removed {len(acked_indices)} ACKed messages, {len(pending_messages)} remaining', file=sys.stderr, flush=True)
+                    acked_indices = []
                 if attempt < max_completion_retries - 1:
                     await asyncio.sleep(retry_interval)
         else:

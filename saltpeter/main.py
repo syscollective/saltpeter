@@ -188,6 +188,17 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                     log(what='machine_result', cron=name, group=group, 
                         instance=procname, machine=minion_id,
                         code=255, out=error_msg, time=now)
+                    
+                    # Remove from running list
+                    if procname in running and 'machines' in running[procname]:
+                        if minion_id in running[procname]['machines']:
+                            tmprunning = dict(running[procname])
+                            tmprunning['machines'] = [m for m in tmprunning['machines'] if m != minion_id]
+                            running[procname] = tmprunning
+                
+                # Clean up if no machines left
+                if procname in running and not running[procname].get('machines'):
+                    del running[procname]
                 
                 pending_targets.clear()
                 break
@@ -255,6 +266,15 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                     # Remove from pending
                     pending_targets.discard(minion_id)
                     
+                    # Remove from running list
+                    if procname in running and 'machines' in running[procname]:
+                        if minion_id in running[procname]['machines']:
+                            tmprunning = dict(running[procname])
+                            tmprunning['machines'] = [m for m in tmprunning['machines'] if m != minion_id]
+                            running[procname] = tmprunning
+                            if not tmprunning['machines']:
+                                del running[procname]
+                    
                 else:
                     # Got a return with retcode
                     ret_code = minion_data.get('retcode', None)
@@ -290,6 +310,15 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                             
                             # Remove from pending
                             pending_targets.discard(minion_id)
+                            
+                            # Remove from running list
+                            if procname in running and 'machines' in running[procname]:
+                                if minion_id in running[procname]['machines']:
+                                    tmprunning = dict(running[procname])
+                                    tmprunning['machines'] = [m for m in tmprunning['machines'] if m != minion_id]
+                                    running[procname] = tmprunning
+                                    if not tmprunning['machines']:
+                                        del running[procname]
                             
                         else:
                             # retcode == 0: Wrapper started successfully

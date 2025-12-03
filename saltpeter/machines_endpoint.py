@@ -171,7 +171,7 @@ class WebSocketJobServer:
                             conn['output_buffer'].append(output_data)
                             conn['last_seen'] = timestamp
                             
-                            # Send acknowledgement
+                            # Send acknowledgement IMMEDIATELY before state updates
                             ack_msg = {
                                 'type': 'ack',
                                 'ack_type': 'output',
@@ -181,7 +181,11 @@ class WebSocketJobServer:
                                 ack_msg['seq'] = seq
                                 conn['last_acked_seq'] = seq
                             
-                            await websocket.send(json.dumps(ack_msg))
+                            # Send ACK first to minimize latency under load
+                            try:
+                                await websocket.send(json.dumps(ack_msg))
+                            except Exception as e:
+                                print(f"[MACHINES WS] Failed to send ACK to {client_id}: {e}", flush=True)
                         
                         # Update state with accumulated output
                         # Validate job_instance is in running dict (started by main.py)
