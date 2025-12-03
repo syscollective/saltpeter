@@ -477,9 +477,8 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
         # Wait before next check
         time.sleep(check_interval)
     
-    # Clean up running state when all targets are done
-    if procname in running:
-        del running[procname]
+    # Note: Don't delete running[procname] here - the caller (run function) manages it
+    # In batch mode, multiple batches use the same procname and running entry
 
 
 def processresults(client,commands,job,name,group,procname,running,state,targets):
@@ -872,6 +871,10 @@ def run(name, data, procname, running, state, commands, maintenance):
         except Exception as e:
             print('[MAIN] Exception triggered in run()', e, flush=True)
 
+    # Clean up running state at the end of job execution
+    if procname in running:
+        del running[procname]
+    
     log(cron=name, group=data['group'], what='end', instance=procname, time=datetime.now(timezone.utc))
 
 def debuglog(content):
