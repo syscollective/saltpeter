@@ -212,6 +212,10 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                     continue
                 
                 print(f"[JOB:{procname}] Got return from {minion_id}: {minion_data}", flush=True)
+                print(f"[JOB:{procname}] DEBUG - Keys in minion_data: {list(minion_data.keys())}", flush=True)
+                print(f"[JOB:{procname}] DEBUG - 'failed' key: {minion_data.get('failed', 'NOT_PRESENT')}", flush=True)
+                print(f"[JOB:{procname}] DEBUG - 'retcode' key: {minion_data.get('retcode', 'NOT_PRESENT')}", flush=True)
+                print(f"[JOB:{procname}] DEBUG - 'ret' key: {minion_data.get('ret', 'NOT_PRESENT')}", flush=True)
                 
                 # Check if this is a failed return (Salt couldn't execute or wrapper failed immediately)
                 # This includes: failed=True OR retcode != 0 (wrapper execution error)

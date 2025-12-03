@@ -29,6 +29,21 @@ import time
 import socket
 from datetime import datetime, timezone
 
+# Monkey-patch hashlib.sha1 for FIPS compatibility
+# FIPS mode blocks hashlib.sha1() but allows hashlib.new('sha1', usedforsecurity=False)
+# WebSocket library uses sha1 for non-security purposes (handshake key generation)
+import hashlib
+_original_sha1 = hashlib.sha1
+def _fips_compatible_sha1(data=b''):
+    """SHA1 wrapper that works in FIPS mode"""
+    try:
+        return _original_sha1(data)
+    except (AttributeError, ValueError):
+        # FIPS mode - use non-security SHA1
+        return hashlib.new('sha1', data, usedforsecurity=False)
+
+hashlib.sha1 = _fips_compatible_sha1
+
 # Handle both package import and direct execution
 try:
     from .version import __version__

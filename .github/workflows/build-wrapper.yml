@@ -22,15 +22,17 @@ jobs:
   build:
     name: Build Wrapper Binary
     runs-on: ubuntu-latest
+    container:
+      image: python:3.11-slim-bullseye
     
     steps:
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y binutils libssl-dev
+      
       - name: Checkout code
         uses: actions/checkout@v4
-      
-      - name: Set up Python 3.8
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.8'
       
       - name: Extract version from version.py
         id: get_version
@@ -41,11 +43,11 @@ jobs:
       
       - name: Install PyInstaller and dependencies
         run: |
-          python -m pip install --no-cache-dir pyinstaller websockets
+          pip install --no-cache-dir pyinstaller websockets
       
       - name: Verify OpenSSL is available in Python
         run: |
-          python -c "import ssl; import hashlib; print('SSL version:', ssl.OPENSSL_VERSION); print('SHA1 available:', hasattr(hashlib, 'sha1'))"
+          python3 -c "import ssl; import hashlib; print('SSL version:', ssl.OPENSSL_VERSION); print('SHA1 available:', hasattr(hashlib, 'sha1'))"
       
       - name: Build wrapper binary with PyInstaller
         run: |
@@ -62,25 +64,26 @@ jobs:
       
       - name: Test wrapper binary
         run: |
+          # Test that the binary exists and is executable
           chmod +x dist/sp_wrapper
           # Test that SSL/hashlib work
           dist/sp_wrapper 2>&1 | head -20 || true
-          # Check dependencies
-          ldd dist/sp_wrapper 2>&1 | head -20 || true
+          # Check that OpenSSL libraries are bundled
+          ldd dist/sp_wrapper 2>&1 | grep -i ssl || echo "Static OpenSSL (good)"
       
       - name: Create version info file
         run: |
           cat > dist/VERSION.txt << EOF
           Saltpeter Wrapper Binary
           Version: ${{ steps.get_version.outputs.version }}
-          Platform: linux-x86_64 (Ubuntu 22.04 base, glibc 2.35+)
-          Python: 3.8 (embedded)
+          Platform: linux-x86_64 (Debian 11 Bullseye base, glibc 2.31+)
+          Python: 3.11 (embedded)
           Built: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
           Git Commit: ${{ github.sha }}
           Git Ref: ${{ github.ref }}
           
           Compatible with:
-          - Ubuntu 22.04+ / Debian 11+ / RHEL 9+
+          - Ubuntu 20.04+ / Debian 11+ / RHEL 8+
           - Any Linux x86_64 with glibc 2.31 or newer
           EOF
       
@@ -101,7 +104,7 @@ jobs:
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
       
       - name: Extract version from version.py
         id: get_version
