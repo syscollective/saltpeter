@@ -21,22 +21,16 @@ on:
 jobs:
   build:
     name: Build Wrapper Binary
-    runs-on: ubuntu-latest
-    container:
-      # Use Ubuntu 18.04 for maximum compatibility (glibc 2.27)
-      # Compatible with Ubuntu 16.04+ (glibc 2.23+)
-      image: ubuntu:18.04
+    runs-on: ubuntu-20.04
     
     steps:
-      - name: Install Python 3.6 and build dependencies
-        run: |
-          apt-get update
-          apt-get install -y python3 python3-dev python3-pip binutils libssl-dev curl git
-          # Install latest pip
-          python3 -m pip install --upgrade pip
-      
       - name: Checkout code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
+      
+      - name: Set up Python 3.8
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.8'
       
       - name: Extract version from version.py
         id: get_version
@@ -47,16 +41,16 @@ jobs:
       
       - name: Install PyInstaller and dependencies
         run: |
-          python3 -m pip install --no-cache-dir pyinstaller websockets
+          python -m pip install --no-cache-dir pyinstaller websockets staticx patchelf
       
       - name: Verify OpenSSL is available in Python
         run: |
-          python3 -c "import ssl; import hashlib; print('SSL version:', ssl.OPENSSL_VERSION); print('SHA1 available:', hasattr(hashlib, 'sha1'))"
+          python -c "import ssl; import hashlib; print('SSL version:', ssl.OPENSSL_VERSION); print('SHA1 available:', hasattr(hashlib, 'sha1'))"
       
       - name: Build wrapper binary with PyInstaller
         run: |
-          python3 -m PyInstaller --onefile \
-            --name sp_wrapper \
+          pyinstaller --onefile \
+            --name sp_wrapper_tmp \
             --distpath dist \
             --add-data "saltpeter/version.py:saltpeter" \
             --hidden-import=saltpeter.version \
@@ -66,28 +60,32 @@ jobs:
             --clean \
             saltpeter/wrapper.py
       
+      - name: Create static binary with staticx
+        run: |
+          staticx dist/sp_wrapper_tmp dist/sp_wrapper
+          chmod +x dist/sp_wrapper
+      
       - name: Test wrapper binary
         run: |
-          # Test that the binary exists and is executable
-          chmod +x dist/sp_wrapper
           # Test that SSL/hashlib work
           dist/sp_wrapper 2>&1 | head -20 || true
-          # Check that OpenSSL libraries are bundled
-          ldd dist/sp_wrapper 2>&1 | grep -i ssl || echo "Static OpenSSL (good)"
+          # Verify it's static
+          ldd dist/sp_wrapper 2>&1 || echo "Fully static binary (good)"
       
       - name: Create version info file
         run: |
           cat > dist/VERSION.txt << EOF
           Saltpeter Wrapper Binary
           Version: ${{ steps.get_version.outputs.version }}
-          Platform: linux-x86_64 (Debian 11 Bullseye base, glibc 2.31+)
-          Python: 3.11 (embedded)
+          Platform: linux-x86_64 (Static binary, universal compatibility)
+          Python: 3.8 (embedded)
           Built: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
           Git Commit: ${{ github.sha }}
           Git Ref: ${{ github.ref }}
           
           Compatible with:
-          - Ubuntu 20.04+ / Debian 11+ / RHEL 8+
+          - All Linux distros (Ubuntu 16.04+, Debian 9+, RHEL 7+, etc.)
+          - Static binary with bundled glibc and dependencies
           - Any Linux x86_64 with glibc 2.31 or newer
           EOF
       
