@@ -503,7 +503,18 @@ class WebSocketJobServer:
     
     async def start_server(self):
         """Start the WebSocket server"""
-        async with websockets.serve(self.handle_client, self.host, self.port):
+        # Configure for high-throughput scenarios
+        # max_size=None: unlimited message size for large outputs
+        # max_queue=1024: allow more queued messages during high load
+        # write_limit=2**20: 1MB write buffer (default is 64KB)
+        async with websockets.serve(
+            self.handle_client, 
+            self.host, 
+            self.port,
+            max_size=None,
+            max_queue=1024,
+            write_limit=2**20
+        ):
             print(f"[MACHINES WS] Server started on ws://{self.host}:{self.port}", flush=True)
             
             # Start command checking task if we have a command queue
