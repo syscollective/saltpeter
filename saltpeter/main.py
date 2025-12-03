@@ -341,9 +341,7 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
     # Second phase: Monitor WebSocket results for confirmed targets only
     if not targets_confirmed_started:
         # No targets started successfully - all failed during Salt confirmation
-        print(f"[JOB:{procname}] No targets started successfully for {name}, cleaning up", flush=True)
-        if procname in running:
-            del running[procname]
+        print(f"[JOB:{procname}] No targets started successfully for {name}, skipping monitoring", flush=True)
         return
     
     print(f"[JOB:{procname}] Monitoring WebSocket results for {len(targets_confirmed_started)} confirmed target(s)...", flush=True)
@@ -758,10 +756,15 @@ def run(name, data, procname, running, state, commands, maintenance):
         log(cron=name, group=data['group'], what='no_machines', instance=procname, time=datetime.now(timezone.utc))
         log(cron=name, group=data['group'], what='end', instance=procname, time=datetime.now(timezone.utc))
         return
-    if 'number_of_targets' in data and data['number_of_targets'] != 0:
+    
+    # Shuffle targets for random selection/distribution
+    if ('number_of_targets' in data and data['number_of_targets'] != 0) or \
+       ('batch_size' in data and data['batch_size'] != 0):
         import random
-        # targets chosen at random
         random.shuffle(targets_list)
+    
+    if 'number_of_targets' in data and data['number_of_targets'] != 0:
+        # Select subset of targets
         targets_list = targets_list[:data['number_of_targets']]
 
     if 'batch_size' in data and data['batch_size'] != 0:
@@ -781,6 +784,11 @@ def run(name, data, procname, running, state, commands, maintenance):
 
                 try:
                     # Update running dict with current batch (preserve stop_signal)
+                    # Check if procname still exists (might have been cleaned up by main loop)
+                    if procname not in running:
+                        print(f"[JOB:{procname}] Running entry was deleted, stopping batch processing", flush=True)
+                        break
+                    
                     tmprunning = dict(running[procname])
                     tmprunning['machines'] = chunk
                     running[procname] = tmprunning
