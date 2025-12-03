@@ -317,18 +317,6 @@ class WebSocketJobServer:
                         if job_name in self.state and 'results' in self.state[job_name] and machine in self.state[job_name]['results']:
                             log_output = self.state[job_name]['results'][machine].get('ret', '')
                         
-                        # Remove machine from running list
-                        if job_instance in self.running:
-                            tmprunning = dict(self.running[job_instance])
-                            if 'machines' in tmprunning and machine in tmprunning['machines']:
-                                tmprunning['machines'].remove(machine)
-                                self.running[job_instance] = tmprunning
-                                
-                                # If no more machines running, remove the job instance
-                                if not tmprunning['machines']:
-                                    del self.running[job_instance]
-                                    print(f"[MACHINES WS] Job instance {job_instance} completed - all machines finished", flush=True)
-                        
                         print(f"[MACHINES WS] Job completed - {client_id} (exit code: {retcode})", flush=True)
                         
                         # Clean up connection

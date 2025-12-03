@@ -438,6 +438,13 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                                 machine=tgt, code=result.get('retcode', 0), 
                                 out=result.get('ret', ''), time=result['endtime'])
                             
+                            # Remove from running list
+                            if procname in running and 'machines' in running[procname]:
+                                if tgt in running[procname]['machines']:
+                                    tmprunning = dict(running[procname])
+                                    tmprunning['machines'] = [m for m in tmprunning['machines'] if m != tgt]
+                                    running[procname] = tmprunning
+                            
                             pending_targets.remove(tgt)
                             continue
                         
