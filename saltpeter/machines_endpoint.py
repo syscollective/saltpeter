@@ -402,11 +402,20 @@ class WebSocketJobServer:
                             job_name = cmd['killcron']
                             print(f"[MACHINES WS] Kill command received for job {job_name}", flush=True)
                             
+                            # Set stop_signal in running dict to prevent further batches/processing
+                            for proc_name, proc_info in list(self.running.items()):
+                                if proc_info.get('name') == job_name:
+                                    print(f"[MACHINES WS] Setting stop_signal for {proc_name}", flush=True)
+                                    tmprunning = dict(proc_info)
+                                    tmprunning['stop_signal'] = True
+                                    self.running[proc_name] = tmprunning
+                            
                             # Track kill time for grace period enforcement
                             self.kill_timeouts[job_name] = time.time()
                             
                             # Find all connections for this job and send kill signal
                             killed_count = 0
+                            active_machines = set()
                             for client_id, conn_info in list(self.connections.items()):
                                 if conn_info['job_name'] == job_name:
                                     try:
@@ -418,14 +427,36 @@ class WebSocketJobServer:
                                             'timestamp': datetime.now(timezone.utc).isoformat()
                                         }))
                                         killed_count += 1
+                                        active_machines.add(conn_info['machine'])
                                         print(f"[MACHINES WS] Sent kill signal to {client_id}", flush=True)
                                     except Exception as e:
                                         print(f"[MACHINES WS] Error sending kill to {client_id}: {e}", flush=True)
                             
+                            # Clean up machines that haven't connected yet (no wrapper running)
+                            # These show in UI but wrapper hasn't started - remove them immediately
+                            cleaned_count = 0
+                            if job_name in self.state and self.statelocks and job_name in self.statelocks:
+                                with self.statelocks[job_name]:
+                                    tmpstate = self.state[job_name].copy()
+                                    if 'results' in tmpstate:
+                                        now = datetime.now(timezone.utc)
+                                        for machine, result in list(tmpstate['results'].items()):
+                                            # Machine hasn't connected to wrapper yet (no output, no endtime)
+                                            if machine not in active_machines and not result.get('endtime'):
+                                                if not result.get('ret') or result.get('ret') == '':
+                                                    print(f"[MACHINES WS] Cleaning up {machine} - wrapper never started", flush=True)
+                                                    result['endtime'] = now
+                                                    result['retcode'] = 143
+                                                    result['ret'] = '[Job killed before wrapper started]'
+                                                    cleaned_count += 1
+                                    self.state[job_name] = tmpstate
+                            
                             if killed_count > 0:
                                 print(f"[MACHINES WS] Sent kill signal to {killed_count} wrapper(s) for job {job_name}", flush=True)
-                            else:
-                                print(f"[MACHINES WS] No active connections found for job {job_name}", flush=True)
+                            if cleaned_count > 0:
+                                print(f"[MACHINES WS] Cleaned up {cleaned_count} machine(s) that hadn't started wrappers", flush=True)
+                            if killed_count == 0 and cleaned_count == 0:
+                                print(f"[MACHINES WS] No active connections or pending machines found for job {job_name}", flush=True)
                             
                             # Remove command from queue
                             self.commands.remove(cmd)
@@ -460,10 +491,28 @@ class WebSocketJobServer:
                                         print(f"[MACHINES WS] Error sending kill to {client_id}: {e}", flush=True)
                                     break  # Only kill the first matching connection
                             
+                            # If no active connection, clean up machine immediately if wrapper hasn't started
+                            if not killed:
+                                if job_name in self.state and self.statelocks and job_name in self.statelocks:
+                                    with self.statelocks[job_name]:
+                                        tmpstate = self.state[job_name].copy()
+                                        if 'results' in tmpstate and machine_name in tmpstate['results']:
+                                            result = tmpstate['results'][machine_name]
+                                            # Machine hasn't connected to wrapper yet (no output, no endtime)
+                                            if not result.get('endtime') and (not result.get('ret') or result.get('ret') == ''):
+                                                print(f"[MACHINES WS] Cleaning up {machine_name} - wrapper never started", flush=True)
+                                                now = datetime.now(timezone.utc)
+                                                result['endtime'] = now
+                                                result['retcode'] = 143
+                                                result['ret'] = '[Job killed before wrapper started]'
+                                                tmpstate['results'][machine_name] = result
+                                                killed = True  # Mark as handled
+                                        self.state[job_name] = tmpstate
+                            
                             if killed:
-                                print(f"[MACHINES WS] Sent kill signal to job {job_name} on machine {machine_name}", flush=True)
+                                print(f"[MACHINES WS] Killed job {job_name} on machine {machine_name}", flush=True)
                             else:
-                                print(f"[MACHINES WS] No active connection found for job {job_name} on machine {machine_name}", flush=True)
+                                print(f"[MACHINES WS] No active connection or pending wrapper found for job {job_name} on machine {machine_name}", flush=True)
                             
                             # Remove command from queue
                             self.commands.remove(cmd)

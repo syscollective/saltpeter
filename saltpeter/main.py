@@ -350,6 +350,11 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
     job_start_time = time.time()  # Reset timer for actual job execution timeout
     
     while pending_targets:
+        # Check if stop_signal was set (job killed)
+        if procname in running and running[procname].get('stop_signal', False):
+            print(f"[JOB:{procname}] Stop signal detected, exiting result monitoring", flush=True)
+            break
+        
         # Check if timeout exceeded (from when jobs actually started, not Salt submission)
         if time.time() - job_start_time > timeout:
             print(f"[JOB:{procname}] Timeout waiting for results from {pending_targets}", flush=True)
@@ -687,6 +692,9 @@ def run(name, data, procname, running, state, commands, maintenance):
         state[name] = tmpstate
     log(cron=name, group=data['group'], what='start', instance=procname, time=now)
 
+    # Initialize running dict BEFORE test.ping so kill commands work during this phase
+    running[procname] = {'started': now, 'name': name, 'machines': [], 'stop_signal': False}
+
     # ping the minions and parse the result
     ret_job = salt.run_job(targets, 'test.ping', tgt_type=target_type)
     jid = ret_job['jid']
@@ -754,14 +762,41 @@ def run(name, data, procname, running, state, commands, maintenance):
         chunk = []
         count = 0
         for t in targets_list:
+            # Check stop_signal before each batch iteration
+            if procname in running and running[procname].get('stop_signal', False):
+                print(f"[JOB:{procname}] Stop signal detected during batch processing, aborting remaining batches", flush=True)
+                log(cron=name, group=data['group'], what='end', instance=procname, time=datetime.now(timezone.utc))
+                del running[procname]
+                return
+            
             count += 1
             chunk.append(t)
             if len(chunk) == data['batch_size'] or count == len(targets_list):
 
                 try:
-                    # Initialize state structure BEFORE running Salt
-                    running[procname] = {'started': now, 'name': name, 'machines': chunk}
+                    # Update running dict with current batch (preserve stop_signal)
+                    tmprunning = dict(running[procname])
+                    tmprunning['machines'] = chunk
+                    running[procname] = tmprunning
                     processstart(chunk, name, data['group'], procname, state)
+                    
+                    # Check stop_signal before executing wrapper
+                    if procname in running and running[procname].get('stop_signal', False):
+                        print(f"[JOB:{procname}] Stop signal detected before wrapper execution, skipping batch", flush=True)
+                        # Mark machines as killed
+                        now = datetime.now(timezone.utc)
+                        with statelocks[name]:
+                            tmpstate = state[name].copy()
+                            if 'results' not in tmpstate:
+                                tmpstate['results'] = {}
+                            for machine in chunk:
+                                if machine in tmpstate['results']:
+                                    tmpstate['results'][machine]['endtime'] = now
+                                    tmpstate['results'][machine]['retcode'] = 143
+                                    tmpstate['results'][machine]['ret'] = '[Job killed before execution]'
+                            state[name] = tmpstate
+                        chunk = []
+                        continue
                     
                     # Run command via Salt (wrapper or direct)
                     job = salt.run_job(chunk, 'cmd.run', cmdargs,
@@ -783,12 +818,34 @@ def run(name, data, procname, running, state, commands, maintenance):
                     print('[MAIN] Exception triggered in run() at "batch_size" condition', e, flush=True)
                     chunk = []
     else:
-        running[procname] = {'started': now, 'name': name, 'machines': targets_list}
+        # Update running dict with all targets (preserve stop_signal)
+        tmprunning = dict(running[procname])
+        tmprunning['machines'] = targets_list
+        running[procname] = tmprunning
         starttime = datetime.now(timezone.utc)
         
         # Initialize state structure BEFORE running Salt to prevent race condition
         # where wrappers send output before state is ready
         processstart(targets_list, name, data['group'], procname, state)
+
+        # Check stop_signal before executing wrapper
+        if procname in running and running[procname].get('stop_signal', False):
+            print(f"[JOB:{procname}] Stop signal detected before wrapper execution, aborting", flush=True)
+            # Mark all machines as killed
+            now = datetime.now(timezone.utc)
+            with statelocks[name]:
+                tmpstate = state[name].copy()
+                if 'results' not in tmpstate:
+                    tmpstate['results'] = {}
+                for machine in targets_list:
+                    if machine in tmpstate['results']:
+                        tmpstate['results'][machine]['endtime'] = now
+                        tmpstate['results'][machine]['retcode'] = 143
+                        tmpstate['results'][machine]['ret'] = '[Job killed before execution]'
+                state[name] = tmpstate
+            log(cron=name, group=data['group'], what='end', instance=procname, time=datetime.now(timezone.utc))
+            del running[procname]
+            return
 
         try:
             # Run command via Salt (wrapper or direct)
