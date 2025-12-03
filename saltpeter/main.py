@@ -8,6 +8,7 @@ import argparse
 import re
 import yaml
 import time
+import traceback
 from sys import exit
 from datetime import datetime,timedelta,date,timezone
 from crontab import CronTab
@@ -820,7 +821,11 @@ def run(name, data, procname, running, state, commands, maintenance):
                     
                     chunk = []
                 except Exception as e:
-                    print('[MAIN] Exception triggered in run() at "batch_size" condition', e, flush=True)
+                    print(f'[MAIN] Exception in run() at "batch_size" for {procname}:', flush=True)
+                    print(f'[MAIN] Exception type: {type(e).__name__}', flush=True)
+                    print(f'[MAIN] Exception message: {str(e)}', flush=True)
+                    print(f'[MAIN] Traceback:', flush=True)
+                    traceback.print_exc()
                     chunk = []
     else:
         # Update running dict with all targets (preserve stop_signal)
@@ -869,7 +874,11 @@ def run(name, data, procname, running, state, commands, maintenance):
                     processresults(salt, commands, job, name, data['group'], procname, running, state, targets_list)
 
         except Exception as e:
-            print('[MAIN] Exception triggered in run()', e, flush=True)
+            print(f'[MAIN] Exception in run() for {procname}:', flush=True)
+            print(f'[MAIN] Exception type: {type(e).__name__}', flush=True)
+            print(f'[MAIN] Exception message: {str(e)}', flush=True)
+            print(f'[MAIN] Traceback:', flush=True)
+            traceback.print_exc()
 
     # Clean up running state at the end of job execution
     if procname in running:
