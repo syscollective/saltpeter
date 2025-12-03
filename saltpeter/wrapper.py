@@ -65,6 +65,13 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
     job's configured timeout is reached, at which point the job is killed.
     """
     
+    # Create logging function with timestamp and prefix
+    log_prefix = f"{job_name}_{job_instance}"
+    def log(msg):
+        """Log message with timestamp and job prefix to stderr"""
+        timestamp = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+        print(f"{timestamp} [{log_prefix}] {msg}", file=sys.stderr, flush=True)
+    
     def create_output_messages(output_data, seq_start):
         """Split large output into chunks and create messages. Returns (messages, next_seq)"""
         messages = []
@@ -186,8 +193,8 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                     except AttributeError as e:
                         # Python hashlib missing sha1 - fatal error, cannot use WebSocket
                         if 'sha1' in str(e):
-                            print(f'[WRAPPER ERROR] Python installation missing hashlib.sha1 - WebSocket unavailable', file=sys.stderr, flush=True)
-                            print(f'[WRAPPER ERROR] Continuing without server communication - job will appear to hang', file=sys.stderr, flush=True)
+                            log('ERROR: Python installation missing hashlib.sha1 - WebSocket unavailable)
+                            log('ERROR: Continuing without server communication - job will appear to hang)
                             websocket = None
                             # Don't retry - this is fatal
                             last_retry = current_time + 999999  # Prevent future retries
@@ -195,7 +202,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                         raise
                     except Exception as e:
                         # Connection failed, will retry after interval
-                        print(f'[WRAPPER DEBUG] Connection failed: {type(e).__name__}: {e}', file=sys.stderr, flush=True)
+                        log('Connection failed: {type(e).__name__}: {e})
                         websocket = None
                         last_retry = current_time
                         continue
@@ -235,7 +242,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                             for unsent_msg in unsent:
                                 try:
                                     await websocket.send(json.dumps(unsent_msg))
-                                    print(f'[WRAPPER DEBUG] Resent pending seq={unsent_msg.get("seq")}', file=sys.stderr, flush=True)
+                                    log('Resent pending seq={unsent_msg.get("seq")})
                                 except:
                                     websocket = None
                                     break
@@ -259,14 +266,14 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                             if acked_seq >= 0 and acked_seq == last_acked_seq + 1:
                                 last_acked_seq = acked_seq
                                 waiting_for_ack = False
-                                print(f'[WRAPPER DEBUG] ACK received: seq={acked_seq}', file=sys.stderr, flush=True)
+                                log('ACK received: seq={acked_seq})
                                 # Remove acknowledged message from pending
                                 pending_messages = [m for m in pending_messages if m.get('seq', -1) != acked_seq]
                                 # Clear output buffer now that message is confirmed delivered
                                 output_buffer = []
                             elif acked_seq > last_acked_seq + 1:
                                 # Server ACKed ahead of us - we missed some ACKs, sync up
-                                print(f'[WRAPPER DEBUG] ACK gap detected: got {acked_seq}, expected {last_acked_seq + 1}', file=sys.stderr, flush=True)
+                                log('ACK gap detected: got {acked_seq}, expected {last_acked_seq + 1})
                                 last_acked_seq = acked_seq
                                 waiting_for_ack = False
                                 pending_messages = [m for m in pending_messages if m.get('seq', -1) > acked_seq]
@@ -275,12 +282,12 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                         elif data.get('type') == 'nack':
                             # Server detected issue - log it but continue
                             expected_seq = data.get('expected_seq', 0)
-                            print(f'[WRAPPER DEBUG] NACK received: expected={expected_seq}, next={next_seq}', file=sys.stderr, flush=True)
+                            log('NACK received: expected={expected_seq}, next={next_seq})
                         
                         elif data.get('type') == 'sync_response':
                             # Server tells us what it last received
                             server_last_seq = data.get('last_seq', -1)
-                            print(f'[WRAPPER DEBUG] Sync response: server_last={server_last_seq}, our_last_acked={last_acked_seq}', file=sys.stderr, flush=True)
+                            log('Sync response: server_last={server_last_seq}, our_last_acked={last_acked_seq})
                             
                             if server_last_seq >= last_acked_seq:
                                 # Server is ahead or equal, update our state
@@ -293,7 +300,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                             # Resend any pending messages after server's position
                             unsent = [m for m in pending_messages if m.get('type') == 'output' and m.get('seq', 0) > server_last_seq]
                             if unsent:
-                                print(f'[WRAPPER DEBUG] Resending {len(unsent)} messages after sync', file=sys.stderr, flush=True)
+                                log('Resending {len(unsent)} messages after sync)
                                 for msg in unsent:
                                     try:
                                         await websocket.send(json.dumps(msg))
@@ -304,7 +311,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                         elif data.get('type') == 'sync_response':
                             # Server tells us what it last received
                             server_last_seq = data.get('last_seq', -1)
-                            print(f'[WRAPPER DEBUG] Sync response: server_last={server_last_seq}, our_last_acked={last_acked_seq}', file=sys.stderr, flush=True)
+                            log('Sync response: server_last={server_last_seq}, our_last_acked={last_acked_seq})
                             
                             if server_last_seq >= last_acked_seq:
                                 # Server is ahead or equal, update our state
@@ -316,7 +323,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                             # Resend any pending messages after server's position
                             unsent = [m for m in pending_messages if m.get('type') == 'output' and m.get('seq', 0) > server_last_seq]
                             if unsent:
-                                print(f'[WRAPPER DEBUG] Resending {len(unsent)} messages after sync', file=sys.stderr, flush=True)
+                                log('Resending {len(unsent)} messages after sync)
                                 for msg in unsent:
                                     try:
                                         await websocket.send(json.dumps(msg))
@@ -386,7 +393,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                                     break
                                 stream_type = 'stdout' if stream == process.stdout else 'stderr'
                                 output_buffer.append((stream_type, line))
-                                print(f'[WRAPPER DEBUG] Buffered line: {repr(line[:50])}... (buffer_size={sum(len(l) for _, l in output_buffer)})', file=sys.stderr, flush=True)
+                                log('Buffered line: {repr(line[:50])}... (buffer_size={sum(len(l) for _, l in output_buffer)}))
                                 
                                 # Check if more data is immediately available
                                 # If not, break to avoid blocking on readline()
@@ -401,7 +408,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                     if waiting_for_ack and websocket is not None:
                         time_waiting = current_time - last_send_time
                         if time_waiting >= 1.0 and (current_time - last_sync_request_time) >= 1.0:
-                            print(f'[WRAPPER DEBUG] Waiting for ACK {time_waiting:.1f}s, requesting sync', file=sys.stderr, flush=True)
+                            log('Waiting for ACK {time_waiting:.1f}s, requesting sync)
                             sync_request = {
                                 'type': 'sync_request',
                                 'job_name': job_name,
@@ -430,7 +437,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                         # Create messages (may be chunked if large)
                         output_messages, next_seq = create_output_messages(combined_output, next_seq)
                         
-                        print(f'[WRAPPER DEBUG] Sending buffer: {len(output_messages)} message(s), total_len={len(combined_output)}, reason={"time" if time_to_send else "size"}', file=sys.stderr, flush=True)
+                        log('Sending buffer: {len(output_messages)} message(s), total_len={len(combined_output)}, reason={"time" if time_to_send else "size"})
                         
                         # Add all messages to pending queue
                         pending_messages.extend(output_messages)
@@ -451,7 +458,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                     if waiting_for_ack and websocket is not None:
                         time_waiting = current_time - last_send_time
                         if time_waiting >= 1.0 and (current_time - last_sync_request_time) >= 1.0:
-                            print(f'[WRAPPER DEBUG] Waiting for ACK {time_waiting:.1f}s, requesting sync', file=sys.stderr, flush=True)
+                            log('Waiting for ACK {time_waiting:.1f}s, requesting sync)
                             sync_request = {
                                 'type': 'sync_request',
                                 'job_name': job_name,
@@ -545,7 +552,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                 final_retcode = 143  # Standard SIGTERM exit code
         
         # Add completion message to pending queue
-        print(f'[WRAPPER DEBUG] Adding completion message: retcode={final_retcode}, pending_count={len(pending_messages)}', file=sys.stderr, flush=True)
+        log('Adding completion message: retcode={final_retcode}, pending_count={len(pending_messages)})
         pending_messages.append({
             'type': 'complete',
             'job_name': job_name,
@@ -558,11 +565,11 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
         
         # Retry sending completion and pending messages until successful with ACK
         max_completion_retries = 30  # Try for 60 seconds
-        print(f'[WRAPPER DEBUG] Starting completion retry loop with {len(pending_messages)} pending messages', file=sys.stderr, flush=True)
+        log('Starting completion retry loop with {len(pending_messages)} pending messages)
         for attempt in range(max_completion_retries):
             try:
                 if websocket is None:
-                    print(f'[WRAPPER DEBUG] Reconnecting for completion (attempt {attempt+1})', file=sys.stderr, flush=True)
+                    log('Reconnecting for completion (attempt {attempt+1}))
                     try:
                         websocket = await asyncio.wait_for(
                             websockets.connect(websocket_url),
@@ -571,51 +578,51 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                     except AttributeError as e:
                         # Python hashlib missing sha1 - fatal error, cannot use WebSocket
                         if 'sha1' in str(e):
-                            print(f'[WRAPPER ERROR] Python installation missing hashlib.sha1 - WebSocket unavailable', file=sys.stderr, flush=True)
-                            print(f'[WRAPPER ERROR] Job completed with retcode={final_retcode} but cannot report to server', file=sys.stderr, flush=True)
+                            log('ERROR: Python installation missing hashlib.sha1 - WebSocket unavailable)
+                            log('ERROR: Job completed with retcode={final_retcode} but cannot report to server)
                             return final_retcode
                         raise
                     except Exception as e:
-                        print(f'[WRAPPER DEBUG] Connection failed: {type(e).__name__}: {e}', file=sys.stderr, flush=True)
+                        log('Connection failed: {type(e).__name__}: {e})
                         raise
                 
                 # Send all pending messages including completion and wait for ACKs
-                print(f'[WRAPPER DEBUG] Sending {len(pending_messages)} pending messages', file=sys.stderr, flush=True)
+                log('Sending {len(pending_messages)} pending messages)
                 acked_indices = []  # Track which messages were successfully ACKed
                 for idx, msg in enumerate(pending_messages):
                     await websocket.send(json.dumps(msg))
-                    print(f'[WRAPPER DEBUG] Sent {msg["type"]} seq={msg.get("seq", "none")}', file=sys.stderr, flush=True)
+                    log('Sent {msg["type"]} seq={msg.get("seq", "none")})
                     # Wait for ACK for each message
                     try:
                         ack_msg = await asyncio.wait_for(websocket.recv(), timeout=5)  # Increased from 2s
                         ack_data = json.loads(ack_msg)
                         if ack_data.get('type') == 'nack':
                             # Server wants resend, will retry entire batch
-                            print(f'[WRAPPER DEBUG] NACK received during completion', file=sys.stderr, flush=True)
+                            log('NACK received during completion)
                             raise Exception('NACK received')
-                        print(f'[WRAPPER DEBUG] ACK received for {msg["type"]}', file=sys.stderr, flush=True)
+                        log('ACK received for {msg["type"]})
                         acked_indices.append(idx)
                     except asyncio.TimeoutError:
                         # No ACK, will retry
-                        print(f'[WRAPPER DEBUG] ACK timeout for {msg["type"]}', file=sys.stderr, flush=True)
+                        log('ACK timeout for {msg["type"]})
                         raise Exception('ACK timeout')
                 
                 # Success - all messages ACKed, exit retry loop
-                print(f'[WRAPPER DEBUG] All completion messages ACKed successfully', file=sys.stderr, flush=True)
+                log('All completion messages ACKed successfully)
                 break
                 
             except Exception as e:
-                print(f'[WRAPPER DEBUG] Completion send failed: {e}', file=sys.stderr, flush=True)
+                log('Completion send failed: {e})
                 websocket = None
                 # Remove ACKed messages from pending to avoid retransmission
                 if acked_indices:
                     pending_messages = [msg for idx, msg in enumerate(pending_messages) if idx not in acked_indices]
-                    print(f'[WRAPPER DEBUG] Removed {len(acked_indices)} ACKed messages, {len(pending_messages)} remaining', file=sys.stderr, flush=True)
+                    log('Removed {len(acked_indices)} ACKed messages, {len(pending_messages)} remaining)
                     acked_indices = []
                 if attempt < max_completion_retries - 1:
                     await asyncio.sleep(retry_interval)
         else:
-            print(f'[WRAPPER DEBUG] Failed to send completion after {max_completion_retries} attempts', file=sys.stderr, flush=True)
+            log('Failed to send completion after {max_completion_retries} attempts)
         
     except Exception as e:
         # Make sure process is terminated if it's still running
@@ -683,9 +690,16 @@ def main():
         sys.exit(0)
     
     # Second child (grandchild) - fully detached daemon
-    # Close standard file descriptors to detach from Salt
-    sys.stdout.close()
+    # Redirect stdin/stdout to /dev/null BEFORE closing file objects
+    devnull_fd = os.open('/dev/null', os.O_RDWR)
+    os.dup2(devnull_fd, 0)  # stdin
+    os.dup2(devnull_fd, 1)  # stdout
+    if devnull_fd > 2:
+        os.close(devnull_fd)
+    
+    # Now safe to close the Python file objects
     sys.stdin.close()
+    sys.stdout.close()
     
     # Check if debug logging is enabled (default to /tmp/sp_wrapper_debug.log)
     debug_log = os.environ.get('SP_DEBUG_LOG', '/tmp/sp_wrapper_debug.log')
@@ -696,17 +710,10 @@ def main():
         os.dup2(stderr_fd, 2)
         if stderr_fd > 2:
             os.close(stderr_fd)
-        print(f'[WRAPPER] Debug logging to {debug_log}', file=sys.stderr, flush=True)
+        print(f'Wrapper logging to {debug_log}', file=sys.stderr, flush=True)
     except Exception as e:
         # If debug log fails, fall back to /dev/null
         sys.stderr.close()
-    
-    # Redirect stdin/stdout to /dev/null
-    devnull = os.open('/dev/null', os.O_RDWR)
-    os.dup2(devnull, 0)  # stdin
-    os.dup2(devnull, 1)  # stdout
-    if devnull > 2:
-        os.close(devnull)
     
     # Run the command asynchronously
     asyncio.run(run_command_and_stream(websocket_url, job_name, job_instance, machine_id, command, cwd, user, timeout))
