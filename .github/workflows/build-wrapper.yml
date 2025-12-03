@@ -23,7 +23,9 @@ jobs:
     name: Build Wrapper Binary
     runs-on: ubuntu-latest
     container:
-      image: python:3.11-slim-bullseye
+      # Use Ubuntu 18.04 for maximum compatibility (glibc 2.27)
+      # Compatible with Ubuntu 16.04+ (glibc 2.23+)
+      image: python:3.11-slim-bionic
     
     steps:
       - name: Install build dependencies

@@ -144,13 +144,53 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
     last_heartbeat = {}  # Track last activity time for each target
     targets_confirmed_started = set()  # Targets where Salt confirmed execution
     
-    # First phase: Wait for Salt to confirm wrapper execution (indefinitely)
+    # First phase: Wait for Salt to confirm wrapper execution (with timeout)
     if salt_client and job_id:
         print(f"[JOB:{procname}] Waiting for Salt to confirm wrapper execution for job {job_id}...", flush=True)
         
         check_count = 0
+        salt_confirmation_timeout = 60  # Wait max 60 seconds for Salt to return
+        salt_check_start = time.time()
+        
         while pending_targets:
             check_count += 1
+            
+            # Check if we've exceeded the Salt confirmation timeout
+            if time.time() - salt_check_start > salt_confirmation_timeout:
+                print(f"[JOB:{procname}] Salt confirmation timeout after {salt_confirmation_timeout}s for targets: {list(pending_targets)}", flush=True)
+                
+                # Mark remaining targets as failed with helpful error message
+                now = datetime.now(timezone.utc)
+                for minion_id in list(pending_targets):
+                    with statelocks[name]:
+                        tmpstate = state[name].copy()
+                        if 'results' not in tmpstate:
+                            tmpstate['results'] = {}
+                        
+                        error_msg = (
+                            "Wrapper failed to execute - Salt got no response.\n"
+                            "Possible causes:\n"
+                            "- Wrapper binary incompatible with OS (glibc version mismatch)\n"
+                            "- Wrapper binary missing execute permissions\n"
+                            "- Wrapper path incorrect\n"
+                            "- Python installation issues\n"
+                            f"Check wrapper compatibility for this OS version."
+                        )
+                        
+                        tmpstate['results'][minion_id] = {
+                            'ret': error_msg,
+                            'retcode': 255,
+                            'starttime': now,
+                            'endtime': now
+                        }
+                        state[name] = tmpstate
+                    
+                    log(what='machine_result', cron=name, group=group, 
+                        instance=procname, machine=minion_id,
+                        code=255, out=error_msg, time=now)
+                
+                pending_targets.clear()
+                break
             
             # Use get_iter_returns like the legacy code does
             # This properly includes retcode in the return structure
@@ -173,11 +213,15 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                 
                 print(f"[JOB:{procname}] Got return from {minion_id}: {minion_data}", flush=True)
                 
-                # Check if this is a failed return (Salt couldn't execute)
-                if 'failed' in minion_data and minion_data['failed'] == True:
-                    # Salt failed to execute - treat as error
+                # Check if this is a failed return (Salt couldn't execute or wrapper failed immediately)
+                # This includes: failed=True OR retcode != 0 (wrapper execution error)
+                has_failed_flag = 'failed' in minion_data and minion_data['failed'] == True
+                has_error_retcode = 'retcode' in minion_data and minion_data['retcode'] != 0
+                
+                if has_failed_flag or has_error_retcode:
+                    # Salt failed to execute or wrapper failed immediately - treat as error
                     error_output = minion_data.get('ret', 'Salt execution failed')
-                    error_code = 255
+                    error_code = minion_data.get('retcode', 255)
                     
                     print(f"[JOB:{procname}] Wrapper execution failed on {minion_id} (Salt failed): {error_output}", flush=True)
                     
