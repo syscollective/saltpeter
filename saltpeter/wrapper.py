@@ -168,6 +168,24 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                             websockets.connect(websocket_url),
                             timeout=2
                         )
+                    except AttributeError as e:
+                        # Python hashlib missing sha1 - fatal error, cannot use WebSocket
+                        if 'sha1' in str(e):
+                            print(f'[WRAPPER ERROR] Python installation missing hashlib.sha1 - WebSocket unavailable', file=sys.stderr, flush=True)
+                            print(f'[WRAPPER ERROR] Continuing without server communication - job will appear to hang', file=sys.stderr, flush=True)
+                            websocket = None
+                            # Don't retry - this is fatal
+                            last_retry = current_time + 999999  # Prevent future retries
+                            continue
+                        raise
+                    except Exception as e:
+                        # Connection failed, will retry after interval
+                        print(f'[WRAPPER DEBUG] Connection failed: {type(e).__name__}: {e}', file=sys.stderr, flush=True)
+                        websocket = None
+                        last_retry = current_time
+                        continue
+                    
+                    try:
                         last_retry = current_time
                         
                         # Send connect message first (no sequence)
@@ -530,10 +548,21 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
             try:
                 if websocket is None:
                     print(f'[WRAPPER DEBUG] Reconnecting for completion (attempt {attempt+1})', file=sys.stderr, flush=True)
-                    websocket = await asyncio.wait_for(
-                        websockets.connect(websocket_url),
-                        timeout=2
-                    )
+                    try:
+                        websocket = await asyncio.wait_for(
+                            websockets.connect(websocket_url),
+                            timeout=2
+                        )
+                    except AttributeError as e:
+                        # Python hashlib missing sha1 - fatal error, cannot use WebSocket
+                        if 'sha1' in str(e):
+                            print(f'[WRAPPER ERROR] Python installation missing hashlib.sha1 - WebSocket unavailable', file=sys.stderr, flush=True)
+                            print(f'[WRAPPER ERROR] Job completed with retcode={final_retcode} but cannot report to server', file=sys.stderr, flush=True)
+                            return final_retcode
+                        raise
+                    except Exception as e:
+                        print(f'[WRAPPER DEBUG] Connection failed: {type(e).__name__}: {e}', file=sys.stderr, flush=True)
+                        raise
                 
                 # Send all pending messages including completion and wait for ACKs
                 print(f'[WRAPPER DEBUG] Sending {len(pending_messages)} pending messages', file=sys.stderr, flush=True)

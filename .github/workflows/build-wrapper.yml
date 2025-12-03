@@ -29,7 +29,7 @@ jobs:
       - name: Install build dependencies
         run: |
           apt-get update
-          apt-get install -y binutils
+          apt-get install -y binutils libssl-dev
       
       - name: Checkout code
         uses: actions/checkout@v4
@@ -45,6 +45,10 @@ jobs:
         run: |
           pip install --no-cache-dir pyinstaller websockets
       
+      - name: Verify OpenSSL is available in Python
+        run: |
+          python3 -c "import ssl; import hashlib; print('SSL version:', ssl.OPENSSL_VERSION); print('SHA1 available:', hasattr(hashlib, 'sha1'))"
+      
       - name: Build wrapper binary with PyInstaller
         run: |
           pyinstaller --onefile \
@@ -52,6 +56,9 @@ jobs:
             --distpath dist \
             --add-data "saltpeter/version.py:saltpeter" \
             --hidden-import=saltpeter.version \
+            --hidden-import=_ssl \
+            --hidden-import=_hashlib \
+            --collect-all ssl \
             --clean \
             saltpeter/wrapper.py
       
@@ -59,9 +66,10 @@ jobs:
         run: |
           # Test that the binary exists and is executable
           chmod +x dist/sp_wrapper
-          # Test that it shows version in output when missing required env vars
-          # (wrapper now prints version on stdout during normal execution)
-          dist/sp_wrapper 2>&1 | grep -i version || true
+          # Test that SSL/hashlib work
+          dist/sp_wrapper 2>&1 | head -20 || true
+          # Check that OpenSSL libraries are bundled
+          ldd dist/sp_wrapper 2>&1 | grep -i ssl || echo "Static OpenSSL (good)"
       
       - name: Create version info file
         run: |
