@@ -433,6 +433,12 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                         # Check if this target has completed (has endtime)
                         if result.get('endtime') and result['endtime'] != '':
                             print(f"[JOB:{procname}] Target {tgt} completed, removing from pending (retcode: {result.get('retcode')})", flush=True)
+                            
+                            # Log the completion
+                            log(what='machine_result', cron=name, group=group, instance=procname,
+                                machine=tgt, code=result.get('retcode', 0), 
+                                out=result.get('ret', ''), time=result['endtime'])
+                            
                             pending_targets.remove(tgt)
                             continue
                         
@@ -1076,13 +1082,13 @@ def main():
         from elasticsearch import Elasticsearch
         use_es = True
         global es
-        es = Elasticsearch(args.elasticsearch,maxsize=50)
+        es = Elasticsearch(args.elasticsearch, maxsize=50)
 
     if args.opensearch != '':
         from opensearchpy import OpenSearch
         use_opensearch = True
         global opensearch
-        opensearch = OpenSearch(args.opensearch,maxsize=50,useSSL=False,verify_certs=False)
+        opensearch = OpenSearch(args.opensearch, maxsize=50, useSSL=False, verify_certs=False)
 
 
     #main loop

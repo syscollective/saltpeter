@@ -22,7 +22,7 @@ class WebSocketJobServer:
         self.connections = {}  # Track active connections by job_instance + machine
         self.command_check_task = None  # Background task for checking kill commands
         self.kill_timeouts = {}  # Track kill commands with grace period: {job_name: timestamp}
-        
+    
     async def handle_client(self, websocket):
         """
         Handle incoming WebSocket connections
@@ -329,19 +329,6 @@ class WebSocketJobServer:
                                     del self.running[job_instance]
                                     print(f"[MACHINES WS] Job instance {job_instance} completed - all machines finished", flush=True)
                         
-                        # Log the result
-                        if self.log_func:
-                            self.log_func(
-                                what='machine_result',
-                                cron=job_name,
-                                group=group,
-                                instance=job_instance,
-                                machine=machine,
-                                code=retcode,
-                                out=log_output,
-                                time=timestamp
-                            )
-                        
                         print(f"[MACHINES WS] Job completed - {client_id} (exit code: {retcode})", flush=True)
                         
                         # Clean up connection
@@ -356,18 +343,20 @@ class WebSocketJobServer:
                         error_msg = data.get('error', 'Unknown error')
                         print(f"[MACHINES WS] Error from {client_id}: {error_msg}", flush=True)
                         
-                        # Log error
-                        if self.log_func:
-                            self.log_func(
-                                what='machine_result',
-                                cron=job_name,
-                                group='unknown',
-                                instance=job_instance,
-                                machine=machine,
-                                code=255,
-                                out=f"Wrapper error: {error_msg}",
-                                time=timestamp
-                            )
+                        # Update state with error - processresults_websocket will log it
+                        if job_name in self.state and self.statelocks and job_name in self.statelocks:
+                            with self.statelocks[job_name]:
+                                tmpstate = self.state[job_name].copy()
+                                if 'results' not in tmpstate:
+                                    tmpstate['results'] = {}
+                                
+                                tmpstate['results'][machine] = {
+                                    'ret': f"Wrapper error: {error_msg}",
+                                    'retcode': 255,
+                                    'starttime': timestamp,
+                                    'endtime': timestamp
+                                }
+                                self.state[job_name] = tmpstate
                         
                         # Clean up connection
                         if client_id in self.connections:
