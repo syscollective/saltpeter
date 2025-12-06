@@ -522,7 +522,8 @@ def run(name, data, procname, running, state, commands, maintenance):
             'SP_JOB_NAME': name,
             'SP_JOB_INSTANCE_NAME': procname,  # For backwards compatibility
             'SP_JOB_INSTANCE': procname,
-            'SP_COMMAND': data['command']
+            'SP_COMMAND': data['command'],
+            'PYTHONUNBUFFERED': '1'  # Force Python subprocesses to be unbuffered
         }
         
         if 'cwd' in data:
@@ -531,6 +532,11 @@ def run(name, data, procname, running, state, commands, maintenance):
             wrapper_env['SP_USER'] = data['user']
         if 'timeout' in data:
             wrapper_env['SP_TIMEOUT'] = str(data['timeout'])
+        
+        # Add custom environment variables from YAML config
+        if 'env' in data:
+            for key, value in data['env'].items():
+                wrapper_env[key] = str(value)
         
         # Build the Salt command to run the wrapper
         cmdargs = [wrapper_path]

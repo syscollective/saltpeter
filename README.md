@@ -207,6 +207,12 @@ backup_databases:
   user: 'backup'
   cwd: '/var/backups'
   
+  # Custom environment variables (optional)
+  env:
+    BACKUP_TYPE: 'full'
+    RETENTION_DAYS: '30'
+    DEBUG: '1'
+  
   # Targeting
   targets: 'db-server*'
   target_type: 'glob'
@@ -287,6 +293,47 @@ Saltpeter uses Salt's targeting system. Available `target_type` values:
   ```
 
 See [Salt Targeting Documentation](https://docs.saltproject.io/en/latest/topics/targeting/) for details.
+
+#### Environment Variables
+
+Custom environment variables can be passed to jobs using the `env` configuration:
+
+```yaml
+my_job:
+  command: '/usr/local/bin/script.sh'
+  env:
+    DATABASE_URL: 'postgresql://localhost/mydb'
+    API_KEY: 'secret-key-here'
+    LOG_LEVEL: 'DEBUG'
+    PYTHONUNBUFFERED: '1'  # Force Python unbuffered output
+```
+
+**Important Notes:**
+
+- All values are converted to strings
+- Variables are available to the subprocess executing the command
+- Saltpeter automatically sets `PYTHONUNBUFFERED=1` for Python jobs to ensure real-time output streaming
+- The following variables are always set by Saltpeter:
+  - `SP_WEBSOCKET_URL` - WebSocket server URL
+  - `SP_JOB_NAME` - Job name from YAML config
+  - `SP_JOB_INSTANCE` - Unique instance identifier (includes timestamp)
+  - `SP_JOB_INSTANCE_NAME` - Alias for `SP_JOB_INSTANCE` (backwards compatibility)
+  - `SP_COMMAND` - The command being executed
+  - `SP_CWD` - Working directory (if configured)
+  - `SP_USER` - User to run as (if configured)
+  - `SP_TIMEOUT` - Job timeout in seconds (if configured)
+
+**Example - Using environment variables in your script:**
+
+```bash
+#!/bin/bash
+# backup.sh
+echo "Job: $SP_JOB_NAME"
+echo "Instance: $SP_JOB_INSTANCE"
+echo "Backup type: $BACKUP_TYPE"
+echo "Retention: $RETENTION_DAYS days"
+# ... perform backup
+```
 
 #### Timeout Behavior
 
