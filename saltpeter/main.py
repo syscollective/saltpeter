@@ -121,14 +121,68 @@ def processstart(chunk,name,group,procname,state):
                 time=starttime, machine=target)
 
 
-def processresults_websocket(name, group, procname, running, state, targets, timeout=None, salt_client=None, job_id=None):
+def handle_wrapper_failure(machine, retcode, output, name, group, procname, running, state):
+    """
+    Handle wrapper startup failure: update state, log, and remove from running list
+    """
+    now = datetime.now(timezone.utc)
+    
+    # Update state with failure
+    with statelocks[name]:
+        tmpstate = state[name].copy()
+        if 'results' not in tmpstate:
+            tmpstate['results'] = {}
+        if machine in tmpstate['results']:
+            tmpstate['results'][machine]['endtime'] = now
+            tmpstate['results'][machine]['retcode'] = retcode
+            tmpstate['results'][machine]['ret'] = f"Wrapper execution failed:\n{output}"
+        state[name] = tmpstate
+    
+    # Log the failure
+    log(what='machine_result', cron=name, group=group,
+        instance=procname, machine=machine, code=retcode,
+        out=f"Wrapper execution failed:\n{output}", time=now)
+    
+    # Remove from running list
+    if procname in running and 'machines' in running[procname]:
+        if machine in running[procname]['machines']:
+            tmprunning = dict(running[procname])
+            tmprunning['machines'] = [m for m in tmprunning['machines'] if m != machine]
+            running[procname] = tmprunning
+
+
+def process_wrapper_results(wrapper_results, name, group, procname, running, state):
+    """
+    Process salt.cmd() results for wrapper execution
+    Returns list of successfully started targets
+    """
+    targets_confirmed_started = []
+    
+    for machine, result in wrapper_results.items():
+        if isinstance(result, dict) and 'retcode' in result:
+            retcode = result['retcode']
+            output = result.get('ret', '')
+            
+            if retcode == 0:
+                # Wrapper started successfully
+                targets_confirmed_started.append(machine)
+                print(f"[JOB:{procname}] Wrapper started successfully on {machine}", flush=True)
+            else:
+                # Wrapper failed to start
+                print(f"[JOB:{procname}] Wrapper failed to start on {machine} (retcode={retcode})", flush=True)
+                handle_wrapper_failure(machine, retcode, output, name, group, procname, running, state)
+        else:
+            # No response or malformed response
+            print(f"[JOB:{procname}] No response from {machine}", flush=True)
+            handle_wrapper_failure(machine, 255, "Target did not respond", name, group, procname, running, state)
+    
+    return targets_confirmed_started
+
+
+def processresults_websocket(name, group, procname, running, state, targets, timeout=None):
     """
     Wait for WebSocket-based job results with optional timeout
-    This replaces the old Salt-based result polling
-    
-    Args:
-        salt_client: Salt LocalClient instance for checking job status
-        job_id: Salt job ID to monitor for execution confirmation
+    Monitors state updates from WebSocket server for job completion
     """
     start_time = time.time()
     check_interval = 1  # Check every second
@@ -141,212 +195,16 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
     # Communication is retried until the job timeout is reached
     heartbeat_timeout = timeout
     
+    # Monitor WebSocket results for job completion
+    # Wrappers have already been confirmed started by salt.cmd()
+    print(f"[JOB:{procname}] Monitoring WebSocket results for {len(targets)} target(s)...", flush=True)
     pending_targets = set(targets)
     last_heartbeat = {}  # Track last activity time for each target
-    targets_confirmed_started = set()  # Targets where Salt confirmed execution
+    job_start_time = time.time()
     
-    # First phase: Wait for Salt to confirm wrapper execution (with timeout)
-    if salt_client and job_id:
-        print(f"[JOB:{procname}] Waiting for Salt to confirm wrapper execution for job {job_id}...", flush=True)
-        
-        check_count = 0
-        salt_confirmation_timeout = 60  # Wait max 60 seconds for Salt to return
-        salt_check_start = time.time()
-        
-        while pending_targets:
-            check_count += 1
-            
-            # Check if we've exceeded the Salt confirmation timeout
-            if time.time() - salt_check_start > salt_confirmation_timeout:
-                print(f"[JOB:{procname}] Salt confirmation timeout after {salt_confirmation_timeout}s for targets: {list(pending_targets)}", flush=True)
-                
-                # Mark remaining targets as failed with helpful error message
-                now = datetime.now(timezone.utc)
-                for minion_id in list(pending_targets):
-                    with statelocks[name]:
-                        tmpstate = state[name].copy()
-                        if 'results' not in tmpstate:
-                            tmpstate['results'] = {}
-                        
-                        error_msg = (
-                            "Wrapper failed to execute - Salt got no response.\n"
-                            "Possible causes:\n"
-                            "- Wrapper binary incompatible with OS (glibc version mismatch)\n"
-                            "- Wrapper binary missing execute permissions\n"
-                            "- Wrapper path incorrect\n"
-                            "- Python installation issues\n"
-                            f"Check wrapper compatibility for this OS version."
-                        )
-                        
-                        tmpstate['results'][minion_id] = {
-                            'ret': error_msg,
-                            'retcode': 255,
-                            'starttime': now,
-                            'endtime': now
-                        }
-                        state[name] = tmpstate
-                    
-                    log(what='machine_result', cron=name, group=group, 
-                        instance=procname, machine=minion_id,
-                        code=255, out=error_msg, time=now)
-                    
-                    # Remove from running list
-                    if procname in running and 'machines' in running[procname]:
-                        if minion_id in running[procname]['machines']:
-                            tmprunning = dict(running[procname])
-                            tmprunning['machines'] = [m for m in tmprunning['machines'] if m != minion_id]
-                            running[procname] = tmprunning
-                
-                # Clean up if no machines left
-                if procname in running and not running[procname].get('machines'):
-                    del running[procname]
-                
-                pending_targets.clear()
-                break
-            
-            # Use get_iter_returns like the legacy code does
-            # This properly includes retcode in the return structure
-            rets = salt_client.get_iter_returns(job_id, list(pending_targets), 
-                                                block=False, expect_minions=True, timeout=1)
-            
-            if check_count % 10 == 0:
-                print(f"[JOB:{procname}] Still waiting for {len(pending_targets)} target(s) to respond: {list(pending_targets)}", flush=True)
-            
-            for ret in rets:
-                if ret is None:
-                    continue
-                    
-                # Extract minion_id from the return
-                minion_id = list(ret.keys())[0]
-                minion_data = ret[minion_id]
-                
-                if minion_id not in pending_targets:
-                    continue
-                
-                print(f"[JOB:{procname}] Got return from {minion_id}: {minion_data}", flush=True)
-                print(f"[JOB:{procname}] DEBUG - Keys in minion_data: {list(minion_data.keys())}", flush=True)
-                print(f"[JOB:{procname}] DEBUG - 'failed' key: {minion_data.get('failed', 'NOT_PRESENT')}", flush=True)
-                print(f"[JOB:{procname}] DEBUG - 'retcode' key: {minion_data.get('retcode', 'NOT_PRESENT')}", flush=True)
-                print(f"[JOB:{procname}] DEBUG - 'ret' key: {minion_data.get('ret', 'NOT_PRESENT')}", flush=True)
-                
-                # Check if this is a failed return (Salt couldn't execute or wrapper failed immediately)
-                # This includes: failed=True OR retcode != 0 (wrapper execution error)
-                has_failed_flag = 'failed' in minion_data and minion_data['failed'] == True
-                has_error_retcode = 'retcode' in minion_data and minion_data['retcode'] != 0
-                
-                if has_failed_flag or has_error_retcode:
-                    # Salt failed to execute or wrapper failed immediately - treat as error
-                    error_output = minion_data.get('ret', 'Salt execution failed')
-                    error_code = minion_data.get('retcode', 255)
-                    
-                    print(f"[JOB:{procname}] Wrapper execution failed on {minion_id} (Salt failed): {error_output}", flush=True)
-                    
-                    # Update state with the error
-                    now = datetime.now(timezone.utc)
-                    with statelocks[name]:
-                        tmpstate = state[name].copy()
-                        if 'results' not in tmpstate:
-                            tmpstate['results'] = {}
-                        
-                        starttime = tmpstate['results'].get(minion_id, {}).get('starttime', now)
-                        
-                        tmpstate['results'][minion_id] = {
-                            'ret': f"Wrapper execution failed:\n{error_output}",
-                            'retcode': error_code,
-                            'starttime': starttime,
-                            'endtime': now
-                        }
-                        state[name] = tmpstate
-                    
-                    # Log the error
-                    log(what='machine_result', cron=name, group=group, 
-                        instance=procname, machine=minion_id,
-                        code=error_code, out=f"Wrapper execution failed:\n{error_output}", 
-                        time=now)
-                    
-                    # Remove from pending
-                    pending_targets.discard(minion_id)
-                    
-                    # Remove from running list
-                    if procname in running and 'machines' in running[procname]:
-                        if minion_id in running[procname]['machines']:
-                            tmprunning = dict(running[procname])
-                            tmprunning['machines'] = [m for m in tmprunning['machines'] if m != minion_id]
-                            running[procname] = tmprunning
-                            if not tmprunning['machines']:
-                                del running[procname]
-                    
-                else:
-                    # Got a return with retcode
-                    ret_code = minion_data.get('retcode', None)
-                    ret_data = minion_data.get('ret', '')
-                    
-                    if ret_code is not None:
-                        if ret_code != 0:
-                            # Non-zero exit code - wrapper failed to execute
-                            print(f"[JOB:{procname}] Wrapper execution failed on {minion_id} (retcode={ret_code}): {ret_data}", flush=True)
-                            
-                            # Update state with the error
-                            now = datetime.now(timezone.utc)
-                            with statelocks[name]:
-                                tmpstate = state[name].copy()
-                                if 'results' not in tmpstate:
-                                    tmpstate['results'] = {}
-                                
-                                starttime = tmpstate['results'].get(minion_id, {}).get('starttime', now)
-                                
-                                tmpstate['results'][minion_id] = {
-                                    'ret': f"Wrapper execution failed:\n{ret_data}",
-                                    'retcode': ret_code,
-                                    'starttime': starttime,
-                                    'endtime': now
-                                }
-                                state[name] = tmpstate
-                            
-                            # Log the error
-                            log(what='machine_result', cron=name, group=group, 
-                                instance=procname, machine=minion_id,
-                                code=ret_code, out=f"Wrapper execution failed:\n{ret_data}", 
-                                time=now)
-                            
-                            # Remove from pending
-                            pending_targets.discard(minion_id)
-                            
-                            # Remove from running list
-                            if procname in running and 'machines' in running[procname]:
-                                if minion_id in running[procname]['machines']:
-                                    tmprunning = dict(running[procname])
-                                    tmprunning['machines'] = [m for m in tmprunning['machines'] if m != minion_id]
-                                    running[procname] = tmprunning
-                                    if not tmprunning['machines']:
-                                        del running[procname]
-                            
-                        else:
-                            # retcode == 0: Wrapper started successfully
-                            print(f"[JOB:{procname}] Salt confirmed wrapper started on {minion_id} (retcode=0)", flush=True)
-                            targets_confirmed_started.add(minion_id)
-                            pending_targets.discard(minion_id)
-                            # Initialize heartbeat timer NOW that we know it's running
-                            last_heartbeat[minion_id] = time.time()
-            
-            # Small sleep to avoid tight loop
-            if pending_targets:
-                time.sleep(0.5)
-    else:
-        # No Salt confirmation available, assume all targets started
-        targets_confirmed_started = set(targets)
-        for tgt in targets:
-            last_heartbeat[tgt] = time.time()
-    
-    # Second phase: Monitor WebSocket results for confirmed targets only
-    if not targets_confirmed_started:
-        # No targets started successfully - all failed during Salt confirmation
-        print(f"[JOB:{procname}] No targets started successfully for {name}, skipping monitoring", flush=True)
-        return
-    
-    print(f"[JOB:{procname}] Monitoring WebSocket results for {len(targets_confirmed_started)} confirmed target(s)...", flush=True)
-    pending_targets = targets_confirmed_started.copy()
-    job_start_time = time.time()  # Reset timer for actual job execution timeout
+    # Initialize heartbeat tracking for all targets
+    for tgt in targets:
+        last_heartbeat[tgt] = time.time()
     
     while pending_targets:
         # Check if stop_signal was set (job killed)
@@ -707,28 +565,12 @@ def run(name, data, procname, running, state, commands, maintenance):
     running[procname] = {'started': now, 'name': name, 'machines': [], 'stop_signal': False}
 
     # ping the minions and parse the result
-    ret_job = salt.run_job(targets, 'test.ping', tgt_type=target_type)
-    jid = ret_job['jid']
-    jid_targets = ret_job['minions']
+    minion_ret = salt.cmd(targets, 'test.ping', tgt_type=target_type, timeout=20)
 
-    poll_interval = 2
-    poll_count = 0
-    targets_up = []
-    targets_down = []
-    minion_ret = {}
-    while True:
-        minion_ret_raw = list(salt.get_cli_returns(jid, targets))
-        if minion_ret_raw:
-            minion_ret = {key: value['ret'] for m in minion_ret_raw for key, value in m.items()}
-            targets_up = list(minion_ret)
-            break
-        if poll_count == 10:
-            break
-        # Wait before polling again
-        time.sleep(poll_interval)
-        poll_count = poll_count + 1
+    # minion_ret is already a dict: {minion_id: True/False}
+    targets_up = [m for m, ret in minion_ret.items() if ret is True]
+    targets_down = [m for m in jid_targets if m not in targets_up]
 
-    targets_down = list(set(jid_targets) - set(targets_up))
     for item in targets_down:
         minion_ret[item] = False
 
@@ -776,7 +618,6 @@ def run(name, data, procname, running, state, commands, maintenance):
 
     if 'batch_size' in data and data['batch_size'] != 0:
         chunk = []
-        count = 0
         for t in targets_list:
             # Check stop_signal before each batch iteration
             if procname in running and running[procname].get('stop_signal', False):
@@ -785,9 +626,8 @@ def run(name, data, procname, running, state, commands, maintenance):
                 del running[procname]
                 return
             
-            count += 1
             chunk.append(t)
-            if len(chunk) == data['batch_size'] or count == len(targets_list):
+            if len(chunk) == data['batch_size'] or len(chunk) == len(targets_list):
 
                 try:
                     # Update running dict with current batch (preserve stop_signal)
@@ -817,21 +657,23 @@ def run(name, data, procname, running, state, commands, maintenance):
                                     tmpstate['results'][machine]['ret'] = '[Job killed before execution]'
                             state[name] = tmpstate
                         chunk = []
-                        continue
+                        break
                     
-                    # Run command via Salt (wrapper or direct)
-                    job = salt.run_job(chunk, 'cmd.run', cmdargs,
-                                       tgt_type='list', listen=False)
-
-                    # update running list and state
-                    if chunk:  # Only if there are still targets to monitor
+                    # Run command via Salt
+                    if use_wrapper:
+                        # Use blocking call for wrapper - returns immediately with startup status
+                        wrapper_results = salt.cmd(chunk, 'cmd.run', cmdargs, tgt_type='list', timeout=timeout)
+                        targets_confirmed_started = process_wrapper_results(wrapper_results, name, data['group'], 
+                                                                            procname, running, state)
                         
-                        # Use appropriate result handler based on wrapper usage
-                        if use_wrapper:
-                            # Pass salt client and job ID for execution confirmation
-                            processresults_websocket(name, data['group'], procname, running, state, chunk, timeout, 
-                                                    salt_client=salt, job_id=job.get('jid') if job else None)
-                        else:
+                        # Monitor WebSocket results for successfully started wrappers
+                        if targets_confirmed_started:
+                            processresults_websocket(name, data['group'], procname, running, state, 
+                                                    targets_confirmed_started, timeout)
+                    else:
+                        # Legacy mode - use run_job for non-wrapper execution
+                        job = salt.run_job(chunk, 'cmd.run', cmdargs, tgt_type='list', listen=False)
+                        if chunk:
                             processresults(salt, commands, job, name, data['group'], procname, running, state, chunk)
                     
                     chunk = []
@@ -873,19 +715,21 @@ def run(name, data, procname, running, state, commands, maintenance):
             return
 
         try:
-            # Run command via Salt (wrapper or direct)
-            job = salt.run_job(targets_list, 'cmd.run', cmdargs,
-                               tgt_type='list', listen=False)
-            
-            # Start monitoring for remaining targets
-            if targets_list:  # Only if there are still targets to monitor
+            # Run command via Salt
+            if use_wrapper:
+                # Use blocking call for wrapper - returns immediately with startup status
+                wrapper_results = salt.cmd(targets_list, 'cmd.run', cmdargs, tgt_type='list', timeout=timeout)
+                targets_confirmed_started = process_wrapper_results(wrapper_results, name, data['group'], 
+                                                                    procname, running, state)
                 
-                # Use appropriate result handler based on wrapper usage
-                if use_wrapper:
-                    # Pass salt client and job ID for execution confirmation
-                    processresults_websocket(name, data['group'], procname, running, state, targets_list, timeout,
-                                            salt_client=salt, job_id=job.get('jid') if job else None)
-                else:
+                # Monitor WebSocket results for successfully started wrappers
+                if targets_confirmed_started:
+                    processresults_websocket(name, data['group'], procname, running, state, 
+                                            targets_confirmed_started, timeout)
+            else:
+                # Legacy mode - use run_job for non-wrapper execution
+                job = salt.run_job(targets_list, 'cmd.run', cmdargs, tgt_type='list', listen=False)
+                if targets_list:
                     processresults(salt, commands, job, name, data['group'], procname, running, state, targets_list)
 
         except Exception as e:
