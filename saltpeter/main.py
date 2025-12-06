@@ -569,12 +569,9 @@ def run(name, data, procname, running, state, commands, maintenance):
 
     # minion_ret is already a dict: {minion_id: True/False}
     targets_up = [m for m, ret in minion_ret.items() if ret is True]
-    targets_down = [m for m in jid_targets if m not in targets_up]
+    targets_down = [m for m in targets if m not in targets_up]
 
-    for item in targets_down:
-        minion_ret[item] = False
-
-    targets_list = jid_targets.copy()
+    targets_list = targets_up.copy()
     #print(name, minion_ret)
     #print(name, targets_list)
     ###
@@ -585,13 +582,12 @@ def run(name, data, procname, running, state, commands, maintenance):
         tmpstate['targets'] = targets_list.copy()
         tmpstate['results'] = {}
 
-        for tgt in targets_list.copy():
-            if minion_ret[tgt] == False:
-                targets_list.remove(tgt)
-                tmpstate['results'][tgt] = {'ret': "Target did not respond",
-                                            'retcode': 255,
-                                            'starttime': now,
-                                            'endtime': datetime.now(timezone.utc)}
+        # Record non-responsive targets
+        for tgt in targets_down:
+            tmpstate['results'][tgt] = {'ret': "Target did not respond",
+                                        'retcode': 255,
+                                        'starttime': now,
+                                        'endtime': datetime.now(timezone.utc)}
 
         state[name] = tmpstate
 
