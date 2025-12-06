@@ -666,7 +666,7 @@ def run(name, data, procname, running, state, commands, maintenance):
                     if use_wrapper:
                         # Use blocking call for wrapper - returns immediately with startup status
                         print(f"[SALT DEBUG] Calling salt.cmd on chunk={chunk}, cmdargs={cmdargs}", flush=True)
-                        wrapper_results = salt.cmd(chunk, 'cmd.run', cmdargs, tgt_type='list', timeout=timeout)
+                        wrapper_results = salt.cmd(chunk, 'cmd.run_all', cmdargs, tgt_type='list', timeout=timeout)
                         print(f"[SALT DEBUG] salt.cmd returned: type={type(wrapper_results)}, content={wrapper_results}", flush=True)
                         targets_confirmed_started = process_wrapper_results(wrapper_results, name, data['group'], 
                                                                             procname, running, state)
@@ -724,7 +724,7 @@ def run(name, data, procname, running, state, commands, maintenance):
             if use_wrapper:
                 # Use blocking call for wrapper - returns immediately with startup status
                 print(f"[SALT DEBUG] Calling salt.cmd on targets_list={targets_list}, cmdargs={cmdargs}", flush=True)
-                wrapper_results = salt.cmd(targets_list, 'cmd.run', cmdargs, tgt_type='list', timeout=timeout)
+                wrapper_results = salt.cmd(targets_list, 'cmd.run_all', cmdargs, tgt_type='list', timeout=timeout)
                 print(f"[SALT DEBUG] salt.cmd returned: type={type(wrapper_results)}, content={wrapper_results}", flush=True)
                 targets_confirmed_started = process_wrapper_results(wrapper_results, name, data['group'], 
                                                                     procname, running, state)
