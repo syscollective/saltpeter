@@ -165,7 +165,8 @@ class UIEndpoint:
                         for tgt_key in srst[cron]['results']:
                             tgt = srst[cron]['results'][tgt_key]
                             if cron not in rng_names:
-                                if 'retcode' not in tgt or (tgt['retcode'] != 0 and tgt['retcode'] != "0"):
+                                # Only count as failure if retcode exists and is non-zero
+                                if 'retcode' in tgt and tgt['retcode'] != '' and tgt['retcode'] != 0 and tgt['retcode'] != "0":
                                     false_result_number += 1
                         # Mark as failed if ANY target failed
                         if false_result_number > 0:
