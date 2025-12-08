@@ -765,10 +765,14 @@ def run(name, data, procname, running, state, commands, maintenance):
         tmpstate = state[name].copy()
         results = tmpstate.get('results', {})
         
+        print(f"[SUCCESS EVAL DEBUG] Job {procname}: results keys = {list(results.keys())}", flush=True)
+        print(f"[SUCCESS EVAL DEBUG] Job {procname}: len(results) = {len(results)}", flush=True)
+        
         failed_count = 0
         total_count = 0
         
         for target, result in results.items():
+            print(f"[SUCCESS EVAL DEBUG] Target {target}: retcode={result.get('retcode')}, ret={result.get('ret')}", flush=True)
             # Only count targets that have completed (retcode is set and not empty)
             if 'retcode' in result and result['retcode'] != '' and result['retcode'] is not None:
                 total_count += 1
@@ -776,6 +780,13 @@ def run(name, data, procname, running, state, commands, maintenance):
                 retcode = result['retcode']
                 if retcode != 0 and retcode != '0':
                     failed_count += 1
+                    print(f"[SUCCESS EVAL DEBUG] Target {target}: FAILED with retcode={retcode}", flush=True)
+                else:
+                    print(f"[SUCCESS EVAL DEBUG] Target {target}: SUCCESS with retcode={retcode}", flush=True)
+            else:
+                print(f"[SUCCESS EVAL DEBUG] Target {target}: SKIPPED (retcode not set or empty)", flush=True)
+        
+        print(f"[SUCCESS EVAL DEBUG] Final counts: total={total_count}, failed={failed_count}, success={total_count - failed_count}", flush=True)
         
         # Job is successful if no targets failed
         success = (failed_count == 0) and (total_count > 0)
