@@ -626,7 +626,7 @@ def run(name, data, procname, running, state, commands, maintenance):
 
         if 'batch_size' in data and data['batch_size'] != 0:
             chunk = []
-            for t in targets_list:
+            for idx, t in enumerate(targets_list):
                 # Check stop_signal before each batch iteration
                 if procname in running and running[procname].get('stop_signal', False):
                     print(f"[JOB:{procname}] Stop signal detected during batch processing, aborting remaining batches", flush=True)
@@ -634,7 +634,8 @@ def run(name, data, procname, running, state, commands, maintenance):
                     break
                 
                 chunk.append(t)
-                if len(chunk) == data['batch_size'] or len(chunk) == len(targets_list):
+                # Execute when chunk is full OR this is the last target
+                if len(chunk) == data['batch_size'] or idx == len(targets_list) - 1:
 
                     try:
                         # Update running dict with current batch (preserve stop_signal)
