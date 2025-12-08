@@ -500,6 +500,12 @@ def run(name, data, procname, running, state, commands, maintenance):
             if 'allow_overlap' not in data or data['allow_overlap'] != 'i know what i am doing!':
                 return
 
+    # Clear results from previous run at the start
+    with statelocks[name]:
+        tmpstate = state[name].copy()
+        tmpstate['results'] = {}
+        state[name] = tmpstate
+
     import salt.client
     salt = salt.client.LocalClient()
     targets = data['targets']
