@@ -159,20 +159,14 @@ class UIEndpoint:
                 if 'last_run' in srst[cron] and srst[cron]['last_run'] != '':
                     lastst[cron] = {}
                     lastst[cron]['last_run'] = srst[cron]['last_run'].isoformat()
-                    if 'results' in srst[cron] and len(srst[cron]['results']) > 0:
-                        lastst[cron]['result_ok'] = True
-                        false_result_number = 0
-                        for tgt_key in srst[cron]['results']:
-                            tgt = srst[cron]['results'][tgt_key]
-                            if cron not in rng_names:
-                                # Only count as failure if retcode exists and is non-zero
-                                if 'retcode' in tgt and tgt['retcode'] != '' and tgt['retcode'] != 0 and tgt['retcode'] != "0":
-                                    false_result_number += 1
-                        # Mark as failed if ANY target failed
-                        if false_result_number > 0:
-                            lastst[cron]['result_ok'] = False
+                    
+                    # Read success status from state (evaluated once at job end)
+                    # Only show final status if job is not currently running
+                    if cron not in rng_names:
+                        lastst[cron]['result_ok'] = srst[cron].get('last_success', False)
                     else:
-                        lastst[cron]['result_ok'] = False
+                        # Job still running - don't show final status yet
+                        lastst[cron]['result_ok'] = True
             
             # Send in new protocol format with type field
             await ws.send_str(json.dumps({

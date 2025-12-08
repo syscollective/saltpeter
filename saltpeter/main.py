@@ -612,67 +612,121 @@ def run(name, data, procname, running, state, commands, maintenance):
 
     if len(targets_list) == 0:
         log(cron=name, group=data['group'], what='no_machines', instance=procname, time=datetime.now(timezone.utc))
-        log(cron=name, group=data['group'], what='end', instance=procname, time=datetime.now(timezone.utc))
-        return
-    
-    # Shuffle targets for random selection/distribution
-    if ('number_of_targets' in data and data['number_of_targets'] != 0) or \
-       ('batch_size' in data and data['batch_size'] != 0):
-        import random
-        random.shuffle(targets_list)
-    
-    if 'number_of_targets' in data and data['number_of_targets'] != 0:
-        # Select subset of targets
-        targets_list = targets_list[:data['number_of_targets']]
+    else:
+        # Only execute if we have targets
+        # Shuffle targets for random selection/distribution
+        if ('number_of_targets' in data and data['number_of_targets'] != 0) or \
+           ('batch_size' in data and data['batch_size'] != 0):
+            import random
+            random.shuffle(targets_list)
+        
+        if 'number_of_targets' in data and data['number_of_targets'] != 0:
+            # Select subset of targets
+            targets_list = targets_list[:data['number_of_targets']]
 
-    if 'batch_size' in data and data['batch_size'] != 0:
-        chunk = []
-        for t in targets_list:
-            # Check stop_signal before each batch iteration
-            if procname in running and running[procname].get('stop_signal', False):
-                print(f"[JOB:{procname}] Stop signal detected during batch processing, aborting remaining batches", flush=True)
-                log(cron=name, group=data['group'], what='end', instance=procname, time=datetime.now(timezone.utc))
-                del running[procname]
-                return
-            
-            chunk.append(t)
-            if len(chunk) == data['batch_size'] or len(chunk) == len(targets_list):
+        if 'batch_size' in data and data['batch_size'] != 0:
+            chunk = []
+            for t in targets_list:
+                # Check stop_signal before each batch iteration
+                if procname in running and running[procname].get('stop_signal', False):
+                    print(f"[JOB:{procname}] Stop signal detected during batch processing, aborting remaining batches", flush=True)
+                    # Just break out of loop - let end of function evaluate success
+                    break
+                
+                chunk.append(t)
+                if len(chunk) == data['batch_size'] or len(chunk) == len(targets_list):
 
-                try:
-                    # Update running dict with current batch (preserve stop_signal)
-                    # Check if procname still exists (might have been cleaned up by main loop)
-                    if procname not in running:
-                        print(f"[JOB:{procname}] Running entry was deleted, stopping batch processing", flush=True)
-                        break
-                    
-                    tmprunning = dict(running[procname])
-                    tmprunning['machines'] = chunk
-                    running[procname] = tmprunning
-                    processstart(chunk, name, data['group'], procname, state)
-                    
-                    # Check stop_signal before executing wrapper
-                    if procname in running and running[procname].get('stop_signal', False):
-                        print(f"[JOB:{procname}] Stop signal detected before wrapper execution, skipping batch", flush=True)
-                        # Mark machines as killed
-                        now = datetime.now(timezone.utc)
-                        with statelocks[name]:
-                            tmpstate = state[name].copy()
-                            if 'results' not in tmpstate:
-                                tmpstate['results'] = {}
-                            for machine in chunk:
-                                if machine in tmpstate['results']:
-                                    tmpstate['results'][machine]['endtime'] = now
-                                    tmpstate['results'][machine]['retcode'] = 143
-                                    tmpstate['results'][machine]['ret'] = '[Job killed before execution]'
-                            state[name] = tmpstate
+                    try:
+                        # Update running dict with current batch (preserve stop_signal)
+                        # Check if procname still exists (might have been cleaned up by main loop)
+                        if procname not in running:
+                            print(f"[JOB:{procname}] Running entry was deleted, stopping batch processing", flush=True)
+                            break
+                        
+                        tmprunning = dict(running[procname])
+                        tmprunning['machines'] = chunk
+                        running[procname] = tmprunning
+                        processstart(chunk, name, data['group'], procname, state)
+                        
+                        # Check stop_signal before executing wrapper
+                        if procname in running and running[procname].get('stop_signal', False):
+                            print(f"[JOB:{procname}] Stop signal detected before wrapper execution, skipping batch", flush=True)
+                            # Mark machines as killed
+                            now = datetime.now(timezone.utc)
+                            with statelocks[name]:
+                                tmpstate = state[name].copy()
+                                if 'results' not in tmpstate:
+                                    tmpstate['results'] = {}
+                                for machine in chunk:
+                                    if machine in tmpstate['results']:
+                                        tmpstate['results'][machine]['endtime'] = now
+                                        tmpstate['results'][machine]['retcode'] = 143
+                                        tmpstate['results'][machine]['ret'] = '[Job killed before execution]'
+                                state[name] = tmpstate
+                            chunk = []
+                            break
+                        
+                        # Run command via Salt
+                        if use_wrapper:
+                            # Use blocking call for wrapper - returns immediately with startup status
+                            print(f"[SALT DEBUG] Calling salt.cmd on chunk={chunk}, cmdargs={cmdargs}", flush=True)
+                            wrapper_results = salt.cmd(chunk, 'cmd.run_all', cmdargs, tgt_type='list', timeout=timeout)
+                            print(f"[SALT DEBUG] salt.cmd returned: type={type(wrapper_results)}, content={wrapper_results}", flush=True)
+                            targets_confirmed_started = process_wrapper_results(wrapper_results, name, data['group'], 
+                                                                                procname, running, state)
+                            
+                            # Monitor WebSocket results for successfully started wrappers
+                            if targets_confirmed_started:
+                                processresults_websocket(name, data['group'], procname, running, state, 
+                                                        targets_confirmed_started, timeout)
+                        else:
+                            # Legacy mode - use run_job for non-wrapper execution
+                            job = salt.run_job(chunk, 'cmd.run', cmdargs, tgt_type='list', listen=False)
+                            if chunk:
+                                processresults(salt, commands, job, name, data['group'], procname, running, state, chunk)
+                        
                         chunk = []
-                        break
-                    
+                    except Exception as e:
+                        print(f'[MAIN] Exception in run() at "batch_size" for {procname}:', flush=True)
+                        print(f'[MAIN] Exception type: {type(e).__name__}', flush=True)
+                        print(f'[MAIN] Exception message: {str(e)}', flush=True)
+                        print(f'[MAIN] Traceback:', flush=True)
+                        traceback.print_exc()
+                        chunk = []
+        else:
+            # Update running dict with all targets (preserve stop_signal)
+            tmprunning = dict(running[procname])
+            tmprunning['machines'] = targets_list
+            running[procname] = tmprunning
+            starttime = datetime.now(timezone.utc)
+            
+            # Initialize state structure BEFORE running Salt to prevent race condition
+            # where wrappers send output before state is ready
+            processstart(targets_list, name, data['group'], procname, state)
+
+            # Check stop_signal before executing wrapper
+            if procname in running and running[procname].get('stop_signal', False):
+                print(f"[JOB:{procname}] Stop signal detected before wrapper execution, aborting", flush=True)
+                # Mark all machines as killed
+                now = datetime.now(timezone.utc)
+                with statelocks[name]:
+                    tmpstate = state[name].copy()
+                    if 'results' not in tmpstate:
+                        tmpstate['results'] = {}
+                    for machine in targets_list:
+                        if machine in tmpstate['results']:
+                            tmpstate['results'][machine]['endtime'] = now
+                            tmpstate['results'][machine]['retcode'] = 143
+                            tmpstate['results'][machine]['ret'] = '[Job killed before execution]'
+                    state[name] = tmpstate
+                # Don't execute Salt - fall through to end for success evaluation
+            else:
+                try:
                     # Run command via Salt
                     if use_wrapper:
                         # Use blocking call for wrapper - returns immediately with startup status
-                        print(f"[SALT DEBUG] Calling salt.cmd on chunk={chunk}, cmdargs={cmdargs}", flush=True)
-                        wrapper_results = salt.cmd(chunk, 'cmd.run_all', cmdargs, tgt_type='list', timeout=timeout)
+                        print(f"[SALT DEBUG] Calling salt.cmd on targets_list={targets_list}, cmdargs={cmdargs}", flush=True)
+                        wrapper_results = salt.cmd(targets_list, 'cmd.run_all', cmdargs, tgt_type='list', timeout=timeout)
                         print(f"[SALT DEBUG] salt.cmd returned: type={type(wrapper_results)}, content={wrapper_results}", flush=True)
                         targets_confirmed_started = process_wrapper_results(wrapper_results, name, data['group'], 
                                                                             procname, running, state)
@@ -683,80 +737,54 @@ def run(name, data, procname, running, state, commands, maintenance):
                                                     targets_confirmed_started, timeout)
                     else:
                         # Legacy mode - use run_job for non-wrapper execution
-                        job = salt.run_job(chunk, 'cmd.run', cmdargs, tgt_type='list', listen=False)
-                        if chunk:
-                            processresults(salt, commands, job, name, data['group'], procname, running, state, chunk)
-                    
-                    chunk = []
+                        job = salt.run_job(targets_list, 'cmd.run', cmdargs, tgt_type='list', listen=False)
+                        if targets_list:
+                            processresults(salt, commands, job, name, data['group'], procname, running, state, targets_list)
+
                 except Exception as e:
-                    print(f'[MAIN] Exception in run() at "batch_size" for {procname}:', flush=True)
+                    print(f'[MAIN] Exception in run() for {procname}:', flush=True)
                     print(f'[MAIN] Exception type: {type(e).__name__}', flush=True)
                     print(f'[MAIN] Exception message: {str(e)}', flush=True)
                     print(f'[MAIN] Traceback:', flush=True)
                     traceback.print_exc()
-                    chunk = []
-    else:
-        # Update running dict with all targets (preserve stop_signal)
-        tmprunning = dict(running[procname])
-        tmprunning['machines'] = targets_list
-        running[procname] = tmprunning
-        starttime = datetime.now(timezone.utc)
-        
-        # Initialize state structure BEFORE running Salt to prevent race condition
-        # where wrappers send output before state is ready
-        processstart(targets_list, name, data['group'], procname, state)
-
-        # Check stop_signal before executing wrapper
-        if procname in running and running[procname].get('stop_signal', False):
-            print(f"[JOB:{procname}] Stop signal detected before wrapper execution, aborting", flush=True)
-            # Mark all machines as killed
-            now = datetime.now(timezone.utc)
-            with statelocks[name]:
-                tmpstate = state[name].copy()
-                if 'results' not in tmpstate:
-                    tmpstate['results'] = {}
-                for machine in targets_list:
-                    if machine in tmpstate['results']:
-                        tmpstate['results'][machine]['endtime'] = now
-                        tmpstate['results'][machine]['retcode'] = 143
-                        tmpstate['results'][machine]['ret'] = '[Job killed before execution]'
-                state[name] = tmpstate
-            log(cron=name, group=data['group'], what='end', instance=procname, time=datetime.now(timezone.utc))
-            del running[procname]
-            return
-
-        try:
-            # Run command via Salt
-            if use_wrapper:
-                # Use blocking call for wrapper - returns immediately with startup status
-                print(f"[SALT DEBUG] Calling salt.cmd on targets_list={targets_list}, cmdargs={cmdargs}", flush=True)
-                wrapper_results = salt.cmd(targets_list, 'cmd.run_all', cmdargs, tgt_type='list', timeout=timeout)
-                print(f"[SALT DEBUG] salt.cmd returned: type={type(wrapper_results)}, content={wrapper_results}", flush=True)
-                targets_confirmed_started = process_wrapper_results(wrapper_results, name, data['group'], 
-                                                                    procname, running, state)
-                
-                # Monitor WebSocket results for successfully started wrappers
-                if targets_confirmed_started:
-                    processresults_websocket(name, data['group'], procname, running, state, 
-                                            targets_confirmed_started, timeout)
-            else:
-                # Legacy mode - use run_job for non-wrapper execution
-                job = salt.run_job(targets_list, 'cmd.run', cmdargs, tgt_type='list', listen=False)
-                if targets_list:
-                    processresults(salt, commands, job, name, data['group'], procname, running, state, targets_list)
-
-        except Exception as e:
-            print(f'[MAIN] Exception in run() for {procname}:', flush=True)
-            print(f'[MAIN] Exception type: {type(e).__name__}', flush=True)
-            print(f'[MAIN] Exception message: {str(e)}', flush=True)
-            print(f'[MAIN] Traceback:', flush=True)
-            traceback.print_exc()
 
     # Clean up running state at the end of job execution
     if procname in running:
         del running[procname]
     
-    log(cron=name, group=data['group'], what='end', instance=procname, time=datetime.now(timezone.utc))
+    # Evaluate job success ONCE - single source of truth
+    # Count failures from results
+    with statelocks[name]:
+        tmpstate = state[name].copy()
+        results = tmpstate.get('results', {})
+        
+        failed_count = 0
+        total_count = 0
+        
+        for target, result in results.items():
+            # Only count targets that have completed (retcode is set and not empty)
+            if 'retcode' in result and result['retcode'] != '' and result['retcode'] is not None:
+                total_count += 1
+                # Check if retcode is non-zero (handle both int and string)
+                retcode = result['retcode']
+                if retcode != 0 and retcode != '0':
+                    failed_count += 1
+        
+        # Job is successful if no targets failed
+        success = (failed_count == 0) and (total_count > 0)
+        
+        # Store success status in state for UI/API/logs to read
+        tmpstate['last_success'] = success
+        tmpstate['last_failed_count'] = failed_count
+        tmpstate['last_total_count'] = total_count
+        
+        state[name] = tmpstate
+    
+    # Log end with proper status code from evaluated success
+    status_code = 0 if success else 1
+    log(cron=name, group=data['group'], what='end', instance=procname, 
+        time=datetime.now(timezone.utc), code=status_code,
+        out=f"Completed: {total_count - failed_count}/{total_count} targets successful")
 
 def debuglog(content):
     logfile = open(args.logdir+'/'+'debug.log','a')
