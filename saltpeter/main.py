@@ -588,17 +588,15 @@ def run(name, data, procname, running, state, commands, maintenance):
 
     # minion_ret is already a dict: {minion_id: True/False}
     targets_up = [m for m, ret in minion_ret.items() if ret is True]
-    targets_down = [m for m in targets if m not in targets_up]
-
-    targets_list = targets_up.copy()
+    targets_down = [m for m, ret in minion_ret.items() if ret is not True]
     #print(name, minion_ret)
-    #print(name, targets_list)
+    #print(name, targets_up)
     ###
 
     dead_targets = []
     with statelocks[name]:
         tmpstate = state[name]
-        tmpstate['targets'] = targets_list.copy()
+        tmpstate['targets'] = targets_up.copy()
         tmpstate['results'] = {}
 
         # Record non-responsive targets
@@ -610,13 +608,13 @@ def run(name, data, procname, running, state, commands, maintenance):
 
         state[name] = tmpstate
 
-    # Remove maintenance machines from targets_list and log a message
-    for tgt in targets_list.copy():
+    # Remove maintenance machines from targets_up and log a message
+    for tgt in targets_up.copy():
         if tgt in maintenance['machines']:
-            targets_list.remove(tgt)
+            targets_up.remove(tgt)
             log(cron=name, group=data['group'], what='maintenance', instance=procname, time=datetime.now(timezone.utc), machine=tgt, out="Target under maintenance")
 
-    if len(targets_list) == 0:
+    if len(targets_up) == 0:
         log(cron=name, group=data['group'], what='no_machines', instance=procname, time=datetime.now(timezone.utc))
     else:
         # Only execute if we have targets
@@ -624,15 +622,15 @@ def run(name, data, procname, running, state, commands, maintenance):
         if ('number_of_targets' in data and data['number_of_targets'] != 0) or \
            ('batch_size' in data and data['batch_size'] != 0):
             import random
-            random.shuffle(targets_list)
+            random.shuffle(targets_up)
         
         if 'number_of_targets' in data and data['number_of_targets'] != 0:
             # Select subset of targets
-            targets_list = targets_list[:data['number_of_targets']]
+            targets_up = targets_up[:data['number_of_targets']]
 
         if 'batch_size' in data and data['batch_size'] != 0:
             chunk = []
-            for idx, t in enumerate(targets_list):
+            for idx, t in enumerate(targets_up):
                 # Check stop_signal before each batch iteration
                 if procname in running and running[procname].get('stop_signal', False):
                     print(f"[JOB:{procname}] Stop signal detected during batch processing, aborting remaining batches", flush=True)
@@ -641,7 +639,7 @@ def run(name, data, procname, running, state, commands, maintenance):
                 
                 chunk.append(t)
                 # Execute when chunk is full OR this is the last target
-                if len(chunk) == data['batch_size'] or idx == len(targets_list) - 1:
+                if len(chunk) == data['batch_size'] or idx == len(targets_up) - 1:
 
                     try:
                         # Update running dict with current batch (preserve stop_signal)
@@ -703,13 +701,13 @@ def run(name, data, procname, running, state, commands, maintenance):
         else:
             # Update running dict with all targets (preserve stop_signal)
             tmprunning = dict(running[procname])
-            tmprunning['machines'] = targets_list
+            tmprunning['machines'] = targets_up
             running[procname] = tmprunning
             starttime = datetime.now(timezone.utc)
             
             # Initialize state structure BEFORE running Salt to prevent race condition
             # where wrappers send output before state is ready
-            processstart(targets_list, name, data['group'], procname, state)
+            processstart(targets_up, name, data['group'], procname, state)
 
             # Check stop_signal before executing wrapper
             if procname in running and running[procname].get('stop_signal', False):
@@ -720,7 +718,7 @@ def run(name, data, procname, running, state, commands, maintenance):
                     tmpstate = state[name].copy()
                     if 'results' not in tmpstate:
                         tmpstate['results'] = {}
-                    for machine in targets_list:
+                    for machine in targets_up:
                         if machine in tmpstate['results']:
                             tmpstate['results'][machine]['endtime'] = now
                             tmpstate['results'][machine]['retcode'] = 143
@@ -732,8 +730,8 @@ def run(name, data, procname, running, state, commands, maintenance):
                     # Run command via Salt
                     if use_wrapper:
                         # Use blocking call for wrapper - returns immediately with startup status
-                        print(f"[SALT DEBUG] Calling salt.cmd on targets_list={targets_list}, cmdargs={cmdargs}", flush=True)
-                        wrapper_results = salt.cmd(targets_list, 'cmd.run_all', cmdargs, tgt_type='list', timeout=timeout)
+                        print(f"[SALT DEBUG] Calling salt.cmd on targets_up={targets_up}, cmdargs={cmdargs}", flush=True)
+                        wrapper_results = salt.cmd(targets_up, 'cmd.run_all', cmdargs, tgt_type='list', timeout=timeout)
                         print(f"[SALT DEBUG] salt.cmd returned: type={type(wrapper_results)}, content={wrapper_results}", flush=True)
                         targets_confirmed_started = process_wrapper_results(wrapper_results, name, data['group'], 
                                                                             procname, running, state)
@@ -744,9 +742,9 @@ def run(name, data, procname, running, state, commands, maintenance):
                                                     targets_confirmed_started, timeout)
                     else:
                         # Legacy mode - use run_job for non-wrapper execution
-                        job = salt.run_job(targets_list, 'cmd.run', cmdargs, tgt_type='list', listen=False)
-                        if targets_list:
-                            processresults(salt, commands, job, name, data['group'], procname, running, state, targets_list)
+                        job = salt.run_job(targets_up, 'cmd.run', cmdargs, tgt_type='list', listen=False)
+                        if targets_up:
+                            processresults(salt, commands, job, name, data['group'], procname, running, state, targets_up)
 
                 except Exception as e:
                     print(f'[MAIN] Exception in run() for {procname}:', flush=True)
