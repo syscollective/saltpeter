@@ -151,13 +151,15 @@ def handle_wrapper_failure(machine, retcode, output, name, group, procname, runn
             running[procname] = tmprunning
 
 
-def process_wrapper_results(wrapper_results, name, group, procname, running, state):
+def process_wrapper_results(wrapper_results, name, group, procname, running, state, expected_targets):
     """
     Process salt.cmd() results for wrapper execution
     Returns list of successfully started targets
+    Handles missing targets (not in wrapper_results) as startup failures
     """
     print(f"[SALT DEBUG] wrapper_results type: {type(wrapper_results)}", flush=True)
     print(f"[SALT DEBUG] wrapper_results content: {wrapper_results}", flush=True)
+    print(f"[SALT DEBUG] expected_targets: {expected_targets}", flush=True)
     
     targets_confirmed_started = []
     
@@ -180,6 +182,14 @@ def process_wrapper_results(wrapper_results, name, group, procname, running, sta
             # No response or malformed response
             print(f"[JOB:{procname}] No response from {machine} - result type: {type(result)}", flush=True)
             handle_wrapper_failure(machine, 255, "Target did not respond", name, group, procname, running, state)
+    
+    # Handle targets missing from wrapper_results (Salt timeout or no response)
+    missing_targets = set(expected_targets) - set(wrapper_results.keys())
+    if missing_targets:
+        print(f"[JOB:{procname}] Targets missing from Salt response (timeout during wrapper startup): {missing_targets}", flush=True)
+        for machine in missing_targets:
+            handle_wrapper_failure(machine, 255, "Salt timeout - wrapper did not start within 30s", 
+                                 name, group, procname, running, state)
     
     return targets_confirmed_started
 
@@ -674,11 +684,12 @@ def run(name, data, procname, running, state, commands, maintenance):
                         # Run command via Salt
                         if use_wrapper:
                             # Use blocking call for wrapper - returns immediately with startup status
+                            # Use 30s timeout for wrapper startup (not job timeout)
                             print(f"[SALT DEBUG] Calling salt.cmd on chunk={chunk}, cmdargs={cmdargs}", flush=True)
-                            wrapper_results = salt.cmd(chunk, 'cmd.run_all', cmdargs, tgt_type='list', timeout=timeout)
+                            wrapper_results = salt.cmd(chunk, 'cmd.run_all', cmdargs, tgt_type='list', timeout=30)
                             print(f"[SALT DEBUG] salt.cmd returned: type={type(wrapper_results)}, content={wrapper_results}", flush=True)
                             targets_confirmed_started = process_wrapper_results(wrapper_results, name, data['group'], 
-                                                                                procname, running, state)
+                                                                                procname, running, state, chunk)
                             
                             # Monitor WebSocket results for successfully started wrappers
                             if targets_confirmed_started:
@@ -730,11 +741,12 @@ def run(name, data, procname, running, state, commands, maintenance):
                     # Run command via Salt
                     if use_wrapper:
                         # Use blocking call for wrapper - returns immediately with startup status
+                        # Use 30s timeout for wrapper startup (not job timeout)
                         print(f"[SALT DEBUG] Calling salt.cmd on targets_up={targets_up}, cmdargs={cmdargs}", flush=True)
-                        wrapper_results = salt.cmd(targets_up, 'cmd.run_all', cmdargs, tgt_type='list', timeout=timeout)
+                        wrapper_results = salt.cmd(targets_up, 'cmd.run_all', cmdargs, tgt_type='list', timeout=30)
                         print(f"[SALT DEBUG] salt.cmd returned: type={type(wrapper_results)}, content={wrapper_results}", flush=True)
                         targets_confirmed_started = process_wrapper_results(wrapper_results, name, data['group'], 
-                                                                            procname, running, state)
+                                                                            procname, running, state, targets_up)
                         
                         # Monitor WebSocket results for successfully started wrappers
                         if targets_confirmed_started:
