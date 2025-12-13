@@ -21,7 +21,7 @@ class WebSocketJobServer:
         self.commands = commands  # Shared command queue from main
         self.connections = {}  # Track active connections by job_instance + machine
         self.command_check_task = None  # Background task for checking kill commands
-        self.kill_timeouts = {}  # Track kill commands with grace period: {job_name: timestamp}
+        self.kill_machine_timeouts = {}  # Track machine kills with grace period: {(job_name, machine): timestamp}
     
     async def handle_client(self, websocket):
         """
@@ -387,55 +387,28 @@ class WebSocketJobServer:
                                     tmprunning['stop_signal'] = True
                                     self.running[proc_name] = tmprunning
                             
-                            # Track kill time for grace period enforcement
-                            self.kill_timeouts[job_name] = time.time()
+                            # Convert to individual killmachine commands for all machines in the job
+                            machines_to_kill = set()
                             
-                            # Find all connections for this job and send kill signal
-                            killed_count = 0
-                            active_machines = set()
+                            # Get machines from active connections
                             for client_id, conn_info in list(self.connections.items()):
                                 if conn_info['job_name'] == job_name:
-                                    try:
-                                        await conn_info['websocket'].send(json.dumps({
-                                            'type': 'kill',
-                                            'job_name': job_name,
-                                            'job_instance': conn_info['job_instance'],
-                                            'machine': conn_info['machine'],
-                                            'timestamp': datetime.now(timezone.utc).isoformat()
-                                        }))
-                                        killed_count += 1
-                                        active_machines.add(conn_info['machine'])
-                                        print(f"[MACHINES WS] Sent kill signal to {client_id}", flush=True)
-                                    except Exception as e:
-                                        print(f"[MACHINES WS] Error sending kill to {client_id}: {e}", flush=True)
+                                    machines_to_kill.add(conn_info['machine'])
                             
-                            # Clean up machines that haven't connected yet (no wrapper running)
-                            # These show in UI but wrapper hasn't started - remove them immediately
-                            cleaned_count = 0
-                            if job_name in self.state and self.statelocks and job_name in self.statelocks:
-                                with self.statelocks[job_name]:
-                                    tmpstate = self.state[job_name].copy()
-                                    if 'results' in tmpstate:
-                                        now = datetime.now(timezone.utc)
-                                        for machine, result in list(tmpstate['results'].items()):
-                                            # Machine hasn't connected to wrapper yet (no output, no endtime)
-                                            if machine not in active_machines and not result.get('endtime'):
-                                                if not result.get('ret') or result.get('ret') == '':
-                                                    print(f"[MACHINES WS] Cleaning up {machine} - wrapper never started", flush=True)
-                                                    result['endtime'] = now
-                                                    result['retcode'] = 143
-                                                    result['ret'] = '[Job killed before wrapper started]'
-                                                    cleaned_count += 1
-                                    self.state[job_name] = tmpstate
+                            # Get machines from state (includes those that haven't connected yet)
+                            if job_name in self.state and 'results' in self.state[job_name]:
+                                for machine in self.state[job_name]['results'].keys():
+                                    machines_to_kill.add(machine)
                             
-                            if killed_count > 0:
-                                print(f"[MACHINES WS] Sent kill signal to {killed_count} wrapper(s) for job {job_name}", flush=True)
-                            if cleaned_count > 0:
-                                print(f"[MACHINES WS] Cleaned up {cleaned_count} machine(s) that hadn't started wrappers", flush=True)
-                            if killed_count == 0 and cleaned_count == 0:
-                                print(f"[MACHINES WS] No active connections or pending machines found for job {job_name}", flush=True)
+                            # Create killmachine command for each machine
+                            for machine in machines_to_kill:
+                                self.commands.append({
+                                    'killmachine': {'cron': job_name, 'machine': machine}
+                                })
                             
-                            # Remove command from queue
+                            print(f"[MACHINES WS] Created {len(machines_to_kill)} killmachine commands for job {job_name}", flush=True)
+                            
+                            # Remove the killcron command (replaced by killmachine commands)
                             self.commands.remove(cmd)
                         
                         elif 'killmachine' in cmd:
@@ -448,83 +421,76 @@ class WebSocketJobServer:
                                 self.commands.remove(cmd)
                                 continue
                             
-                            print(f"[MACHINES WS] Kill command received for job {job_name} on machine {machine_name}", flush=True)
-                            
-                            # Find the specific connection for this job and machine
-                            killed = False
-                            for client_id, conn_info in list(self.connections.items()):
-                                if conn_info['job_name'] == job_name and conn_info['machine'] == machine_name:
-                                    try:
-                                        await conn_info['websocket'].send(json.dumps({
-                                            'type': 'kill',
-                                            'job_name': job_name,
-                                            'job_instance': conn_info['job_instance'],
-                                            'machine': conn_info['machine'],
-                                            'timestamp': datetime.now(timezone.utc).isoformat()
-                                        }))
-                                        killed = True
-                                        print(f"[MACHINES WS] Sent kill signal to {client_id}", flush=True)
-                                    except Exception as e:
-                                        print(f"[MACHINES WS] Error sending kill to {client_id}: {e}", flush=True)
-                                    break  # Only kill the first matching connection
-                            
-                            # If no active connection, clean up machine immediately if wrapper hasn't started
-                            if not killed:
-                                if job_name in self.state and self.statelocks and job_name in self.statelocks:
-                                    with self.statelocks[job_name]:
-                                        tmpstate = self.state[job_name].copy()
-                                        if 'results' in tmpstate and machine_name in tmpstate['results']:
-                                            result = tmpstate['results'][machine_name]
-                                            # Machine hasn't connected to wrapper yet (no output, no endtime)
-                                            if not result.get('endtime') and (not result.get('ret') or result.get('ret') == ''):
-                                                print(f"[MACHINES WS] Cleaning up {machine_name} - wrapper never started", flush=True)
-                                                now = datetime.now(timezone.utc)
-                                                result['endtime'] = now
-                                                result['retcode'] = 143
-                                                result['ret'] = '[Job killed before wrapper started]'
-                                                tmpstate['results'][machine_name] = result
-                                                killed = True  # Mark as handled
-                                        self.state[job_name] = tmpstate
-                            
-                            if killed:
-                                print(f"[MACHINES WS] Killed job {job_name} on machine {machine_name}", flush=True)
-                            else:
-                                print(f"[MACHINES WS] No active connection or pending wrapper found for job {job_name} on machine {machine_name}", flush=True)
-                            
-                            # Remove command from queue
-                            self.commands.remove(cmd)
+                            # Track kill time for retry and grace period (only if not already tracked)
+                            if (job_name, machine_name) not in self.kill_machine_timeouts:
+                                self.kill_machine_timeouts[(job_name, machine_name)] = time.time()
+                                print(f"[MACHINES WS] Kill command received for {job_name} on {machine_name}", flush=True)
                 
-                # Check for kill grace period timeouts (10 seconds)
+                # Unified retry logic for all machine kills
                 current_time = time.time()
-                for job_name, kill_time in list(self.kill_timeouts.items()):
-                    if current_time - kill_time >= 10:
-                        # Grace period expired - forcefully complete any remaining targets
-                        print(f"[MACHINES WS] Kill grace period expired for {job_name}, forcefully completing", flush=True)
+                for (job_name, machine_name), kill_time in list(self.kill_machine_timeouts.items()):
+                    time_elapsed = current_time - kill_time
+                    
+                    # Check if machine has completed
+                    machine_completed = False
+                    if job_name in self.state and 'results' in self.state[job_name]:
+                        result = self.state[job_name]['results'].get(machine_name, {})
+                        if result.get('endtime') and result.get('endtime') != '':
+                            machine_completed = True
+                    
+                    if machine_completed:
+                        # Machine completed, remove from tracking and command queue
+                        for cmd in list(self.commands):
+                            if 'killmachine' in cmd:
+                                kill_info = cmd['killmachine']
+                                if kill_info.get('cron') == job_name and kill_info.get('machine') == machine_name:
+                                    self.commands.remove(cmd)
+                                    break
+                        del self.kill_machine_timeouts[(job_name, machine_name)]
+                        continue
+                    
+                    # Keep retrying to send kill until grace period ends
+                    if time_elapsed < 30:
+                        for client_id, conn_info in list(self.connections.items()):
+                            if conn_info['job_name'] == job_name and conn_info['machine'] == machine_name:
+                                try:
+                                    await conn_info['websocket'].send(json.dumps({
+                                        'type': 'kill',
+                                        'job_name': job_name,
+                                        'job_instance': conn_info['job_instance'],
+                                        'machine': machine_name,
+                                        'timestamp': datetime.now(timezone.utc).isoformat()
+                                    }))
+                                except:
+                                    pass  # Ignore send errors, will retry next cycle
+                                break
+                    
+                    # Grace period expired
+                    elif time_elapsed >= 30:
+                        print(f"[MACHINES WS] Kill grace period expired for {job_name} on {machine_name}, forcefully completing", flush=True)
                         
-                        # Find all running instances of this job and mark them as killed
+                        # Forcefully mark machine as killed
                         if job_name in self.state and self.statelocks and job_name in self.statelocks:
                             with self.statelocks[job_name]:
                                 tmpstate = self.state[job_name].copy()
-                                if 'results' in tmpstate:
-                                    now = datetime.now(timezone.utc)
-                                    for machine, result in tmpstate['results'].items():
-                                        # Only update if not already completed
-                                        if not result.get('endtime') or result.get('endtime') == '':
-                                            print(f"[MACHINES WS] Forcefully completing {job_name} on {machine}", flush=True)
-                                            result['endtime'] = now
-                                            result['retcode'] = 143  # SIGTERM exit code
-                                            if 'ret' not in result:
-                                                result['ret'] = ''
-                                            result['ret'] += "\n[Job terminated by user request - grace period expired]\n"
-                                    self.state[job_name] = tmpstate
+                                if 'results' in tmpstate and machine_name in tmpstate['results']:
+                                    result = tmpstate['results'][machine_name]
+                                    if not result.get('endtime') or result.get('endtime') == '':
+                                        result['endtime'] = datetime.now(timezone.utc)
+                                        result['retcode'] = 143
+                                        if 'ret' not in result:
+                                            result['ret'] = ''
+                                        result['ret'] += "\n[Job terminated by user request - grace period expired after 30s]\n"
+                                self.state[job_name] = tmpstate
                         
-                        # Remove from kill_timeouts
-                        del self.kill_timeouts[job_name]
-                        
-                        # Clean up any lingering connections for this job
-                        for client_id in list(self.connections.keys()):
-                            if self.connections[client_id]['job_name'] == job_name:
-                                del self.connections[client_id]
+                        # Remove from tracking and command queue
+                        for cmd in list(self.commands):
+                            if 'killmachine' in cmd:
+                                kill_info = cmd['killmachine']
+                                if kill_info.get('cron') == job_name and kill_info.get('machine') == machine_name:
+                                    self.commands.remove(cmd)
+                                    break
+                        del self.kill_machine_timeouts[(job_name, machine_name)]
                 
                 await asyncio.sleep(0.5)  # Check every 500ms
             except Exception as e:
