@@ -140,9 +140,13 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
         # Start the subprocess FIRST - runs regardless of WebSocket state
         process = subprocess.Popen(command, **proc_kwargs)
         
+        # Track job start time for timeout enforcement
+        job_start_time = time.time()
+        
         last_heartbeat = time.time()
         output_buffer = []
         killed = False
+        killed_by_timeout = False
         pending_messages = []
         connection_sent = False
         start_sent = False
@@ -180,6 +184,50 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
         while True:
             # Check if process has finished
             retcode = process.poll()
+            
+            # Check if timeout has been exceeded
+            if timeout is not None and not killed:
+                elapsed = time.time() - job_start_time
+                if elapsed > timeout:
+                    log(f'Job timeout exceeded ({elapsed:.1f}s > {timeout}s), terminating process')
+                    killed = True
+                    killed_by_timeout = True
+                    
+                    # Flush any buffered output before terminating
+                    if output_buffer and websocket is not None:
+                        combined_output = ''.join(line for _, line in output_buffer)
+                        output_msg = {
+                            'type': 'output',
+                            'job_name': job_name,
+                            'job_instance': job_instance,
+                            'machine': machine_id,
+                            'stream': 'stdout',
+                            'data': combined_output,
+                            'seq': next_seq,
+                            'timestamp': datetime.now(timezone.utc).isoformat()
+                        }
+                        pending_messages.append(output_msg)
+                        next_seq += 1
+                        output_buffer = []
+                    
+                    # Terminate the process
+                    if process and process.poll() is None:
+                        try:
+                            if process.stdout:
+                                process.stdout.close()
+                            if process.stderr:
+                                process.stderr.close()
+                        except:
+                            pass
+                        
+                        process.terminate()
+                        try:
+                            process.wait(timeout=10)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                            process.wait()
+                    
+                    break
             
             # Try to establish/re-establish WebSocket connection
             if websocket is None:
@@ -364,9 +412,9 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
 
                                 process.terminate()
 
-                                # Give it 5 seconds to terminate gracefully
+                                # Give it 10 seconds to terminate gracefully
                                 try:
-                                    process.wait(timeout=5)
+                                    process.wait(timeout=10)
                                 except subprocess.TimeoutExpired:
                                     process.kill()
                                     process.wait()
@@ -535,7 +583,17 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
         final_retcode = process.returncode
         if killed:
             # Add message to output about being killed
-            kill_msg = "\n[Job terminated by user request]\n"
+            if killed_by_timeout:
+                kill_msg = f"\n[Job exceeded timeout of {timeout} seconds]\n"
+                # Use 124 for timeout (same as GNU timeout command)
+                if final_retcode is None or final_retcode >= 0:
+                    final_retcode = 124
+            else:
+                kill_msg = "\n[Job terminated by user request]\n"
+                # Use 143 for SIGTERM (user kill)
+                if final_retcode is None or final_retcode >= 0:
+                    final_retcode = 143
+            
             pending_messages.append({
                 'type': 'output',
                 'job_name': job_name,
@@ -547,9 +605,6 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                 'timestamp': datetime.now(timezone.utc).isoformat()
             })
             next_seq += 1
-            # Use special return code for killed jobs
-            if final_retcode is None or final_retcode >= 0:
-                final_retcode = 143  # Standard SIGTERM exit code
         
         # Add completion message to pending queue
         log(f'Adding completion message: retcode={final_retcode}, pending_count={len(pending_messages)}')

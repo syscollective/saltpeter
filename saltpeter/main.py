@@ -227,9 +227,10 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
             print(f"[JOB:{procname}] Stop signal detected, exiting result monitoring", flush=True)
             break
         
-        # Check if timeout exceeded (from when jobs actually started, not Salt submission)
-        if time.time() - job_start_time > timeout:
-            print(f"[JOB:{procname}] Timeout waiting for results from {pending_targets}", flush=True)
+        # Check if timeout exceeded (with 30s grace period for wrapper to terminate and report)
+        elapsed = time.time() - job_start_time
+        if elapsed > timeout + 30:
+            print(f"[JOB:{procname}] Timeout + grace period exceeded for {pending_targets} ({elapsed:.1f}s > {timeout + 30}s)", flush=True)
             
             # Mark remaining targets as timed out
             now = datetime.now(timezone.utc)
