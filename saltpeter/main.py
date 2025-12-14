@@ -132,10 +132,19 @@ def handle_wrapper_failure(machine, retcode, output, name, group, procname, runn
         tmpstate = state[name].copy()
         if 'results' not in tmpstate:
             tmpstate['results'] = {}
-        if machine in tmpstate['results']:
-            tmpstate['results'][machine]['endtime'] = now
-            tmpstate['results'][machine]['retcode'] = retcode
-            tmpstate['results'][machine]['ret'] = f"Wrapper execution failed:\n{output}"
+        
+        # Always create/update entry with endtime to prevent heartbeat monitoring
+        if machine not in tmpstate['results']:
+            tmpstate['results'][machine] = {
+                'ret': '',
+                'retcode': '',
+                'starttime': now,
+                'endtime': ''
+            }
+        
+        tmpstate['results'][machine]['endtime'] = now
+        tmpstate['results'][machine]['retcode'] = retcode
+        tmpstate['results'][machine]['ret'] = f"Wrapper execution failed:\n{output}"
         state[name] = tmpstate
     
     # Log the failure
@@ -206,9 +215,9 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
     if timeout is None:
         timeout = 3600
     
-    # Heartbeat timeout should be the same as job timeout
-    # Communication is retried until the job timeout is reached
-    heartbeat_timeout = timeout
+    # Heartbeat timeout should be job timeout + grace period
+    # This allows wrapper time to terminate process and send completion
+    heartbeat_timeout = timeout + 30
     
     # Monitor WebSocket results for job completion
     # Wrappers have already been confirmed started by salt.cmd()
