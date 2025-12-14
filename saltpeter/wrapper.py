@@ -273,14 +273,19 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                                 websocket = None
                                 break
                         
-                        # Send start message if still pending
+                        # Send start message if still pending and wait for ACK
                         if websocket is not None:
                             for msg in [m for m in pending_messages if m['type'] == 'start']:
                                 try:
                                     await websocket.send(json.dumps(msg))
-                                    # Remove start from pending after sending (no ACK expected)
-                                    pending_messages = [m for m in pending_messages if m['type'] != 'start']
+                                    # Wait for start ACK
+                                    ack_msg = await asyncio.wait_for(websocket.recv(), timeout=2)
+                                    ack_data = json.loads(ack_msg)
+                                    if ack_data.get('type') == 'ack' and ack_data.get('ack_type') == 'start':
+                                        # Remove start message from pending after ACK
+                                        pending_messages = [m for m in pending_messages if m['type'] != 'start']
                                 except:
+                                    # If send/ack fails, connection is bad
                                     websocket = None
                                     break
                         
@@ -309,23 +314,27 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                         data = json.loads(message)
                         
                         if data.get('type') == 'ack':
-                            # Process acknowledgement - must be for next expected seq
+                            # Process acknowledgement
                             acked_seq = data.get('seq', -1)
-                            if acked_seq >= 0 and acked_seq == last_acked_seq + 1:
-                                last_acked_seq = acked_seq
-                                waiting_for_ack = False
-                                log(f'ACK received: seq={acked_seq}')
-                                # Remove acknowledged message from pending
-                                pending_messages = [m for m in pending_messages if m.get('seq', -1) != acked_seq]
-                                # Clear output buffer now that message is confirmed delivered
-                                output_buffer = []
-                            elif acked_seq > last_acked_seq + 1:
-                                # Server ACKed ahead of us - we missed some ACKs, sync up
-                                log(f'ACK gap detected: got {acked_seq}, expected {last_acked_seq + 1}')
-                                last_acked_seq = acked_seq
-                                waiting_for_ack = False
-                                pending_messages = [m for m in pending_messages if m.get('seq', -1) > acked_seq]
-                                output_buffer = []
+                            if acked_seq >= 0:
+                                if acked_seq > last_acked_seq:
+                                    # Update last ACKed position
+                                    log(f'ACK received: seq={acked_seq} (last was {last_acked_seq})')
+                                    last_acked_seq = acked_seq
+                                    waiting_for_ack = False
+                                    # Remove all acknowledged messages (up to and including acked_seq)
+                                    pending_messages = [m for m in pending_messages if m.get('seq', -1) > acked_seq]
+                                    # Clear output buffer if this was from recent buffer (not old pending)
+                                    output_buffer = []
+                                elif acked_seq == last_acked_seq:
+                                    # Duplicate ACK (already processed)
+                                    log(f'Duplicate ACK: seq={acked_seq}')
+                                    waiting_for_ack = False
+                                else:
+                                    # Old ACK for already-processed message
+                                    log(f'Old ACK: seq={acked_seq} (last was {last_acked_seq})')
+                                    # Still process it to clear waiting state
+                                    waiting_for_ack = False
                         
                         elif data.get('type') == 'nack':
                             # Server detected issue - log it but continue
@@ -345,39 +354,8 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                                 pending_messages = [m for m in pending_messages if m.get('seq', -1) > server_last_seq]
                                 output_buffer = []
                             
-                            # Resend any pending messages after server's position
-                            unsent = [m for m in pending_messages if m.get('type') == 'output' and m.get('seq', 0) > server_last_seq]
-                            if unsent:
-                                log(f'Resending {len(unsent)} messages after sync')
-                                for msg in unsent:
-                                    try:
-                                        await websocket.send(json.dumps(msg))
-                                    except:
-                                        websocket = None
-                                        break
-                        
-                        elif data.get('type') == 'sync_response':
-                            # Server tells us what it last received
-                            server_last_seq = data.get('last_seq', -1)
-                            log(f'Sync response: server_last={server_last_seq}, our_last_acked={last_acked_seq}')
-                            
-                            if server_last_seq >= last_acked_seq:
-                                # Server is ahead or equal, update our state
-                                last_acked_seq = server_last_seq
-                                waiting_for_ack = False
-                                # Clean up pending messages up to server's position
-                                pending_messages = [m for m in pending_messages if m.get('seq', -1) > server_last_seq]
-                            
-                            # Resend any pending messages after server's position
-                            unsent = [m for m in pending_messages if m.get('type') == 'output' and m.get('seq', 0) > server_last_seq]
-                            if unsent:
-                                log(f'Resending {len(unsent)} messages after sync')
-                                for msg in unsent:
-                                    try:
-                                        await websocket.send(json.dumps(msg))
-                                    except:
-                                        websocket = None
-                                        break
+                            # Don't resend immediately - let normal send logic handle it
+                            # This avoids flooding the connection with retries
                         
                         elif data.get('type') == 'kill':
                             killed = True
@@ -490,35 +468,30 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                         # Add all messages to pending queue
                         pending_messages.extend(output_messages)
                         
-                        # Send first message (others will be sent on reconnect if needed)
+                        # Send first message and wait for ACK before sending rest
                         try:
                             await websocket.send(json.dumps(output_messages[0]))
                             waiting_for_ack = True
                             last_send_time = current_time
                             last_output_send_time = current_time
-                            # Don't clear output_buffer until ACKed!
+                            # Don't clear output_buffer until first chunk ACKed!
                         except:
                             # Connection lost, mark for reconnect
                             websocket = None
                             waiting_for_ack = False
                     
-                    # If waiting for ACK too long, request sync from server
-                    if waiting_for_ack and websocket is not None:
-                        time_waiting = current_time - last_send_time
-                        if time_waiting >= 1.0 and (current_time - last_sync_request_time) >= 1.0:
-                            log(f'Waiting for ACK {time_waiting:.1f}s, requesting sync')
-                            sync_request = {
-                                'type': 'sync_request',
-                                'job_name': job_name,
-                                'job_instance': job_instance,
-                                'machine': machine_id,
-                                'last_acked_seq': last_acked_seq,
-                                'next_seq': next_seq,
-                                'timestamp': datetime.now(timezone.utc).isoformat()
-                            }
+                    # Send any pending output messages (from multi-chunk or reconnect)
+                    # Only send if not waiting for ACK (send one at a time)
+                    if not waiting_for_ack and websocket is not None:
+                        unsent = [m for m in pending_messages if m.get('type') == 'output' and m.get('seq', 0) > last_acked_seq]
+                        if unsent:
+                            # Send next unsent message in sequence
+                            next_msg = unsent[0]
                             try:
-                                await websocket.send(json.dumps(sync_request))
-                                last_sync_request_time = current_time
+                                await websocket.send(json.dumps(next_msg))
+                                waiting_for_ack = True
+                                last_send_time = current_time
+                                log(f'Sent pending output seq={next_msg.get("seq")}')
                             except:
                                 websocket = None
                                 waiting_for_ack = False
@@ -618,6 +591,9 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
             'timestamp': datetime.now(timezone.utc).isoformat()
         })
         
+        # All messages in pending should now have proper ACK handling
+        # (connect, start, output, complete all get ACK'd by server)
+        
         # Retry sending completion and pending messages until successful with ACK
         max_completion_retries = 30  # Try for 60 seconds
         log(f'Starting completion retry loop with {len(pending_messages)} pending messages')
@@ -641,26 +617,62 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                         log(f'Connection failed: {type(e).__name__}: {e}')
                         raise
                 
-                # Send all pending messages including completion and wait for ACKs
+                # Send all pending messages first (pipeline them)
                 log(f'Sending {len(pending_messages)} pending messages')
-                acked_indices = []  # Track which messages were successfully ACKed
                 for idx, msg in enumerate(pending_messages):
                     await websocket.send(json.dumps(msg))
                     log(f'Sent {msg["type"]} seq={msg.get("seq", "none")}')
-                    # Wait for ACK for each message
-                    try:
-                        ack_msg = await asyncio.wait_for(websocket.recv(), timeout=5)  # Increased from 2s
+                
+                # Now wait for ACKs for all messages (with longer timeout for batch)
+                # Build expected ACK set
+                expected_acks = set()
+                for msg in pending_messages:
+                    if msg['type'] in ['connect', 'start', 'complete']:
+                        expected_acks.add(('type', msg['type']))
+                    elif msg['type'] == 'output':
+                        expected_acks.add(('seq', msg.get('seq')))
+                
+                received_acks = set()
+                ack_timeout = 5  # 5 seconds for batch ACKs
+                start_time = time.time()
+                
+                try:
+                    while received_acks != expected_acks:
+                        elapsed = time.time() - start_time
+                        remaining = ack_timeout - elapsed
+                        if remaining <= 0:
+                            log(f'ACK timeout: received {len(received_acks)}/{len(expected_acks)} ACKs')
+                            raise Exception('ACK timeout')
+                        
+                        ack_msg = await asyncio.wait_for(websocket.recv(), timeout=remaining)
                         ack_data = json.loads(ack_msg)
+                        
                         if ack_data.get('type') == 'nack':
-                            # Server wants resend, will retry entire batch
                             log(f'NACK received during completion')
                             raise Exception('NACK received')
-                        log(f'ACK received for {msg["type"]}')
-                        acked_indices.append(idx)
-                    except asyncio.TimeoutError:
-                        # No ACK, will retry
-                        log(f'ACK timeout for {msg["type"]}')
-                        raise Exception('ACK timeout')
+                        
+                        if ack_data.get('type') == 'ack':
+                            ack_type = ack_data.get('ack_type')
+                            ack_seq = ack_data.get('seq')
+                            
+                            if ack_type in ['connect', 'start', 'complete']:
+                                ack_key = ('type', ack_type)
+                                if ack_key in expected_acks:
+                                    received_acks.add(ack_key)
+                                    log(f'ACK received for {ack_type}')
+                            elif ack_seq is not None:
+                                ack_key = ('seq', ack_seq)
+                                if ack_key in expected_acks:
+                                    received_acks.add(ack_key)
+                                    log(f'ACK received for output seq={ack_seq}')
+                
+                    # All ACKs received - mark all messages as ACKed
+                    log(f'All ACKs received ({len(received_acks)}/{len(expected_acks)})')
+                    acked_indices = list(range(len(pending_messages)))
+                    
+                except asyncio.TimeoutError:
+                    log(f'ACK timeout waiting for responses')
+                    raise Exception('ACK timeout')
                 
                 # Success - all messages ACKed, exit retry loop
                 log(f'All completion messages ACKed successfully')

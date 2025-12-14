@@ -109,6 +109,13 @@ class WebSocketJobServer:
                         
                         print(f"[MACHINES WS] Job started - {client_id} (PID: {data.get('pid')}, Version: {data.get('version', 'unknown')})", flush=True)
                         
+                        # Send acknowledgement for start message
+                        await websocket.send(json.dumps({
+                            'type': 'ack',
+                            'ack_type': 'start',
+                            'timestamp': datetime.now(timezone.utc).isoformat()
+                        }))
+                        
                     elif msg_type == 'heartbeat':
                         if client_id in self.connections:
                             self.connections[client_id]['last_seen'] = timestamp
