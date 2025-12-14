@@ -6,6 +6,7 @@ Replaces the Tornado-based implementation with asyncio/aiohttp
 
 import asyncio
 import json
+import copy
 from datetime import datetime
 from aiohttp import web
 from .version import __version__
@@ -182,7 +183,7 @@ class UIEndpoint:
             
             for cron in self.config['crons']:
                 if cron in subscriptions:
-                    srcron = self.state[cron].copy()
+                    srcron = copy.deepcopy(self.state[cron])
                     if 'next_run' in srcron:
                         srcron['next_run'] = srcron['next_run'].isoformat()
                     if 'last_run' in srcron:

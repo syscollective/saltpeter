@@ -7,6 +7,7 @@ import asyncio
 import websockets
 import json
 import time
+import copy
 from datetime import datetime, timezone
 import multiprocessing
 
@@ -94,7 +95,7 @@ class WebSocketJobServer:
                         # Update state
                         if job_name in self.state and self.statelocks and job_name in self.statelocks:
                             with self.statelocks[job_name]:
-                                tmpstate = self.state[job_name].copy()
+                                tmpstate = copy.deepcopy(self.state[job_name])
                                 if 'results' not in tmpstate:
                                     tmpstate['results'] = {}
                                 if machine not in tmpstate['results']:
@@ -115,7 +116,7 @@ class WebSocketJobServer:
                         # Update state with last heartbeat time so monitoring can detect timeouts
                         if job_name in self.state and self.statelocks and job_name in self.statelocks:
                             with self.statelocks[job_name]:
-                                tmpstate = self.state[job_name].copy()
+                                tmpstate = copy.deepcopy(self.state[job_name])
                                 if 'results' not in tmpstate:
                                     tmpstate['results'] = {}
                                 if machine not in tmpstate['results']:
@@ -201,7 +202,7 @@ class WebSocketJobServer:
                         if job_name in self.state:
                             if self.statelocks and job_name in self.statelocks:
                                 with self.statelocks[job_name]:
-                                    tmpstate = self.state[job_name].copy()
+                                    tmpstate = copy.deepcopy(self.state[job_name])
                                     if 'results' not in tmpstate:
                                         tmpstate['results'] = {}
                                     if machine not in tmpstate['results']:
@@ -239,6 +240,7 @@ class WebSocketJobServer:
                         seq = data.get('seq', None)
                         
                         print(f"[MACHINES WS] Received complete message from {client_id}, retcode={retcode}, seq={seq}", flush=True)
+                        print(f"[MACHINES WS] Complete validation: job_instance={job_instance} in running={job_instance in self.running}, job_name={job_name} in state={job_name in self.state}", flush=True)
                         
                         # Send acknowledgement
                         ack_msg = {
@@ -253,7 +255,7 @@ class WebSocketJobServer:
                         
                         # Validate that this job instance is actually running
                         if job_instance not in self.running:
-                            print(f"[MACHINES WS] WARNING - Received completion for unknown job instance {job_instance}", flush=True)
+                            print(f"[MACHINES WS] WARNING - Received completion for unknown job instance {job_instance} (running keys: {list(self.running.keys())})", flush=True)
                             # Clean up connection anyway
                             if client_id in self.connections:
                                 del self.connections[client_id]
@@ -275,9 +277,12 @@ class WebSocketJobServer:
                                 group = self.state[job_name].get('group', 'unknown')
                         
                         # Update state with final result
+                        print(f"[MACHINES WS] State update check: job_name={job_name}, in_state={job_name in self.state}, has_statelocks={self.statelocks is not None}, in_statelocks={job_name in self.statelocks if self.statelocks else False}", flush=True)
                         if job_name in self.state and self.statelocks and job_name in self.statelocks:
+                            print(f"[MACHINES WS] Acquiring lock for {job_name} to update state", flush=True)
                             with self.statelocks[job_name]:
-                                tmpstate = self.state[job_name].copy()
+                                # Deep copy to avoid race conditions with nested dicts
+                                tmpstate = copy.deepcopy(self.state[job_name])
                                 if 'results' not in tmpstate:
                                     tmpstate['results'] = {}
                                 
@@ -334,7 +339,7 @@ class WebSocketJobServer:
                         # Update state with error - processresults_websocket will log it
                         if job_name in self.state and self.statelocks and job_name in self.statelocks:
                             with self.statelocks[job_name]:
-                                tmpstate = self.state[job_name].copy()
+                                tmpstate = copy.deepcopy(self.state[job_name])
                                 if 'results' not in tmpstate:
                                     tmpstate['results'] = {}
                                 
@@ -472,7 +477,7 @@ class WebSocketJobServer:
                         # Forcefully mark machine as killed
                         if job_name in self.state and self.statelocks and job_name in self.statelocks:
                             with self.statelocks[job_name]:
-                                tmpstate = self.state[job_name].copy()
+                                tmpstate = copy.deepcopy(self.state[job_name])
                                 if 'results' in tmpstate and machine_name in tmpstate['results']:
                                     result = tmpstate['results'][machine_name]
                                     if not result.get('endtime') or result.get('endtime') == '':

@@ -8,6 +8,7 @@ import argparse
 import re
 import yaml
 import time
+import copy
 import traceback
 from sys import exit
 from datetime import datetime,timedelta,date,timezone
@@ -109,11 +110,11 @@ def processstart(chunk,name,group,procname,state):
         #do this crap to propagate changes; this is somewhat acceptable since this object is not modified anywhere else
         with statelocks[name]:
             if 'results' in state[name]:
-                tmpresults = state[name]['results'].copy()
+                tmpresults = copy.deepcopy(state[name]['results'])
             else:
                 tmpresults = {}
             tmpresults[target] = result
-            tmpstate = state[name].copy()
+            tmpstate = copy.deepcopy(state[name])
             tmpstate['results'] = tmpresults
             state[name] = tmpstate
 
@@ -129,7 +130,7 @@ def handle_wrapper_failure(machine, retcode, output, name, group, procname, runn
     
     # Update state with failure
     with statelocks[name]:
-        tmpstate = state[name].copy()
+        tmpstate = copy.deepcopy(state[name])
         if 'results' not in tmpstate:
             tmpstate['results'] = {}
         
@@ -244,7 +245,7 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
             # Mark remaining targets as timed out
             now = datetime.now(timezone.utc)
             with statelocks[name]:
-                tmpstate = state[name].copy()
+                tmpstate = copy.deepcopy(state[name])
                 if 'results' not in tmpstate:
                     tmpstate['results'] = {}
                 
@@ -338,7 +339,7 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                                 print(f"[JOB:{procname}] Heartbeat timeout for {tgt} ({time_since_heartbeat:.1f}s since last activity)", flush=True)
                                 
                                 # Mark as failed with heartbeat timeout
-                                tmpstate = state[name].copy()
+                                tmpstate = copy.deepcopy(state[name])
                                 starttime = result.get('starttime', now)
                                 output = result.get('ret', '')
                                 output += f"\n[SALTPETER ERROR: Job lost connection - no heartbeat for {time_since_heartbeat:.0f} seconds]\n"
@@ -412,7 +413,7 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
                 o = i[m]['ret']
             result = { 'ret': o, 'retcode': r, 'starttime': state[name]['results'][m]['starttime'], 'endtime': datetime.now(timezone.utc) }
             with statelocks[name]:
-                tmpstate = state[name].copy()
+                tmpstate = copy.deepcopy(state[name])
                 if 'results' not in tmpstate:
                     tmpstate['results'] = {}
                 tmpstate['results'][m] = result
@@ -450,7 +451,7 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
                     result = { 'ret': o, 'retcode': r, 'starttime': state[name]['results'][m]['starttime'], 'endtime': datetime.now(timezone.utc) }
                     send_log = False
                     with statelocks[name]:
-                        tmpstate = state[name].copy()
+                        tmpstate = copy.deepcopy(state[name])
                         if 'results' not in tmpstate:
                             tmpstate['results'] = {}
 
@@ -489,7 +490,7 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
                 code=255, out="Target did not return anything", time=now)
 
             with statelocks[name]:
-                tmpstate = state[name].copy()
+                tmpstate = copy.deepcopy(state[name])
                 tmpstate['results'][tgt] = { 'ret': "Target did not return anything",
                         'retcode': 255,
                         'starttime': starttime,
@@ -514,7 +515,7 @@ def run(name, data, procname, running, state, commands, maintenance):
             log(what='overlap', cron=name, group=data['group'], instance=instance,
                  time=datetime.now(timezone.utc))
             with statelocks[name]:
-                tmpstate = state[name].copy()
+                tmpstate = copy.deepcopy(state[name])
                 tmpstate['overlap'] = True
                 state[name] = tmpstate
             if 'allow_overlap' not in data or data['allow_overlap'] != 'i know what i am doing!':
@@ -522,7 +523,7 @@ def run(name, data, procname, running, state, commands, maintenance):
 
     # Clear results from previous run at the start
     with statelocks[name]:
-        tmpstate = state[name].copy()
+        tmpstate = copy.deepcopy(state[name])
         tmpstate['results'] = {}
         state[name] = tmpstate
 
@@ -588,7 +589,7 @@ def run(name, data, procname, running, state, commands, maintenance):
     now = datetime.now(timezone.utc)
     running[procname] = {'started': now, 'name': name, 'machines': []}
     with statelocks[name]:
-        tmpstate = state[name].copy()
+        tmpstate = copy.deepcopy(state[name])
         tmpstate['last_run'] = now
         tmpstate['overlap'] = False
         tmpstate['group'] = data['group']  # Store group for WebSocket handler
@@ -679,7 +680,7 @@ def run(name, data, procname, running, state, commands, maintenance):
                             # Mark machines as killed
                             now = datetime.now(timezone.utc)
                             with statelocks[name]:
-                                tmpstate = state[name].copy()
+                                tmpstate = copy.deepcopy(state[name])
                                 if 'results' not in tmpstate:
                                     tmpstate['results'] = {}
                                 for machine in chunk:
@@ -736,7 +737,7 @@ def run(name, data, procname, running, state, commands, maintenance):
                 # Mark all machines as killed
                 now = datetime.now(timezone.utc)
                 with statelocks[name]:
-                    tmpstate = state[name].copy()
+                    tmpstate = copy.deepcopy(state[name])
                     if 'results' not in tmpstate:
                         tmpstate['results'] = {}
                     for machine in targets_up:
@@ -782,7 +783,7 @@ def run(name, data, procname, running, state, commands, maintenance):
     # Evaluate job success ONCE - single source of truth
     # Count failures from results
     with statelocks[name]:
-        tmpstate = state[name].copy()
+        tmpstate = copy.deepcopy(state[name])
         results = tmpstate.get('results', {})
         
         print(f"[SUCCESS EVAL DEBUG] Job {procname}: results keys = {list(results.keys())}", flush=True)
@@ -1086,7 +1087,7 @@ def main():
                     statelocks[name] = manager.Lock()
                 nextrun = prev + timedelta(seconds=result['nextrun'])
                 with statelocks[name]:
-                    tmpstate = state[name].copy()
+                    tmpstate = copy.deepcopy(state[name])
                     tmpstate['next_run'] = nextrun
                     state[name] = tmpstate
                 #check if there are any start commands
