@@ -231,11 +231,21 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
     for tgt in targets:
         last_heartbeat[tgt] = time.time()
     
+    # Track when kill was initiated
+    kill_initiated_time = None
+    
     while pending_targets:
         # Check if stop_signal was set (job killed)
         if procname in running and running[procname].get('stop_signal', False):
-            print(f"[JOB:{procname}] Stop signal detected, exiting result monitoring", flush=True)
-            break
+            if kill_initiated_time is None:
+                kill_initiated_time = time.time()
+                print(f"[JOB:{procname}] Stop signal detected, waiting for machines to complete (30s grace period)", flush=True)
+            
+            # Wait up to 30 seconds for machines to complete after kill
+            kill_elapsed = time.time() - kill_initiated_time
+            if kill_elapsed > 30:
+                print(f"[JOB:{procname}] Kill grace period expired, exiting result monitoring", flush=True)
+                break
         
         # Check if timeout exceeded (with 30s grace period for wrapper to terminate and report)
         elapsed = time.time() - job_start_time
@@ -1087,7 +1097,7 @@ def main():
                     statelocks[name] = manager.Lock()
                 nextrun = prev + timedelta(seconds=result['nextrun'])
                 with statelocks[name]:
-                    tmpstate = copy.deepcopy(state[name])
+                    tmpstate = copy.deepcopy(state[name]t )
                     tmpstate['next_run'] = nextrun
                     state[name] = tmpstate
                 #check if there are any start commands
