@@ -407,10 +407,12 @@ class WebSocketJobServer:
                                 if conn_info['job_name'] == job_name:
                                     machines_to_kill.add(conn_info['machine'])
                             
-                            # Get machines from state (includes those that haven't connected yet)
+                            # Get machines from state that are still running (no endtime)
                             if job_name in self.state and 'results' in self.state[job_name]:
-                                for machine in self.state[job_name]['results'].keys():
-                                    machines_to_kill.add(machine)
+                                for machine, result in self.state[job_name]['results'].items():
+                                    # Only kill if not yet completed
+                                    if not result.get('endtime') or result.get('endtime') == '':
+                                        machines_to_kill.add(machine)
                             
                             # Create killmachine command for each machine
                             for machine in machines_to_kill:
@@ -463,6 +465,7 @@ class WebSocketJobServer:
                     
                     # Keep retrying to send kill until grace period ends
                     if time_elapsed < 30:
+                        kill_sent = False
                         for client_id, conn_info in list(self.connections.items()):
                             if conn_info['job_name'] == job_name and conn_info['machine'] == machine_name:
                                 try:
@@ -473,9 +476,17 @@ class WebSocketJobServer:
                                         'machine': machine_name,
                                         'timestamp': datetime.now(timezone.utc).isoformat()
                                     }))
-                                except:
-                                    pass  # Ignore send errors, will retry next cycle
+                                    kill_sent = True
+                                    # Only log every few seconds to avoid spam
+                                    if int(time_elapsed) % 5 == 0:
+                                        print(f"[MACHINES WS] Kill message sent to {client_id} (elapsed: {time_elapsed:.1f}s)", flush=True)
+                                except Exception as e:
+                                    if int(time_elapsed) % 5 == 0:
+                                        print(f"[MACHINES WS] Failed to send kill to {client_id}: {e}", flush=True)
                                 break
+                        
+                        if not kill_sent and int(time_elapsed) % 5 == 0:
+                            print(f"[MACHINES WS] No active connection found for {job_name}:{machine_name} (elapsed: {time_elapsed:.1f}s)", flush=True)
                     
                     # Grace period expired
                     elif time_elapsed >= 30:
