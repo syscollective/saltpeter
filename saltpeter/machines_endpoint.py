@@ -7,12 +7,11 @@ import asyncio
 import websockets
 import json
 import time
-import copy
 from datetime import datetime, timezone
 import multiprocessing
 
 class WebSocketJobServer:
-    def __init__(self, host='0.0.0.0', port=8889, state=None, running=None, statelocks=None, log_func=None, commands=None):
+    def __init__(self, host='0.0.0.0', port=8889, state=None, running=None, statelocks=None, log_func=None, commands=None, state_update_queues=None):
         self.host = host
         self.port = port
         self.state = state
@@ -20,9 +19,18 @@ class WebSocketJobServer:
         self.statelocks = statelocks
         self.log_func = log_func
         self.commands = commands  # Shared command queue from main
+        self.state_update_queues = state_update_queues  # job_instance → Queue for state updates
         self.connections = {}  # Track active connections by job_instance + machine
         self.command_check_task = None  # Background task for checking kill commands
         self.kill_machine_timeouts = {}  # Track machine kills with grace period: {(job_name, machine): timestamp}
+    
+    def send_state_update(self, job_instance, update_msg):
+        """Send state update to job process via queue (non-blocking)"""
+        if self.state_update_queues and job_instance in self.state_update_queues:
+            try:
+                self.state_update_queues[job_instance].put_nowait(update_msg)
+            except Exception as e:
+                print(f"[MACHINES WS][{job_instance}] Failed to queue state update: {e}", flush=True)
     
     async def handle_client(self, websocket):
         """
@@ -92,20 +100,13 @@ class WebSocketJobServer:
                             print(f"[MACHINES WS][{job_instance}][{machine}] WARNING - Not in expected machines list", flush=True)
                             continue
                             
-                        # Update state
-                        if job_name in self.state and self.statelocks and job_name in self.statelocks:
-                            with self.statelocks[job_name]:
-                                job_state = self.state[job_name]
-                                if 'results' not in job_state:
-                                    job_state['results'] = {}
-                                if machine not in job_state['results']:
-                                    job_state['results'][machine] = {}
-                                job_state['results'][machine]['starttime'] = timestamp
-                                job_state['results'][machine]['ret'] = ''
-                                job_state['results'][machine]['retcode'] = ''
-                                job_state['results'][machine]['endtime'] = ''
-                                job_state['results'][machine]['wrapper_version'] = data.get('version', 'unknown')
-                                self.state[job_name] = job_state
+                        # Send state update to job process via queue
+                        self.send_state_update(job_instance, {
+                            'type': 'start',
+                            'machine': machine,
+                            'timestamp': timestamp,
+                            'wrapper_version': data.get('version', 'unknown')
+                        })
                         
                         print(f"[MACHINES WS][{job_instance}][{machine}] Started (PID: {data.get('pid')}, Version: {data.get('version', 'unknown')})", flush=True)
                         
@@ -120,16 +121,12 @@ class WebSocketJobServer:
                         if client_id in self.connections:
                             self.connections[client_id]['last_seen'] = timestamp
                         
-                        # Update state with last heartbeat time so monitoring can detect timeouts
-                        if job_name in self.state and self.statelocks and job_name in self.statelocks:
-                            with self.statelocks[job_name]:
-                                job_state = self.state[job_name]
-                                if 'results' not in job_state:
-                                    job_state['results'] = {}
-                                if machine not in job_state['results']:
-                                    job_state['results'][machine] = {}
-                                job_state['results'][machine]['last_heartbeat'] = timestamp
-                                self.state[job_name] = job_state
+                        # Send state update to job process via queue
+                        self.send_state_update(job_instance, {
+                            'type': 'heartbeat',
+                            'machine': machine,
+                            'timestamp': timestamp
+                        })
                         
                         print(f"[MACHINES WS][{job_instance}][{machine}] Heartbeat at {timestamp}", flush=True)
                         
@@ -195,7 +192,7 @@ class WebSocketJobServer:
                             except Exception as e:
                                 print(f"[MACHINES WS][{job_instance}][{machine}] Failed to send output ACK: {e}", flush=True)
                         
-                        # Update state with accumulated output
+                        # Send output to job process via queue
                         # Validate job_instance is in running dict (started by main.py)
                         if job_instance not in self.running:
                             print(f"[MACHINES WS][{job_instance}][{machine}] WARNING - Unknown job instance for output", flush=True)
@@ -206,22 +203,14 @@ class WebSocketJobServer:
                             print(f"[MACHINES WS][{job_instance}][{machine}] WARNING - Not in expected machines list for output", flush=True)
                             continue
                         
-                        if job_name in self.state:
-                            if self.statelocks and job_name in self.statelocks:
-                                with self.statelocks[job_name]:
-                                    job_state = self.state[job_name]
-                                    if 'results' not in job_state:
-                                        job_state['results'] = {}
-                                    if machine not in job_state['results']:
-                                        job_state['results'][machine] = {'ret': '', 'retcode': '', 'starttime': timestamp, 'endtime': ''}
-                                    
-                                    # Append output to existing output
-                                    current_output = job_state['results'][machine].get('ret', '')
-                                    job_state['results'][machine]['ret'] = current_output + output_data
-                                    # Store last sequence for recovery
-                                    if seq is not None:
-                                        job_state['results'][machine]['last_output_seq'] = seq
-                                    self.state[job_name] = job_state
+                        # Send state update to job process via queue
+                        self.send_state_update(job_instance, {
+                            'type': 'output',
+                            'machine': machine,
+                            'data': output_data,
+                            'seq': seq,
+                            'timestamp': timestamp
+                        })
                     
                     elif msg_type == 'sync_request':
                         # Client requests sync - tell them what we last received
@@ -254,60 +243,31 @@ class WebSocketJobServer:
                         if job_instance not in self.running:
                             print(f"[MACHINES WS][{job_instance}][{machine}] NOTE - Job instance not in running dict (may have timed out), but recording completion anyway", flush=True)
                         
-                        # Get group info from running dict or state
-                        group = 'unknown'
-                        if job_instance in self.running:
-                            # Try to get group from state
-                            if job_name in self.state:
-                                group = self.state[job_name].get('group', 'unknown')
-                        elif job_name in self.state:
-                            # Job not in running, but get group from state
-                            group = self.state[job_name].get('group', 'unknown')
+                        # Send completion to job process via queue
+                        self.send_state_update(job_instance, {
+                            'type': 'complete',
+                            'machine': machine,
+                            'retcode': retcode,
+                            'timestamp': timestamp,
+                            'seq': seq
+                        })
                         
-                        # Update state with final result
-                        print(f"[MACHINES WS][{job_instance}][{machine}] State checks: in_state={job_name in self.state}, has_locks={self.statelocks is not None and job_name in self.statelocks}", flush=True)
-                        if job_name in self.state and self.statelocks and job_name in self.statelocks:
-                            print(f"[MACHINES WS][{job_instance}][{machine}] Acquiring state lock", flush=True)
-                            with self.statelocks[job_name]:
-                                # Optimized: Only modify the specific machine's result, not copy entire job state
-                                # This avoids expensive deepcopy of all machines' accumulated output
-                                job_state = self.state[job_name]
-                                
-                                # Ensure results dict exists
-                                if 'results' not in job_state:
-                                    job_state['results'] = {}
-                                
-                                # Get existing data if we have it (output was accumulated during 'output' messages)
-                                starttime = timestamp
-                                output = ''
-                                wrapper_version = None
-                                last_heartbeat = None
-                                if machine in job_state['results']:
-                                    starttime = job_state['results'][machine].get('starttime', timestamp)
-                                    output = job_state['results'][machine].get('ret', '')
-                                    wrapper_version = job_state['results'][machine].get('wrapper_version')
-                                    last_heartbeat = job_state['results'][machine].get('last_heartbeat')
-                                
-                                print(f"[MACHINES WS][{job_instance}][{machine}] Setting endtime={timestamp}", flush=True)
-                                # Update with final status, preserving wrapper_version and last_heartbeat
-                                job_state['results'][machine] = {
-                                    'ret': output,
-                                    'retcode': retcode,
-                                    'starttime': starttime,
-                                    'endtime': timestamp
-                                }
-                                if wrapper_version:
-                                    job_state['results'][machine]['wrapper_version'] = wrapper_version
-                                if last_heartbeat:
-                                    job_state['results'][machine]['last_heartbeat'] = last_heartbeat
-                                
-                                # Trigger Manager dict update by reassigning
-                                self.state[job_name] = job_state
-                                print(f"[MACHINES WS][{job_instance}][{machine}] State updated: endtime={timestamp}, retcode={retcode}", flush=True)
-                        else:
-                            print(f"[MACHINES WS][{job_instance}][{machine}] WARNING - Cannot update state (checks failed)", flush=True)
+                        # Wait briefly for job process to update state, then verify before ACK
+                        state_updated = False
+                        for attempt in range(10):  # Try for up to 500ms
+                            await asyncio.sleep(0.05)  # 50ms
+                            # Check if state was updated
+                            if job_name in self.state and 'results' in self.state[job_name]:
+                                result = self.state[job_name]['results'].get(machine, {})
+                                if result.get('endtime') and result.get('endtime') != '':
+                                    state_updated = True
+                                    print(f"[MACHINES WS][{job_instance}][{machine}] State update confirmed after {(attempt+1)*50}ms", flush=True)
+                                    break
                         
-                        # Send acknowledgement AFTER state is updated - wrapper can close immediately after receiving ACK
+                        if not state_updated:
+                            print(f"[MACHINES WS][{job_instance}][{machine}] WARNING - State not updated after 500ms, sending ACK anyway", flush=True)
+                        
+                        # Send acknowledgement after verifying state update
                         ack_msg = {
                             'type': 'ack',
                             'ack_type': 'complete',
@@ -337,20 +297,13 @@ class WebSocketJobServer:
                         error_msg = data.get('error', 'Unknown error')
                         print(f"[MACHINES WS][{job_instance}][{machine}] Error: {error_msg}", flush=True)
                         
-                        # Update state with error - processresults_websocket will log it
-                        if job_name in self.state and self.statelocks and job_name in self.statelocks:
-                            with self.statelocks[job_name]:
-                                job_state = self.state[job_name]
-                                if 'results' not in job_state:
-                                    job_state['results'] = {}
-                                
-                                job_state['results'][machine] = {
-                                    'ret': f"Wrapper error: {error_msg}",
-                                    'retcode': 255,
-                                    'starttime': timestamp,
-                                    'endtime': timestamp
-                                }
-                                self.state[job_name] = job_state
+                        # Send error to job process via queue
+                        self.send_state_update(job_instance, {
+                            'type': 'error',
+                            'machine': machine,
+                            'error': error_msg,
+                            'timestamp': timestamp
+                        })
                         
                         # Clean up connection
                         if client_id in self.connections:
@@ -428,24 +381,32 @@ class WebSocketJobServer:
                                     self.running[proc_name] = tmprunning
                             
                             # Convert to individual killmachine commands for all machines in the job
-                            machines_to_kill = set()
+                            machines_to_kill = {}  # machine -> job_instance mapping
                             
                             # Get machines from active connections
                             for client_id, conn_info in list(self.connections.items()):
                                 if conn_info['job_name'] == job_name:
-                                    machines_to_kill.add(conn_info['machine'])
+                                    machines_to_kill[conn_info['machine']] = conn_info['job_instance']
                             
                             # Get machines from state that are still running (no endtime)
                             if job_name in self.state and 'results' in self.state[job_name]:
                                 for machine, result in self.state[job_name]['results'].items():
                                     # Only kill if not yet completed
                                     if not result.get('endtime') or result.get('endtime') == '':
-                                        machines_to_kill.add(machine)
+                                        # Try to get job_instance from connections, or use job_name as fallback
+                                        if machine not in machines_to_kill:
+                                            job_inst = None
+                                            for client_id, conn_info in self.connections.items():
+                                                if conn_info['job_name'] == job_name and conn_info['machine'] == machine:
+                                                    job_inst = conn_info['job_instance']
+                                                    break
+                                            if job_inst:
+                                                machines_to_kill[machine] = job_inst
                             
                             # Create killmachine command for each machine
-                            for machine in machines_to_kill:
+                            for machine, job_inst in machines_to_kill.items():
                                 self.commands.append({
-                                    'killmachine': {'cron': job_name, 'machine': machine}
+                                    'killmachine': {'job_instance': job_inst, 'machine': machine, 'cron': job_name}
                                 })
                             
                             print(f"[MACHINES WS] Created {len(machines_to_kill)} killmachine commands for job {job_name}", flush=True)
@@ -455,27 +416,33 @@ class WebSocketJobServer:
                         
                         elif 'killmachine' in cmd:
                             kill_info = cmd['killmachine']
-                            job_name = kill_info.get('cron')
+                            job_instance = kill_info.get('job_instance')
                             machine_name = kill_info.get('machine')
+                            job_name = kill_info.get('cron')
                             
-                            if not job_name or not machine_name:
-                                print(f"[MACHINES WS] Invalid killmachine command - missing cron or machine: {kill_info}", flush=True)
+                            if not job_instance or not machine_name:
+                                print(f"[MACHINES WS] Invalid killmachine command - missing job_instance or machine: {kill_info}", flush=True)
                                 self.commands.remove(cmd)
                                 continue
                             
                             # Track kill time for retry and grace period (only if not already tracked)
-                            if (job_name, machine_name) not in self.kill_machine_timeouts:
-                                self.kill_machine_timeouts[(job_name, machine_name)] = time.time()
-                                print(f"[MACHINES WS] Kill command received for {job_name} on {machine_name}", flush=True)
+                            if (job_instance, machine_name) not in self.kill_machine_timeouts:
+                                self.kill_machine_timeouts[(job_instance, machine_name)] = {
+                                    'start_time': time.time(),
+                                    'job_name': job_name
+                                }
+                                print(f"[{job_instance}][{machine_name}] Kill command received", flush=True)
                 
                 # Unified retry logic for all machine kills
                 current_time = time.time()
-                for (job_name, machine_name), kill_time in list(self.kill_machine_timeouts.items()):
-                    time_elapsed = current_time - kill_time
+                for (job_instance, machine_name), kill_info in list(self.kill_machine_timeouts.items()):
+                    start_time = kill_info['start_time']
+                    job_name = kill_info.get('job_name')
+                    time_elapsed = current_time - start_time
                     
                     # Check if machine has completed
                     machine_completed = False
-                    if job_name in self.state and 'results' in self.state[job_name]:
+                    if job_name and job_name in self.state and 'results' in self.state[job_name]:
                         result = self.state[job_name]['results'].get(machine_name, {})
                         if result.get('endtime') and result.get('endtime') != '':
                             machine_completed = True
@@ -485,63 +452,60 @@ class WebSocketJobServer:
                         for cmd in list(self.commands):
                             if 'killmachine' in cmd:
                                 kill_info = cmd['killmachine']
-                                if kill_info.get('cron') == job_name and kill_info.get('machine') == machine_name:
+                                if kill_info.get('job_instance') == job_instance and kill_info.get('machine') == machine_name:
                                     self.commands.remove(cmd)
                                     break
-                        del self.kill_machine_timeouts[(job_name, machine_name)]
+                        del self.kill_machine_timeouts[(job_instance, machine_name)]
                         continue
                     
                     # Keep retrying to send kill until grace period ends
                     if time_elapsed < 30:
                         kill_sent = False
-                        for client_id, conn_info in list(self.connections.items()):
-                            if conn_info['job_name'] == job_name and conn_info['machine'] == machine_name:
-                                try:
-                                    await conn_info['websocket'].send(json.dumps({
-                                        'type': 'kill',
-                                        'job_name': job_name,
-                                        'job_instance': conn_info['job_instance'],
-                                        'machine': machine_name,
-                                        'timestamp': datetime.now(timezone.utc).isoformat()
-                                    }))
-                                    kill_sent = True
-                                    # Only log every few seconds to avoid spam
-                                    if int(time_elapsed) % 5 == 0:
-                                        print(f"[MACHINES WS] Kill message sent to {client_id} (elapsed: {time_elapsed:.1f}s)", flush=True)
-                                except Exception as e:
-                                    if int(time_elapsed) % 5 == 0:
-                                        print(f"[MACHINES WS] Failed to send kill to {client_id}: {e}", flush=True)
-                                break
+                        client_id = f"{job_instance}:{machine_name}"
+                        
+                        if client_id in self.connections:
+                            conn_info = self.connections[client_id]
+                            try:
+                                await conn_info['websocket'].send(json.dumps({
+                                    'type': 'kill',
+                                    'job_name': job_name,
+                                    'job_instance': job_instance,
+                                    'machine': machine_name,
+                                    'timestamp': datetime.now(timezone.utc).isoformat()
+                                }))
+                                kill_sent = True
+                                # Only log every few seconds to avoid spam
+                                if int(time_elapsed) % 5 == 0:
+                                    print(f"[{job_instance}][{machine_name}] Kill message sent (elapsed: {time_elapsed:.1f}s)", flush=True)
+                            except Exception as e:
+                                if int(time_elapsed) % 5 == 0:
+                                    print(f"[{job_instance}][{machine_name}] Failed to send kill: {e}", flush=True)
                         
                         if not kill_sent and int(time_elapsed) % 5 == 0:
-                            print(f"[MACHINES WS] No active connection found for {job_name}:{machine_name} (elapsed: {time_elapsed:.1f}s)", flush=True)
+                            print(f"[{job_instance}][{machine_name}] No active connection found (elapsed: {time_elapsed:.1f}s)", flush=True)
                     
                     # Grace period expired
                     elif time_elapsed >= 30:
-                        print(f"[MACHINES WS] Kill grace period expired for {job_name} on {machine_name}, forcefully completing", flush=True)
+                        print(f"[{job_instance}][{machine_name}] Kill grace period expired, forcefully completing", flush=True)
                         
-                        # Forcefully mark machine as killed
-                        if job_name in self.state and self.statelocks and job_name in self.statelocks:
-                            with self.statelocks[job_name]:
-                                job_state = self.state[job_name]
-                                if 'results' in job_state and machine_name in job_state['results']:
-                                    result = job_state['results'][machine_name]
-                                    if not result.get('endtime') or result.get('endtime') == '':
-                                        result['endtime'] = datetime.now(timezone.utc)
-                                        result['retcode'] = 143
-                                        if 'ret' not in result:
-                                            result['ret'] = ''
-                                        result['ret'] += "\n[Job terminated by user request - grace period expired after 30s]\n"
-                                self.state[job_name] = job_state
+                        # Queue force kill message for single-writer to handle (use stored job_instance)
+                        if job_instance and self.send_state_update(job_instance, {
+                            'type': 'force_kill',
+                            'machine': machine_name,
+                            'job_name': job_name
+                        }):
+                            print(f"[{job_instance}][{machine_name}] Queued force kill after 30s grace period", flush=True)
+                        else:
+                            print(f"[MACHINES WS] Cannot queue force kill for {machine_name} - no job_instance stored for kill command", flush=True)
                         
                         # Remove from tracking and command queue
                         for cmd in list(self.commands):
                             if 'killmachine' in cmd:
                                 kill_info = cmd['killmachine']
-                                if kill_info.get('cron') == job_name and kill_info.get('machine') == machine_name:
+                                if kill_info.get('job_instance') == job_instance and kill_info.get('machine') == machine_name:
                                     self.commands.remove(cmd)
                                     break
-                        del self.kill_machine_timeouts[(job_name, machine_name)]
+                        del self.kill_machine_timeouts[(job_instance, machine_name)]
                 
                 await asyncio.sleep(0.5)  # Check every 500ms
             except Exception as e:
@@ -575,8 +539,9 @@ class WebSocketJobServer:
         """Run the WebSocket server (blocking)"""
         asyncio.run(self.start_server())
 
-def start_websocket_server(host, port, state, running, statelocks, log_func, commands=None):
+def start_websocket_server(host, port, state, running, statelocks, log_func, commands=None, state_update_queues=None):
     """Start WebSocket server in a separate process"""
     server = WebSocketJobServer(host=host, port=port, state=state, running=running, 
-                                statelocks=statelocks, log_func=log_func, commands=commands)
+                                statelocks=statelocks, log_func=log_func, commands=commands, 
+                                state_update_queues=state_update_queues)
     server.run()

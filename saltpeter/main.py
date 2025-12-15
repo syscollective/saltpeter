@@ -8,7 +8,6 @@ import argparse
 import re
 import yaml
 import time
-import copy
 import traceback
 from sys import exit
 from datetime import datetime,timedelta,date,timezone
@@ -201,13 +200,14 @@ def process_wrapper_results(wrapper_results, name, group, procname, running, sta
     return targets_confirmed_started
 
 
-def processresults_websocket(name, group, procname, running, state, targets, timeout=None):
+def processresults_websocket(name, group, procname, running, state, targets, timeout=None, state_update_queues=None):
     """
     Wait for WebSocket-based job results with optional timeout
     Monitors state updates from WebSocket server for job completion
+    SINGLE WRITER pattern: This function is the ONLY place that modifies state[name]
     """
     start_time = time.time()
-    check_interval = 1  # Check every second
+    check_interval = 0.1  # Check every 100ms for queue messages
     
     # Default timeout of 1 hour if not specified
     if timeout is None:
@@ -216,6 +216,13 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
     # Heartbeat timeout should be job timeout + grace period
     # This allows wrapper time to terminate process and send completion
     heartbeat_timeout = timeout + 30
+    
+    # Create queue for this job instance to receive updates from WebSocket
+    import queue
+    update_queue = multiprocessing.Queue()
+    if state_update_queues is not None:
+        state_update_queues[procname] = update_queue
+        print(f"[JOB:{procname}] Created state update queue", flush=True)
     
     # Monitor WebSocket results for job completion
     # Wrappers have already been confirmed started by salt.cmd()
@@ -232,6 +239,110 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
     kill_initiated_time = None
     
     while pending_targets:
+        # Process state updates from WebSocket (SINGLE WRITER pattern)
+        try:
+            while True:  # Process all pending messages
+                try:
+                    msg = update_queue.get_nowait()
+                    msg_type = msg.get('type')
+                    machine = msg.get('machine')
+                    timestamp = msg.get('timestamp')
+                    
+                    # Only this function modifies state[name] - no race conditions!
+                    with statelocks[name]:
+                        job_state = state[name]
+                        if 'results' not in job_state:
+                            job_state['results'] = {}
+                        
+                        if msg_type == 'start':
+                            # Initialize machine result
+                            if machine not in job_state['results']:
+                                job_state['results'][machine] = {}
+                            job_state['results'][machine]['starttime'] = timestamp
+                            job_state['results'][machine]['ret'] = ''
+                            job_state['results'][machine]['retcode'] = ''
+                            job_state['results'][machine]['endtime'] = ''
+                            job_state['results'][machine]['wrapper_version'] = msg.get('wrapper_version', 'unknown')
+                            last_heartbeat[machine] = time.time()
+                            print(f"[JOB:{procname}] Machine {machine} started", flush=True)
+                        
+                        elif msg_type == 'heartbeat':
+                            # Update heartbeat timestamp
+                            if machine not in job_state['results']:
+                                job_state['results'][machine] = {}
+                            job_state['results'][machine]['last_heartbeat'] = timestamp
+                            last_heartbeat[machine] = time.time()
+                        
+                        elif msg_type == 'output':
+                            # Append output
+                            if machine not in job_state['results']:
+                                job_state['results'][machine] = {'ret': '', 'retcode': '', 'starttime': timestamp, 'endtime': ''}
+                            
+                            current_output = job_state['results'][machine].get('ret', '')
+                            job_state['results'][machine]['ret'] = current_output + msg.get('data', '')
+                            
+                            seq = msg.get('seq')
+                            if seq is not None:
+                                job_state['results'][machine]['last_output_seq'] = seq
+                            last_heartbeat[machine] = time.time()
+                        
+                        elif msg_type == 'complete':
+                            # Mark completion
+                            if machine not in job_state['results']:
+                                job_state['results'][machine] = {}
+                            
+                            # Get existing data
+                            starttime = job_state['results'][machine].get('starttime', timestamp)
+                            output = job_state['results'][machine].get('ret', '')
+                            wrapper_version = job_state['results'][machine].get('wrapper_version')
+                            last_heartbeat_val = job_state['results'][machine].get('last_heartbeat')
+                            
+                            # Set final result
+                            job_state['results'][machine] = {
+                                'ret': output,
+                                'retcode': msg.get('retcode'),
+                                'starttime': starttime,
+                                'endtime': timestamp
+                            }
+                            if wrapper_version:
+                                job_state['results'][machine]['wrapper_version'] = wrapper_version
+                            if last_heartbeat_val:
+                                job_state['results'][machine]['last_heartbeat'] = last_heartbeat_val
+                            
+                            print(f"[JOB:{procname}] Machine {machine} completed with retcode {msg.get('retcode')}", flush=True)
+                        
+                        elif msg_type == 'error':
+                            # Mark error
+                            job_state['results'][machine] = {
+                                'ret': f"Wrapper error: {msg.get('error')}",
+                                'retcode': 255,
+                                'starttime': timestamp,
+                                'endtime': timestamp
+                            }
+                            print(f"[JOB:{procname}] Machine {machine} error: {msg.get('error')}", flush=True)
+                        
+                        elif msg_type == 'force_kill':
+                            # Force kill after grace period expired
+                            if machine in job_state['results']:
+                                result = job_state['results'][machine]
+                                if not result.get('endtime') or result.get('endtime') == '':
+                                    result['endtime'] = datetime.now(timezone.utc)
+                                    result['retcode'] = 143
+                                    if 'ret' not in result:
+                                        result['ret'] = ''
+                                    result['ret'] += "\n[Job terminated by user request - grace period expired after 30s]\n"
+                                    print(f"[JOB:{procname}] Forcefully killed {machine} after 30s grace period", flush=True)
+                        
+                        # Commit state update (SINGLE WRITER - safe without deepcopy)
+                        state[name] = job_state
+                        
+                except queue.Empty:
+                    break  # No more messages
+        except Exception as e:
+            print(f"[JOB:{procname}] Error processing state update: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+        
         # Check if stop_signal was set (job killed)
         if procname in running and running[procname].get('stop_signal', False):
             if kill_initiated_time is None:
@@ -374,6 +485,11 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
         # Wait before next check
         time.sleep(check_interval)
     
+    # Clean up queue
+    if state_update_queues and procname in state_update_queues:
+        del state_update_queues[procname]
+        print(f"[JOB:{procname}] Cleaned up state update queue", flush=True)
+    
     # Note: Don't delete running[procname] here - the caller (run function) manages it
     # In batch mode, multiple batches use the same procname and running entry
 
@@ -511,7 +627,7 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
 
 
 
-def run(name, data, procname, running, state, commands, maintenance):
+def run(name, data, procname, running, state, commands, maintenance, state_update_queues=None):
 
     if maintenance['global']:
         log(cron=name, group=data['group'], what='maintenance', instance=procname, time=datetime.now(timezone.utc), out="Global maintenance mode active")
@@ -712,7 +828,7 @@ def run(name, data, procname, running, state, commands, maintenance):
                             # Monitor WebSocket results for successfully started wrappers
                             if targets_confirmed_started:
                                 processresults_websocket(name, data['group'], procname, running, state, 
-                                                        targets_confirmed_started, timeout)
+                                                        targets_confirmed_started, timeout, state_update_queues)
                         else:
                             # Legacy mode - use run_job for non-wrapper execution
                             job = salt.run_job(chunk, 'cmd.run', cmdargs, tgt_type='list', listen=False)
@@ -769,7 +885,7 @@ def run(name, data, procname, running, state, commands, maintenance):
                         # Monitor WebSocket results for successfully started wrappers
                         if targets_confirmed_started:
                             processresults_websocket(name, data['group'], procname, running, state, 
-                                                    targets_confirmed_started, timeout)
+                                                    targets_confirmed_started, timeout, state_update_queues)
                     else:
                         # Legacy mode - use run_job for non-wrapper execution
                         job = salt.run_job(targets_up, 'cmd.run', cmdargs, tgt_type='list', listen=False)
@@ -1016,6 +1132,7 @@ def main():
     commands = manager.list()
     bad_crons = manager.list()
     timeline = manager.dict()
+    state_update_queues = manager.dict()  # job_instance → Queue for state updates from WebSocket
     last_maintenance_log = datetime.now(timezone.utc)
 
     #timeline['content'] = []
@@ -1025,7 +1142,7 @@ def main():
     # Start the WebSocket server for machine communication (pass commands queue for bidirectional communication)
     ws_server = multiprocessing.Process(
         target=machines_endpoint.start_websocket_server,
-        args=('0.0.0.0', args.websocket_port, state, running, statelocks, log, commands),
+        args=('0.0.0.0', args.websocket_port, state, running, statelocks, log, commands, state_update_queues),
         name='machines_endpoint'
     )
     ws_server.start()
@@ -1113,7 +1230,7 @@ def main():
 
                         #running[procname] = {'empty': True}
                         p = multiprocessing.Process(target=run,\
-                                args=(name,config['crons'][name],procname,running, state, commands, maintenance), name=procname)
+                                args=(name,config['crons'][name],procname,running, state, commands, maintenance, state_update_queues), name=procname)
 
                         processlist[procname] = {}
                         processlist[procname]['cron_name'] = name
