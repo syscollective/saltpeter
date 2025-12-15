@@ -1097,7 +1097,7 @@ def main():
                     statelocks[name] = manager.Lock()
                 nextrun = prev + timedelta(seconds=result['nextrun'])
                 with statelocks[name]:
-                    tmpstate = copy.deepcopy(state[name]t )
+                    tmpstate = copy.deepcopy(state[name])
                     tmpstate['next_run'] = nextrun
                     state[name] = tmpstate
                 #check if there are any start commands
