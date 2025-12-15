@@ -95,17 +95,17 @@ class WebSocketJobServer:
                         # Update state
                         if job_name in self.state and self.statelocks and job_name in self.statelocks:
                             with self.statelocks[job_name]:
-                                tmpstate = copy.deepcopy(self.state[job_name])
-                                if 'results' not in tmpstate:
-                                    tmpstate['results'] = {}
-                                if machine not in tmpstate['results']:
-                                    tmpstate['results'][machine] = {}
-                                tmpstate['results'][machine]['starttime'] = timestamp
-                                tmpstate['results'][machine]['ret'] = ''
-                                tmpstate['results'][machine]['retcode'] = ''
-                                tmpstate['results'][machine]['endtime'] = ''
-                                tmpstate['results'][machine]['wrapper_version'] = data.get('version', 'unknown')
-                                self.state[job_name] = tmpstate
+                                job_state = self.state[job_name]
+                                if 'results' not in job_state:
+                                    job_state['results'] = {}
+                                if machine not in job_state['results']:
+                                    job_state['results'][machine] = {}
+                                job_state['results'][machine]['starttime'] = timestamp
+                                job_state['results'][machine]['ret'] = ''
+                                job_state['results'][machine]['retcode'] = ''
+                                job_state['results'][machine]['endtime'] = ''
+                                job_state['results'][machine]['wrapper_version'] = data.get('version', 'unknown')
+                                self.state[job_name] = job_state
                         
                         print(f"[MACHINES WS][{job_instance}][{machine}] Started (PID: {data.get('pid')}, Version: {data.get('version', 'unknown')})", flush=True)
                         
@@ -123,13 +123,13 @@ class WebSocketJobServer:
                         # Update state with last heartbeat time so monitoring can detect timeouts
                         if job_name in self.state and self.statelocks and job_name in self.statelocks:
                             with self.statelocks[job_name]:
-                                tmpstate = copy.deepcopy(self.state[job_name])
-                                if 'results' not in tmpstate:
-                                    tmpstate['results'] = {}
-                                if machine not in tmpstate['results']:
-                                    tmpstate['results'][machine] = {}
-                                tmpstate['results'][machine]['last_heartbeat'] = timestamp
-                                self.state[job_name] = tmpstate
+                                job_state = self.state[job_name]
+                                if 'results' not in job_state:
+                                    job_state['results'] = {}
+                                if machine not in job_state['results']:
+                                    job_state['results'][machine] = {}
+                                job_state['results'][machine]['last_heartbeat'] = timestamp
+                                self.state[job_name] = job_state
                         
                         print(f"[MACHINES WS][{job_instance}][{machine}] Heartbeat at {timestamp}", flush=True)
                         
@@ -209,19 +209,19 @@ class WebSocketJobServer:
                         if job_name in self.state:
                             if self.statelocks and job_name in self.statelocks:
                                 with self.statelocks[job_name]:
-                                    tmpstate = copy.deepcopy(self.state[job_name])
-                                    if 'results' not in tmpstate:
-                                        tmpstate['results'] = {}
-                                    if machine not in tmpstate['results']:
-                                        tmpstate['results'][machine] = {'ret': '', 'retcode': '', 'starttime': timestamp, 'endtime': ''}
+                                    job_state = self.state[job_name]
+                                    if 'results' not in job_state:
+                                        job_state['results'] = {}
+                                    if machine not in job_state['results']:
+                                        job_state['results'][machine] = {'ret': '', 'retcode': '', 'starttime': timestamp, 'endtime': ''}
                                     
                                     # Append output to existing output
-                                    current_output = tmpstate['results'][machine].get('ret', '')
-                                    tmpstate['results'][machine]['ret'] = current_output + output_data
+                                    current_output = job_state['results'][machine].get('ret', '')
+                                    job_state['results'][machine]['ret'] = current_output + output_data
                                     # Store last sequence for recovery
                                     if seq is not None:
-                                        tmpstate['results'][machine]['last_output_seq'] = seq
-                                    self.state[job_name] = tmpstate
+                                        job_state['results'][machine]['last_output_seq'] = seq
+                                    self.state[job_name] = job_state
                     
                     elif msg_type == 'sync_request':
                         # Client requests sync - tell them what we last received
@@ -249,7 +249,65 @@ class WebSocketJobServer:
                         print(f"[MACHINES WS][{job_instance}][{machine}] Received completion: retcode={retcode}, seq={seq}", flush=True)
                         print(f"[MACHINES WS][{job_instance}][{machine}] Validation: in_running={job_instance in self.running}, in_state={job_name in self.state}", flush=True)
                         
-                        # Send acknowledgement
+                        # Log if job instance not in running dict (may have timed out or been killed)
+                        # but continue to process completion anyway - we want to record actual result
+                        if job_instance not in self.running:
+                            print(f"[MACHINES WS][{job_instance}][{machine}] NOTE - Job instance not in running dict (may have timed out), but recording completion anyway", flush=True)
+                        
+                        # Get group info from running dict or state
+                        group = 'unknown'
+                        if job_instance in self.running:
+                            # Try to get group from state
+                            if job_name in self.state:
+                                group = self.state[job_name].get('group', 'unknown')
+                        elif job_name in self.state:
+                            # Job not in running, but get group from state
+                            group = self.state[job_name].get('group', 'unknown')
+                        
+                        # Update state with final result
+                        print(f"[MACHINES WS][{job_instance}][{machine}] State checks: in_state={job_name in self.state}, has_locks={self.statelocks is not None and job_name in self.statelocks}", flush=True)
+                        if job_name in self.state and self.statelocks and job_name in self.statelocks:
+                            print(f"[MACHINES WS][{job_instance}][{machine}] Acquiring state lock", flush=True)
+                            with self.statelocks[job_name]:
+                                # Optimized: Only modify the specific machine's result, not copy entire job state
+                                # This avoids expensive deepcopy of all machines' accumulated output
+                                job_state = self.state[job_name]
+                                
+                                # Ensure results dict exists
+                                if 'results' not in job_state:
+                                    job_state['results'] = {}
+                                
+                                # Get existing data if we have it (output was accumulated during 'output' messages)
+                                starttime = timestamp
+                                output = ''
+                                wrapper_version = None
+                                last_heartbeat = None
+                                if machine in job_state['results']:
+                                    starttime = job_state['results'][machine].get('starttime', timestamp)
+                                    output = job_state['results'][machine].get('ret', '')
+                                    wrapper_version = job_state['results'][machine].get('wrapper_version')
+                                    last_heartbeat = job_state['results'][machine].get('last_heartbeat')
+                                
+                                print(f"[MACHINES WS][{job_instance}][{machine}] Setting endtime={timestamp}", flush=True)
+                                # Update with final status, preserving wrapper_version and last_heartbeat
+                                job_state['results'][machine] = {
+                                    'ret': output,
+                                    'retcode': retcode,
+                                    'starttime': starttime,
+                                    'endtime': timestamp
+                                }
+                                if wrapper_version:
+                                    job_state['results'][machine]['wrapper_version'] = wrapper_version
+                                if last_heartbeat:
+                                    job_state['results'][machine]['last_heartbeat'] = last_heartbeat
+                                
+                                # Trigger Manager dict update by reassigning
+                                self.state[job_name] = job_state
+                                print(f"[MACHINES WS][{job_instance}][{machine}] State updated: endtime={timestamp}, retcode={retcode}", flush=True)
+                        else:
+                            print(f"[MACHINES WS][{job_instance}][{machine}] WARNING - Cannot update state (checks failed)", flush=True)
+                        
+                        # Send acknowledgement AFTER state is updated - wrapper can close immediately after receiving ACK
                         ack_msg = {
                             'type': 'ack',
                             'ack_type': 'complete',
@@ -258,80 +316,12 @@ class WebSocketJobServer:
                         if seq is not None:
                             ack_msg['seq'] = seq
                         
-                        await websocket.send(json.dumps(ack_msg))
-                        
-                        # Validate that this job instance is actually running
-                        if job_instance not in self.running:
-                            print(f"[MACHINES WS][{job_instance}][{machine}] WARNING - Job instance not in running dict (keys: {list(self.running.keys())})", flush=True)
-                            # Clean up connection anyway
-                            if client_id in self.connections:
-                                del self.connections[client_id]
-                            continue
-                        
-                        # Validate that this machine is in the running list for this instance
-                        if 'machines' not in self.running[job_instance] or machine not in self.running[job_instance]['machines']:
-                            print(f"[MACHINES WS][{job_instance}][{machine}] WARNING - Not in machines list (expected: {self.running[job_instance].get('machines', [])})", flush=True)
-                            # Clean up connection anyway
-                            if client_id in self.connections:
-                                del self.connections[client_id]
-                            continue
-                        
-                        # Get group info from running dict or state
-                        group = 'unknown'
-                        if job_instance in self.running:
-                            # Try to get group from state
-                            if job_name in self.state:
-                                group = self.state[job_name].get('group', 'unknown')
-                        
-                        # Update state with final result
-                        print(f"[MACHINES WS][{job_instance}][{machine}] State checks: in_state={job_name in self.state}, has_locks={self.statelocks is not None and job_name in self.statelocks}", flush=True)
-                        if job_name in self.state and self.statelocks and job_name in self.statelocks:
-                            print(f"[MACHINES WS][{job_instance}][{machine}] Acquiring state lock", flush=True)
-                            with self.statelocks[job_name]:
-                                print(f"[MACHINES WS][{job_instance}][{machine}] Lock acquired, deep copying state", flush=True)
-                                # Deep copy to avoid race conditions with nested dicts
-                                tmpstate = copy.deepcopy(self.state[job_name])
-                                print(f"[MACHINES WS][{job_instance}][{machine}] Deep copy completed", flush=True)
-                                if 'results' not in tmpstate:
-                                    tmpstate['results'] = {}
-                                
-                                # Get existing data if we have it (output was accumulated during 'output' messages)
-                                starttime = timestamp
-                                output = ''
-                                wrapper_version = None
-                                last_heartbeat = None
-                                if machine in tmpstate['results']:
-                                    starttime = tmpstate['results'][machine].get('starttime', timestamp)
-                                    output = tmpstate['results'][machine].get('ret', '')
-                                    wrapper_version = tmpstate['results'][machine].get('wrapper_version')
-                                    last_heartbeat = tmpstate['results'][machine].get('last_heartbeat')
-                                
-                                print(f"[MACHINES WS][{job_instance}][{machine}] Setting endtime={timestamp}", flush=True)
-                                # Update with final status, preserving wrapper_version and last_heartbeat
-                                tmpstate['results'][machine] = {
-                                    'ret': output,
-                                    'retcode': retcode,
-                                    'starttime': starttime,
-                                    'endtime': timestamp
-                                }
-                                if wrapper_version:
-                                    tmpstate['results'][machine]['wrapper_version'] = wrapper_version
-                                if last_heartbeat:
-                                    tmpstate['results'][machine]['last_heartbeat'] = last_heartbeat
-                                print(f"[MACHINES WS][{job_instance}][{machine}] Writing state back", flush=True)
-                                self.state[job_name] = tmpstate
-                                print(f"[MACHINES WS][{job_instance}][{machine}] State updated: endtime={timestamp}, retcode={retcode}", flush=True)
-                        else:
-                            print(f"[MACHINES WS][{job_instance}][{machine}] WARNING - Cannot update state (checks failed)", flush=True)
-                        
-                        # Get output for logging (use what's in state or buffer)
-                        log_output = ''
-                        if job_name in self.state and 'results' in self.state[job_name] and machine in self.state[job_name]['results']:
-                            log_output = self.state[job_name]['results'][machine].get('ret', '')
-                        # Get output for logging (use what's in state or buffer)
-                        log_output = ''
-                        if job_name in self.state and 'results' in self.state[job_name] and machine in self.state[job_name]['results']:
-                            log_output = self.state[job_name]['results'][machine].get('ret', '')
+                        try:
+                            await websocket.send(json.dumps(ack_msg))
+                            print(f"[MACHINES WS][{job_instance}][{machine}] Completion ACK sent", flush=True)
+                        except Exception as e:
+                            # Connection may be closing - but state is already updated, so this is OK
+                            print(f"[MACHINES WS][{job_instance}][{machine}] Failed to send completion ACK (state already updated): {e}", flush=True)
                         
                         print(f"[MACHINES WS][{job_instance}][{machine}] Completed (exit code: {retcode})", flush=True)
                         
@@ -350,17 +340,17 @@ class WebSocketJobServer:
                         # Update state with error - processresults_websocket will log it
                         if job_name in self.state and self.statelocks and job_name in self.statelocks:
                             with self.statelocks[job_name]:
-                                tmpstate = copy.deepcopy(self.state[job_name])
-                                if 'results' not in tmpstate:
-                                    tmpstate['results'] = {}
+                                job_state = self.state[job_name]
+                                if 'results' not in job_state:
+                                    job_state['results'] = {}
                                 
-                                tmpstate['results'][machine] = {
+                                job_state['results'][machine] = {
                                     'ret': f"Wrapper error: {error_msg}",
                                     'retcode': 255,
                                     'starttime': timestamp,
                                     'endtime': timestamp
                                 }
-                                self.state[job_name] = tmpstate
+                                self.state[job_name] = job_state
                         
                         # Clean up connection
                         if client_id in self.connections:
@@ -533,16 +523,16 @@ class WebSocketJobServer:
                         # Forcefully mark machine as killed
                         if job_name in self.state and self.statelocks and job_name in self.statelocks:
                             with self.statelocks[job_name]:
-                                tmpstate = copy.deepcopy(self.state[job_name])
-                                if 'results' in tmpstate and machine_name in tmpstate['results']:
-                                    result = tmpstate['results'][machine_name]
+                                job_state = self.state[job_name]
+                                if 'results' in job_state and machine_name in job_state['results']:
+                                    result = job_state['results'][machine_name]
                                     if not result.get('endtime') or result.get('endtime') == '':
                                         result['endtime'] = datetime.now(timezone.utc)
                                         result['retcode'] = 143
                                         if 'ret' not in result:
                                             result['ret'] = ''
                                         result['ret'] += "\n[Job terminated by user request - grace period expired after 30s]\n"
-                                self.state[job_name] = tmpstate
+                                self.state[job_name] = job_state
                         
                         # Remove from tracking and command queue
                         for cmd in list(self.commands):
