@@ -68,7 +68,7 @@ class WebSocketJobServer:
                             'last_acked_seq': -1,    # Last sequence we acknowledged
                             'pending_acks': []       # Sequences pending acknowledgement
                         }
-                        print(f"[MACHINES WS] Client connected - {client_id}", flush=True)
+                        print(f"[MACHINES WS][{job_instance}][{machine}] Client connected", flush=True)
                         # Send connection acknowledgement
                         await websocket.send(json.dumps({
                             'type': 'ack',
@@ -84,12 +84,12 @@ class WebSocketJobServer:
                         
                         # Validate that this job instance is running
                         if job_instance not in self.running:
-                            print(f"[MACHINES WS] WARNING - Received start for unknown job instance {job_instance}", flush=True)
+                            print(f"[MACHINES WS][{job_instance}][{machine}] WARNING - Unknown job instance (not in running)", flush=True)
                             continue
                         
                         # Validate machine is in the expected machines list for this instance
                         if 'machines' in self.running[job_instance] and machine not in self.running[job_instance]['machines']:
-                            print(f"[MACHINES WS] WARNING - Machine {machine} not in expected list for {job_instance}", flush=True)
+                            print(f"[MACHINES WS][{job_instance}][{machine}] WARNING - Not in expected machines list", flush=True)
                             continue
                             
                         # Update state
@@ -107,7 +107,7 @@ class WebSocketJobServer:
                                 tmpstate['results'][machine]['wrapper_version'] = data.get('version', 'unknown')
                                 self.state[job_name] = tmpstate
                         
-                        print(f"[MACHINES WS] Job started - {client_id} (PID: {data.get('pid')}, Version: {data.get('version', 'unknown')})", flush=True)
+                        print(f"[MACHINES WS][{job_instance}][{machine}] Started (PID: {data.get('pid')}, Version: {data.get('version', 'unknown')})", flush=True)
                         
                         # Send acknowledgement for start message
                         await websocket.send(json.dumps({
@@ -131,7 +131,7 @@ class WebSocketJobServer:
                                 tmpstate['results'][machine]['last_heartbeat'] = timestamp
                                 self.state[job_name] = tmpstate
                         
-                        print(f"[MACHINES WS] Heartbeat from {client_id} at {timestamp}", flush=True)
+                        print(f"[MACHINES WS][{job_instance}][{machine}] Heartbeat at {timestamp}", flush=True)
                         
                     elif msg_type == 'output':
                         stream = data.get('stream', 'stdout')
@@ -151,7 +151,7 @@ class WebSocketJobServer:
                                 
                                 if seq < expected_seq:
                                     # Duplicate message - already processed
-                                    print(f"[MACHINES WS] Duplicate output seq {seq} from {client_id} (expected {expected_seq})", flush=True)
+                                    print(f"[MACHINES WS][{job_instance}][{machine}] Duplicate output seq {seq} (expected {expected_seq})", flush=True)
                                     # Send ack anyway
                                     await websocket.send(json.dumps({
                                         'type': 'ack',
@@ -163,7 +163,7 @@ class WebSocketJobServer:
                                     
                                 elif seq > expected_seq:
                                     # Out of order - request resend
-                                    print(f"[MACHINES WS] Out of order output seq {seq} from {client_id} (expected {expected_seq})", flush=True)
+                                    print(f"[MACHINES WS][{job_instance}][{machine}] Out of order output seq {seq} (expected {expected_seq})", flush=True)
                                     await websocket.send(json.dumps({
                                         'type': 'nack',
                                         'nack_type': 'out_of_order',
@@ -193,17 +193,17 @@ class WebSocketJobServer:
                             try:
                                 await websocket.send(json.dumps(ack_msg))
                             except Exception as e:
-                                print(f"[MACHINES WS] Failed to send ACK to {client_id}: {e}", flush=True)
+                                print(f"[MACHINES WS][{job_instance}][{machine}] Failed to send output ACK: {e}", flush=True)
                         
                         # Update state with accumulated output
                         # Validate job_instance is in running dict (started by main.py)
                         if job_instance not in self.running:
-                            print(f"[MACHINES WS] WARNING - Received output for unknown job instance {job_instance}", flush=True)
+                            print(f"[MACHINES WS][{job_instance}][{machine}] WARNING - Unknown job instance for output", flush=True)
                             continue
                         
                         # Validate machine is in the expected machines list for this instance
                         if 'machines' in self.running[job_instance] and machine not in self.running[job_instance]['machines']:
-                            print(f"[MACHINES WS] WARNING - Machine {machine} not in expected list for {job_instance}", flush=True)
+                            print(f"[MACHINES WS][{job_instance}][{machine}] WARNING - Not in expected machines list for output", flush=True)
                             continue
                         
                         if job_name in self.state:
@@ -232,7 +232,7 @@ class WebSocketJobServer:
                         if client_id in self.connections:
                             server_last_seq = self.connections[client_id].get('last_acked_seq', -1)
                         
-                        print(f"[MACHINES WS] Sync request from {client_id}: client_acked={client_last_acked}, client_next={client_next_seq}, server_last={server_last_seq}", flush=True)
+                        print(f"[MACHINES WS][{job_instance}][{machine}] Sync request: client_acked={client_last_acked}, client_next={client_next_seq}, server_last={server_last_seq}", flush=True)
                         
                         sync_response = {
                             'type': 'sync_response',
@@ -246,8 +246,8 @@ class WebSocketJobServer:
                         retcode = data.get('retcode', -1)
                         seq = data.get('seq', None)
                         
-                        print(f"[MACHINES WS] Received complete message from {client_id}, retcode={retcode}, seq={seq}", flush=True)
-                        print(f"[MACHINES WS] Complete validation: job_instance={job_instance} in running={job_instance in self.running}, job_name={job_name} in state={job_name in self.state}", flush=True)
+                        print(f"[MACHINES WS][{job_instance}][{machine}] Received completion: retcode={retcode}, seq={seq}", flush=True)
+                        print(f"[MACHINES WS][{job_instance}][{machine}] Validation: in_running={job_instance in self.running}, in_state={job_name in self.state}", flush=True)
                         
                         # Send acknowledgement
                         ack_msg = {
@@ -262,7 +262,7 @@ class WebSocketJobServer:
                         
                         # Validate that this job instance is actually running
                         if job_instance not in self.running:
-                            print(f"[MACHINES WS] WARNING - Received completion for unknown job instance {job_instance} (running keys: {list(self.running.keys())})", flush=True)
+                            print(f"[MACHINES WS][{job_instance}][{machine}] WARNING - Job instance not in running dict (keys: {list(self.running.keys())})", flush=True)
                             # Clean up connection anyway
                             if client_id in self.connections:
                                 del self.connections[client_id]
@@ -270,7 +270,7 @@ class WebSocketJobServer:
                         
                         # Validate that this machine is in the running list for this instance
                         if 'machines' not in self.running[job_instance] or machine not in self.running[job_instance]['machines']:
-                            print(f"[MACHINES WS] WARNING - Machine {machine} not in running list for instance {job_instance} (expected: {self.running[job_instance].get('machines', [])})", flush=True)
+                            print(f"[MACHINES WS][{job_instance}][{machine}] WARNING - Not in machines list (expected: {self.running[job_instance].get('machines', [])})", flush=True)
                             # Clean up connection anyway
                             if client_id in self.connections:
                                 del self.connections[client_id]
@@ -284,12 +284,14 @@ class WebSocketJobServer:
                                 group = self.state[job_name].get('group', 'unknown')
                         
                         # Update state with final result
-                        print(f"[MACHINES WS] State update check: job_name={job_name}, in_state={job_name in self.state}, has_statelocks={self.statelocks is not None}, in_statelocks={job_name in self.statelocks if self.statelocks else False}", flush=True)
+                        print(f"[MACHINES WS][{job_instance}][{machine}] State checks: in_state={job_name in self.state}, has_locks={self.statelocks is not None and job_name in self.statelocks}", flush=True)
                         if job_name in self.state and self.statelocks and job_name in self.statelocks:
-                            print(f"[MACHINES WS] Acquiring lock for {job_name} to update state", flush=True)
+                            print(f"[MACHINES WS][{job_instance}][{machine}] Acquiring state lock", flush=True)
                             with self.statelocks[job_name]:
+                                print(f"[MACHINES WS][{job_instance}][{machine}] Lock acquired, deep copying state", flush=True)
                                 # Deep copy to avoid race conditions with nested dicts
                                 tmpstate = copy.deepcopy(self.state[job_name])
+                                print(f"[MACHINES WS][{job_instance}][{machine}] Deep copy completed", flush=True)
                                 if 'results' not in tmpstate:
                                     tmpstate['results'] = {}
                                 
@@ -304,6 +306,7 @@ class WebSocketJobServer:
                                     wrapper_version = tmpstate['results'][machine].get('wrapper_version')
                                     last_heartbeat = tmpstate['results'][machine].get('last_heartbeat')
                                 
+                                print(f"[MACHINES WS][{job_instance}][{machine}] Setting endtime={timestamp}", flush=True)
                                 # Update with final status, preserving wrapper_version and last_heartbeat
                                 tmpstate['results'][machine] = {
                                     'ret': output,
@@ -315,10 +318,11 @@ class WebSocketJobServer:
                                     tmpstate['results'][machine]['wrapper_version'] = wrapper_version
                                 if last_heartbeat:
                                     tmpstate['results'][machine]['last_heartbeat'] = last_heartbeat
+                                print(f"[MACHINES WS][{job_instance}][{machine}] Writing state back", flush=True)
                                 self.state[job_name] = tmpstate
-                                print(f"[MACHINES WS] Updated state for {job_name}[{machine}] with endtime={timestamp}, retcode={retcode}", flush=True)
+                                print(f"[MACHINES WS][{job_instance}][{machine}] State updated: endtime={timestamp}, retcode={retcode}", flush=True)
                         else:
-                            print(f"[MACHINES WS] WARNING - Cannot update state for {job_name}", flush=True)
+                            print(f"[MACHINES WS][{job_instance}][{machine}] WARNING - Cannot update state (checks failed)", flush=True)
                         
                         # Get output for logging (use what's in state or buffer)
                         log_output = ''
@@ -329,7 +333,7 @@ class WebSocketJobServer:
                         if job_name in self.state and 'results' in self.state[job_name] and machine in self.state[job_name]['results']:
                             log_output = self.state[job_name]['results'][machine].get('ret', '')
                         
-                        print(f"[MACHINES WS] Job completed - {client_id} (exit code: {retcode})", flush=True)
+                        print(f"[MACHINES WS][{job_instance}][{machine}] Completed (exit code: {retcode})", flush=True)
                         
                         # Clean up connection
                         if client_id in self.connections:
@@ -337,11 +341,11 @@ class WebSocketJobServer:
                         
                     elif msg_type == 'killed':
                         # Wrapper acknowledges it was killed
-                        print(f"[MACHINES WS] Wrapper {client_id} acknowledged kill signal", flush=True)
+                        print(f"[MACHINES WS][{job_instance}][{machine}] Acknowledged kill signal", flush=True)
                         
                     elif msg_type == 'error':
                         error_msg = data.get('error', 'Unknown error')
-                        print(f"[MACHINES WS] Error from {client_id}: {error_msg}", flush=True)
+                        print(f"[MACHINES WS][{job_instance}][{machine}] Error: {error_msg}", flush=True)
                         
                         # Update state with error - processresults_websocket will log it
                         if job_name in self.state and self.statelocks and job_name in self.statelocks:
@@ -363,21 +367,55 @@ class WebSocketJobServer:
                             del self.connections[client_id]
                     
                 except json.JSONDecodeError as e:
-                    print(f"[MACHINES WS] Invalid JSON received: {e}", flush=True)
+                    if client_id:
+                        # Extract job_instance and machine from client_id
+                        parts = client_id.split(':', 1)
+                        if len(parts) == 2:
+                            print(f"[MACHINES WS][{parts[0]}][{parts[1]}] Invalid JSON received: {e}", flush=True)
+                        else:
+                            print(f"[MACHINES WS][{client_id}] Invalid JSON received: {e}", flush=True)
+                    else:
+                        print(f"[MACHINES WS] Invalid JSON received: {e}", flush=True)
                 except Exception as e:
-                    print(f"[MACHINES WS] Error processing message: {e}", flush=True)
+                    if client_id:
+                        parts = client_id.split(':', 1)
+                        if len(parts) == 2:
+                            print(f"[MACHINES WS][{parts[0]}][{parts[1]}] Error processing message: {e}", flush=True)
+                        else:
+                            print(f"[MACHINES WS][{client_id}] Error processing message: {e}", flush=True)
+                    else:
+                        print(f"[MACHINES WS] Error processing message: {e}", flush=True)
+                    import traceback
+                    traceback.print_exc()
                     
         except websockets.exceptions.ConnectionClosed:
             if client_id:
-                print(f"[MACHINES WS] Connection closed - {client_id}", flush=True)
+                parts = client_id.split(':', 1)
+                if len(parts) == 2:
+                    print(f"[MACHINES WS][{parts[0]}][{parts[1]}] Connection closed", flush=True)
+                else:
+                    print(f"[MACHINES WS][{client_id}] Connection closed", flush=True)
             else:
                 print(f"[MACHINES WS] Connection closed before identification (from {remote_address})", flush=True)
         except Exception as e:
-            print(f"[MACHINES WS] Error in client handler: {e}", flush=True)
+            if client_id:
+                parts = client_id.split(':', 1)
+                if len(parts) == 2:
+                    print(f"[MACHINES WS][{parts[0]}][{parts[1]}] Error in client handler: {e}", flush=True)
+                else:
+                    print(f"[MACHINES WS][{client_id}] Error in client handler: {e}", flush=True)
+            else:
+                print(f"[MACHINES WS] Error in client handler: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
         finally:
             # Clean up connection on disconnect
             if client_id and client_id in self.connections:
-                print(f"[MACHINES WS] Cleaning up connection - {client_id}", flush=True)
+                parts = client_id.split(':', 1)
+                if len(parts) == 2:
+                    print(f"[MACHINES WS][{parts[0]}][{parts[1]}] Cleaning up connection", flush=True)
+                else:
+                    print(f"[MACHINES WS][{client_id}] Cleaning up connection", flush=True)
                 del self.connections[client_id]
     
     async def check_commands(self):
