@@ -111,7 +111,24 @@ class UIEndpoint:
                             
                         elif 'killMachine' in data:
                             kill_info = data['killMachine']
-                            self.commands.append({'killmachine': kill_info})
+                            job_name = kill_info.get('cron')
+                            machine = kill_info.get('machine')
+                            job_instance = kill_info.get('job_instance')
+                            
+                            # If UI didn't provide job_instance, look it up (backwards compatibility)
+                            if not job_instance:
+                                for proc_name, proc_info in self.running.items():
+                                    if proc_info.get('name') == job_name:
+                                        # Check if this machine is in the job's machines list
+                                        if 'machines' in proc_info and machine in proc_info['machines']:
+                                            job_instance = proc_name
+                                            kill_info['job_instance'] = job_instance
+                                            break
+                            
+                            if job_instance:
+                                self.commands.append({'killmachine': kill_info})
+                            else:
+                                print(f"[UI WS] Cannot find job_instance for kill command: cron={job_name}, machine={machine}", flush=True)
                             
                         elif 'getTimeline' in data:
                             timeline_params = data['getTimeline']
