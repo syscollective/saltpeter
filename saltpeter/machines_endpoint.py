@@ -29,8 +29,16 @@ class WebSocketJobServer:
         if self.state_update_queues and job_instance in self.state_update_queues:
             try:
                 self.state_update_queues[job_instance].put_nowait(update_msg)
+                return True
             except Exception as e:
                 print(f"[MACHINES WS][{job_instance}] Failed to queue state update: {e}", flush=True)
+                return False
+        else:
+            # Queue doesn't exist yet - race condition during startup
+            msg_type = update_msg.get('type', 'unknown')
+            machine = update_msg.get('machine', 'unknown')
+            print(f"[MACHINES WS][{job_instance}][{machine}] WARNING - Queue not ready, dropping {msg_type} message", flush=True)
+            return False
     
     async def handle_client(self, websocket):
         """

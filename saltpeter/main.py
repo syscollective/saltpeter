@@ -217,13 +217,16 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
     # This allows wrapper time to terminate process and send completion
     heartbeat_timeout = timeout + 30
     
-    # Create queue for this job instance to receive updates from WebSocket
-    # Use manager.Queue() so it can be stored in manager.dict()
+    # Get or create queue for this job instance to receive updates from WebSocket
+    # Queue should already exist (created before wrapper launch), but create if missing
     import queue
-    if manager is not None and state_update_queues is not None:
+    if state_update_queues is not None and procname in state_update_queues:
+        update_queue = state_update_queues[procname]
+        print(f"[JOB:{procname}] Using existing state update queue", flush=True)
+    elif manager is not None and state_update_queues is not None:
         update_queue = manager.Queue()
         state_update_queues[procname] = update_queue
-        print(f"[JOB:{procname}] Created state update queue", flush=True)
+        print(f"[JOB:{procname}] WARNING - Queue created late (should exist before wrapper launch)", flush=True)
     else:
         print(f"[JOB:{procname}] ERROR - manager or state_update_queues not provided", flush=True)
         return
@@ -765,6 +768,14 @@ def run(name, data, procname, running, state, commands, maintenance, state_updat
     if len(targets_up) == 0:
         log(cron=name, group=data['group'], what='no_machines', instance=procname, time=datetime.now(timezone.utc))
     else:
+        # Create queue BEFORE launching wrappers to avoid race condition
+        # Do this once here instead of in both batch/non-batch code paths
+        if use_wrapper and manager is not None and state_update_queues is not None:
+            if procname not in state_update_queues:
+                update_queue = manager.Queue()
+                state_update_queues[procname] = update_queue
+                print(f"[JOB:{procname}] Created state update queue (before wrapper launch)", flush=True)
+        
         # Only execute if we have targets
         # Shuffle targets for random selection/distribution
         if ('number_of_targets' in data and data['number_of_targets'] != 0) or \
@@ -832,7 +843,7 @@ def run(name, data, procname, running, state, commands, maintenance, state_updat
                             # Monitor WebSocket results for successfully started wrappers
                             if targets_confirmed_started:
                                 processresults_websocket(name, data['group'], procname, running, state, 
-                                                        targets_confirmed_started, timeout, state_update_queues)
+                                                        targets_confirmed_started, timeout, state_update_queues, manager)
                         else:
                             # Legacy mode - use run_job for non-wrapper execution
                             job = salt.run_job(chunk, 'cmd.run', cmdargs, tgt_type='list', listen=False)
