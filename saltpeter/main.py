@@ -958,11 +958,12 @@ def run(name, data, procname, running, state, commands, maintenance, state_updat
         success = (failed_count == 0) and (total_count > 0)
         
         # Store success status in state for UI/API/logs to read
-        tmpstate['last_success'] = success
-        tmpstate['last_failed_count'] = failed_count
-        tmpstate['last_total_count'] = total_count
+        # Use job_state (already loaded above) instead of tmpstate (stale from start of run())
+        job_state['last_success'] = success
+        job_state['last_failed_count'] = failed_count
+        job_state['last_total_count'] = total_count
         
-        state[name] = tmpstate
+        state[name] = job_state
     
     # Log end with proper status code from evaluated success
     status_code = 0 if success else 1
