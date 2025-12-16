@@ -343,6 +343,13 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                         # Commit state update (SINGLE WRITER - safe without deepcopy)
                         state[name] = job_state
                         
+                        # Debug: verify state was actually committed to Manager dict
+                        readback = state.get(name)
+                        if readback and 'results' in readback and machine in readback['results']:
+                            print(f"[JOB:{procname}][{machine}] State committed: type={msg_type}, has_results=True", flush=True)
+                        else:
+                            print(f"[JOB:{procname}][{machine}] ERROR - State NOT in Manager dict after commit! type={msg_type}", flush=True)
+                        
                 except queue.Empty:
                     break  # No more messages
         except Exception as e:

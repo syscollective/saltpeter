@@ -184,6 +184,13 @@ class UIEndpoint:
             for cron in self.config['crons']:
                 if cron in subscriptions:
                     srcron = copy.deepcopy(self.state[cron])
+                    
+                    # Debug: log what state contains
+                    if 'results' in srcron:
+                        print(f"[UI DEBUG] Sending cron {cron}: {len(srcron['results'])} machines", flush=True)
+                    else:
+                        print(f"[UI DEBUG] Sending cron {cron}: NO RESULTS", flush=True)
+                    
                     if 'next_run' in srcron:
                         srcron['next_run'] = srcron['next_run'].isoformat()
                     if 'last_run' in srcron:
