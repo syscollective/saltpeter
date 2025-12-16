@@ -200,7 +200,7 @@ def process_wrapper_results(wrapper_results, name, group, procname, running, sta
     return targets_confirmed_started
 
 
-def processresults_websocket(name, group, procname, running, state, targets, timeout=None, state_update_queues=None):
+def processresults_websocket(name, group, procname, running, state, targets, timeout=None, state_update_queues=None, manager=None):
     """
     Wait for WebSocket-based job results with optional timeout
     Monitors state updates from WebSocket server for job completion
@@ -218,11 +218,15 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
     heartbeat_timeout = timeout + 30
     
     # Create queue for this job instance to receive updates from WebSocket
+    # Use manager.Queue() so it can be stored in manager.dict()
     import queue
-    update_queue = multiprocessing.Queue()
-    if state_update_queues is not None:
+    if manager is not None and state_update_queues is not None:
+        update_queue = manager.Queue()
         state_update_queues[procname] = update_queue
         print(f"[JOB:{procname}] Created state update queue", flush=True)
+    else:
+        print(f"[JOB:{procname}] ERROR - manager or state_update_queues not provided", flush=True)
+        return
     
     # Monitor WebSocket results for job completion
     # Wrappers have already been confirmed started by salt.cmd()
@@ -627,7 +631,7 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
 
 
 
-def run(name, data, procname, running, state, commands, maintenance, state_update_queues=None):
+def run(name, data, procname, running, state, commands, maintenance, state_update_queues=None, manager=None):
 
     if maintenance['global']:
         log(cron=name, group=data['group'], what='maintenance', instance=procname, time=datetime.now(timezone.utc), out="Global maintenance mode active")
@@ -885,7 +889,7 @@ def run(name, data, procname, running, state, commands, maintenance, state_updat
                         # Monitor WebSocket results for successfully started wrappers
                         if targets_confirmed_started:
                             processresults_websocket(name, data['group'], procname, running, state, 
-                                                    targets_confirmed_started, timeout, state_update_queues)
+                                                    targets_confirmed_started, timeout, state_update_queues, manager)
                     else:
                         # Legacy mode - use run_job for non-wrapper execution
                         job = salt.run_job(targets_up, 'cmd.run', cmdargs, tgt_type='list', listen=False)
@@ -1230,7 +1234,7 @@ def main():
 
                         #running[procname] = {'empty': True}
                         p = multiprocessing.Process(target=run,\
-                                args=(name,config['crons'][name],procname,running, state, commands, maintenance, state_update_queues), name=procname)
+                                args=(name,config['crons'][name],procname,running, state, commands, maintenance, state_update_queues, manager), name=procname)
 
                         processlist[procname] = {}
                         processlist[procname]['cron_name'] = name
