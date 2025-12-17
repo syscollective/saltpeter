@@ -199,18 +199,24 @@ def process_wrapper_results(wrapper_results, name, group, procname, running, sta
     Returns list of successfully started targets
     Handles missing targets (not in wrapper_results) as startup failures
     """
-    print(f"[SALT DEBUG] wrapper_results type: {type(wrapper_results)}", flush=True)
-    print(f"[SALT DEBUG] wrapper_results content: {wrapper_results}", flush=True)
-    print(f"[SALT DEBUG] expected_targets: {expected_targets}", flush=True)
+    debug_print(f"[SALT DEBUG] wrapper_results type: {type(wrapper_results)}")
+    debug_print(f"[SALT DEBUG] wrapper_results content: {wrapper_results}")
+    debug_print(f"[SALT DEBUG] expected_targets: {expected_targets}")
     
     targets_confirmed_started = []
     
     for machine, result in wrapper_results.items():
-        print(f"[SALT DEBUG] Processing {machine}: type={type(result)}, result={result}", flush=True)
+        debug_print(f"[SALT DEBUG] Processing {machine}: type={type(result)}, result={result}")
         
         if isinstance(result, dict) and 'retcode' in result:
             retcode = result['retcode']
-            output = result.get('ret', '')
+            # Capture both stdout and stderr from Salt execution
+            stdout = result.get('ret', '')
+            stderr = result.get('stderr', '')
+            # Combine stdout and stderr for complete output
+            output = stdout
+            if stderr:
+                output += f"\n--- STDERR ---\n{stderr}"
             
             if retcode == 0:
                 # Wrapper started successfully
@@ -784,8 +790,8 @@ def run(name, data, procname, running, state, commands, maintenance, state_updat
 
     # ping the minions and parse the result
     minion_ret = salt.cmd(targets, 'test.ping', tgt_type=target_type, timeout=20)
-    print(f"[SALT DEBUG] test.ping response type: {type(minion_ret)}", flush=True)
-    print(f"[SALT DEBUG] test.ping response: {minion_ret}", flush=True)
+    debug_print(f"[SALT DEBUG] test.ping response type: {type(minion_ret)}")
+    debug_print(f"[SALT DEBUG] test.ping response: {minion_ret}")
 
     # minion_ret is already a dict: {minion_id: True/False}
     targets_up = [m for m, ret in minion_ret.items() if ret is True]
@@ -884,9 +890,9 @@ def run(name, data, procname, running, state, commands, maintenance, state_updat
                         if use_wrapper:
                             # Use blocking call for wrapper - returns immediately with startup status
                             # Use 30s timeout for wrapper startup (not job timeout)
-                            print(f"[SALT DEBUG] Calling salt.cmd on chunk={chunk}, cmdargs={cmdargs}", flush=True)
+                            debug_print(f"[SALT DEBUG] Calling salt.cmd on chunk={chunk}, cmdargs={cmdargs}")
                             wrapper_results = salt.cmd(chunk, 'cmd.run_all', cmdargs, tgt_type='list', timeout=30)
-                            print(f"[SALT DEBUG] salt.cmd returned: type={type(wrapper_results)}, content={wrapper_results}", flush=True)
+                            debug_print(f"[SALT DEBUG] salt.cmd returned: type={type(wrapper_results)}, content={wrapper_results}")
                             targets_confirmed_started = process_wrapper_results(wrapper_results, name, data['group'], 
                                                                                 procname, running, state, chunk)
                             
@@ -941,9 +947,9 @@ def run(name, data, procname, running, state, commands, maintenance, state_updat
                     if use_wrapper:
                         # Use blocking call for wrapper - returns immediately with startup status
                         # Use 30s timeout for wrapper startup (not job timeout)
-                        print(f"[SALT DEBUG] Calling salt.cmd on targets_up={targets_up}, cmdargs={cmdargs}", flush=True)
+                        debug_print(f"[SALT DEBUG] Calling salt.cmd on targets_up={targets_up}, cmdargs={cmdargs}")
                         wrapper_results = salt.cmd(targets_up, 'cmd.run_all', cmdargs, tgt_type='list', timeout=30)
-                        print(f"[SALT DEBUG] salt.cmd returned: type={type(wrapper_results)}, content={wrapper_results}", flush=True)
+                        debug_print(f"[SALT DEBUG] salt.cmd returned: type={type(wrapper_results)}, content={wrapper_results}")
                         targets_confirmed_started = process_wrapper_results(wrapper_results, name, data['group'], 
                                                                             procname, running, state, targets_up)
                         
@@ -974,14 +980,14 @@ def run(name, data, procname, running, state, commands, maintenance, state_updat
         job_state = state[name]
         results = job_state.get('results', {})
         
-        print(f"[SUCCESS EVAL DEBUG] Job {procname}: results keys = {list(results.keys())}", flush=True)
-        print(f"[SUCCESS EVAL DEBUG] Job {procname}: len(results) = {len(results)}", flush=True)
+        debug_print(f"[SUCCESS EVAL DEBUG] Job {procname}: results keys = {list(results.keys())}")
+        debug_print(f"[SUCCESS EVAL DEBUG] Job {procname}: len(results) = {len(results)}")
         
         failed_count = 0
         total_count = 0
         
         for target, result in results.items():
-            print(f"[SUCCESS EVAL DEBUG] Target {target}: retcode={result.get('retcode')}, ret={result.get('ret')}", flush=True)
+            debug_print(f"[SUCCESS EVAL DEBUG] Target {target}: retcode={result.get('retcode')}, ret={result.get('ret')}")
             # Only count targets that have completed (retcode is set and not empty)
             if 'retcode' in result and result['retcode'] != '' and result['retcode'] is not None:
                 total_count += 1
@@ -989,13 +995,13 @@ def run(name, data, procname, running, state, commands, maintenance, state_updat
                 retcode = result['retcode']
                 if retcode != 0 and retcode != '0':
                     failed_count += 1
-                    print(f"[SUCCESS EVAL DEBUG] Target {target}: FAILED with retcode={retcode}", flush=True)
+                    debug_print(f"[SUCCESS EVAL DEBUG] Target {target}: FAILED with retcode={retcode}")
                 else:
-                    print(f"[SUCCESS EVAL DEBUG] Target {target}: SUCCESS with retcode={retcode}", flush=True)
+                    debug_print(f"[SUCCESS EVAL DEBUG] Target {target}: SUCCESS with retcode={retcode}")
             else:
-                print(f"[SUCCESS EVAL DEBUG] Target {target}: SKIPPED (retcode not set or empty)", flush=True)
+                debug_print(f"[SUCCESS EVAL DEBUG] Target {target}: SKIPPED (retcode not set or empty)")
         
-        print(f"[SUCCESS EVAL DEBUG] Final counts: total={total_count}, failed={failed_count}, success={total_count - failed_count}", flush=True)
+        debug_print(f"[SUCCESS EVAL DEBUG] Final counts: total={total_count}, failed={failed_count}, success={total_count - failed_count}")
         
         # Job is successful if no targets failed
         success = (failed_count == 0) and (total_count > 0)

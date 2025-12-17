@@ -27,6 +27,12 @@ class UIEndpoint:
         self.cfgserial = ''
         self.tmlserial = ''
     
+    def debug_print(self, message, flush=True):
+        """Print debug message only if debug mode is enabled"""
+        # Check if saltpeter_config exists and has debug flag
+        if 'saltpeter_config' in self.config and self.config['saltpeter_config'].get('debug', False):
+            print(message, flush=flush)
+    
     async def handle_websocket_http(self, request):
         """Handle WebSocket upgrade requests on HTTP server"""
         ws = web.WebSocketResponse()
@@ -205,9 +211,9 @@ class UIEndpoint:
                     
                     # Debug: log what state contains
                     if 'results' in srcron:
-                        print(f"[UI DEBUG] Sending cron {cron}: {len(srcron['results'])} machines", flush=True)
+                        self.debug_print(f"[UI DEBUG] Sending cron {cron}: {len(srcron['results'])} machines")
                     else:
-                        print(f"[UI DEBUG] Sending cron {cron}: NO RESULTS", flush=True)
+                        self.debug_print(f"[UI DEBUG] Sending cron {cron}: NO RESULTS")
                     
                     if 'next_run' in srcron:
                         srcron['next_run'] = srcron['next_run'].isoformat()
@@ -247,7 +253,7 @@ class UIEndpoint:
                                 output_positions[cron][machine] = len(full_output)
                             elif len(full_output) < last_position:
                                 # Output was reset (new run) - reset position to 0
-                                print(f'[OUTPUT DEBUG] Output smaller than position - resetting: {len(full_output)} < {last_position}')
+                                self.debug_print(f'[OUTPUT DEBUG] Output smaller than position - resetting: {len(full_output)} < {last_position}')
                                 output_positions[cron][machine] = 0
                                 # Resend from beginning
                                 if len(full_output) > 0:
