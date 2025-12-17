@@ -11,7 +11,6 @@ Saltpeter is a distributed cron implementation using SaltStack as the remote exe
 - **🛠️ Maintenance Mode** - Global and per-machine job control for operational safety
 - **🎯 Flexible Targeting** - Leverage Salt's powerful targeting (glob, PCRE, compound, grains, etc.)
 - **🌐 HTTP API** - Full REST API for job control and monitoring
-- **⚡ Batch Execution** - Control concurrency across large server fleets
 - **⏱️ Timeout Handling** - Configurable timeouts with graceful termination (SIGTERM → SIGKILL)
 - **🔄 Job Control** - Kill running jobs from UI/API with immediate response
 - **📊 Centralized Logging** - Optional Elasticsearch/OpenSearch integration
@@ -19,19 +18,13 @@ Saltpeter is a distributed cron implementation using SaltStack as the remote exe
 ## Table of Contents
 
 - [Installation](#installation)
+- [Saltpeter Configuration](#saltpeter-configuration)
 - [Quick Start](#quick-start)
-- [Configuration](#configuration)
-  - [Job Configuration](#job-configuration)
-  - [Maintenance Mode](#maintenance-mode)
-- [Architecture](#architecture)
-  - [WebSocket Communication](#websocket-communication)
-  - [Security Model](#security-model)
-  - [Exit Codes](#exit-codes)
-- [Command-Line Options](#command-line-options)
+- [Job Configuration](#job-configuration)
+- [Maintenance Mode](#maintenance-mode)
 - [HTTP API](#http-api)
-- [Deployment](#deployment)
+- [Architecture](#architecture)
 - [Troubleshooting](#troubleshooting)
-- [Development](#development)
 
 
 ## Installation
@@ -67,7 +60,7 @@ After=network.target salt-master.service
 
 [Service]
 User=root
-ExecStart=/usr/local/bin/saltpeter -a -p 8888 -w 8889 --websocket-host 0.0.0.0 --wrapper-path /usr/local/bin/sp_wrapper.py
+ExecStart=/usr/local/bin/saltpeter -c /etc/saltpeter
 Restart=on-failure
 KillSignal=SIGTERM
 SyslogIdentifier=saltpeter
@@ -75,6 +68,8 @@ SyslogIdentifier=saltpeter
 [Install]
 WantedBy=multi-user.target
 ```
+
+**Note:** Saltpeter now uses YAML-based configuration. Command-line options have been removed except for `-c` (config directory) and `-v` (version).
 
 ### Directory Setup
 
@@ -130,6 +125,80 @@ systemctl status saltpeter
 ```
 
 
+## Saltpeter Configuration
+
+Create a `saltpeter_config` section in any YAML file in your config directory (e.g., `/etc/saltpeter/config.yaml`):
+
+```yaml
+saltpeter_config:
+  # Logging
+  logdir: '/var/log/saltpeter'
+  debug: false  # Enable verbose debug logging (hot-reloadable)
+  
+  # UI WebSocket API
+  api_ws: true
+  api_ws_port: 8888
+  api_ws_bind_addr: '0.0.0.0'
+  
+  # Machines WebSocket (for wrapper connections)
+  machines_ws_port: 8889
+  machines_ws_bind_addr: '0.0.0.0'
+  default_saltpeter_server_host: 'saltpeter.example.com'  # Hostname wrappers connect to
+  
+  # Wrapper deployment
+  default_wrapper_path: '/usr/local/bin/sp_wrapper.py'
+  default_wrapper_loglevel: 'normal'  # normal, debug, or off
+  default_wrapper_logdir: '/var/log/sp_wrapper'
+  
+  # Elasticsearch logging (optional)
+  elasticsearch: 'http://elasticsearch:9200'
+  elasticsearch_index: 'saltpeter'
+  
+  # OpenSearch logging (optional)
+  opensearch: 'http://opensearch:9200'
+  opensearch_index: 'saltpeter'
+```
+
+### Configuration Parameters
+
+| Parameter | Description | Default | Reload |
+|-----------|-------------|---------|--------|
+| `logdir` | Directory for log files | `/var/log/saltpeter` | 🔄 Runtime |
+| `debug` | Enable verbose debug logging | `false` | 🔄 Runtime |
+| `api_ws` | Enable UI WebSocket API | `false` | 🚫 Startup |
+| `api_ws_port` | UI API port | `8888` | 🚫 Startup |
+| `api_ws_bind_addr` | UI API bind address | `0.0.0.0` | 🚫 Startup |
+| `machines_ws_port` | Machines WebSocket port | `8889` | 🚫 Startup |
+| `machines_ws_bind_addr` | Machines WebSocket bind address | `0.0.0.0` | 🚫 Startup |
+| `default_saltpeter_server_host` | Hostname for wrappers to connect | System hostname | 🔄 Runtime |
+| `default_wrapper_path` | Default wrapper path on minions | `/usr/local/bin/sp_wrapper.py` | 🔄 Runtime |
+| `default_wrapper_loglevel` | Wrapper log level: `normal`, `debug`, `off` | `normal` | 🔄 Runtime |
+| `default_wrapper_logdir` | Directory for wrapper log files on minions | `/var/log/sp_wrapper` | 🔄 Runtime |
+| `elasticsearch` | Elasticsearch URL for logging | Empty (disabled) | 🚫 Startup |
+| `elasticsearch_index` | Elasticsearch index prefix | `saltpeter` | 🔄 Runtime |
+| `opensearch` | OpenSearch URL for logging | Empty (disabled) | 🚫 Startup |
+| `opensearch_index` | OpenSearch index prefix | `saltpeter` | 🔄 Runtime |
+
+**Debug Logging:**
+
+With `debug: false` (default), only essential information is logged. With `debug: true`, additional verbose logging includes heartbeats, WebSocket message details, ACKs, and connection events. The debug flag can be changed at runtime without restart.
+
+**Wrapper Logging:**
+
+- `normal` (default): Logs job start, completion, and errors to `/var/log/sp_wrapper/{job_name}.log`
+- `debug`: Logs everything including heartbeats and WebSocket details
+- `off`: No wrapper logging (useful for high-frequency jobs)
+
+Wrapper logging can be overridden per-job:
+
+```yaml
+my_job:
+  # ... other config ...
+  wrapper_loglevel: 'debug'
+  wrapper_logdir: '/var/log/my_job'
+```
+
+
 ## Quick Start
 
 ### Create Your First Cron Job
@@ -174,20 +243,18 @@ View logs:
 tail -f /var/log/saltpeter/saltpeter.log
 ```
 
-Or use the HTTP API (if started with `-a`):
+Or use the HTTP API (if enabled):
 
 ```bash
 curl http://localhost:8888/status
 ```
 
 
-## Configuration
+## Job Configuration
 
-### Job Configuration
+Jobs are defined in YAML files in `/etc/saltpeter/`.
 
-Jobs are defined in YAML files in `/etc/saltpeter/` (or the directory specified with `-c`).
-
-#### Complete Example
+### Complete Example
 
 ```yaml
 backup_databases:
@@ -217,9 +284,6 @@ backup_databases:
   targets: 'db-server*'
   target_type: 'glob'
   
-  # Concurrency control
-  number_of_targets: 0  # 0 = all targets, 1 = one random target, N = N random targets
-  
   # Timeout handling
   timeout: 3600  # 1 hour
   
@@ -227,7 +291,7 @@ backup_databases:
   wrapper_path: '/opt/custom/sp_wrapper.py'
 ```
 
-#### Schedule Fields
+### Schedule Fields
 
 All fields use standard cron syntax with extensions:
 
@@ -258,7 +322,7 @@ dow: '1-5'
 dom: '1'
 ```
 
-#### Targeting
+### Targeting
 
 Saltpeter uses Salt's targeting system. Available `target_type` values:
 
@@ -294,7 +358,7 @@ Saltpeter uses Salt's targeting system. Available `target_type` values:
 
 See [Salt Targeting Documentation](https://docs.saltproject.io/en/latest/topics/targeting/) for details.
 
-#### Environment Variables
+### Environment Variables
 
 Custom environment variables can be passed to jobs using the `env` configuration:
 
@@ -308,54 +372,20 @@ my_job:
     PYTHONUNBUFFERED: '1'  # Force Python unbuffered output
 ```
 
-**Important Notes:**
+Saltpeter automatically sets several environment variables:
+- `SP_WEBSOCKET_URL`, `SP_JOB_NAME`, `SP_JOB_INSTANCE`, `SP_COMMAND`, `SP_TIMEOUT`, etc.
+- Custom variables from the `env` section
 
-- All values are converted to strings
-- Variables are available to the subprocess executing the command
-- Saltpeter automatically sets `PYTHONUNBUFFERED=1` for Python jobs to ensure real-time output streaming
-- The following variables are always set by Saltpeter:
-  - `SP_WEBSOCKET_URL` - WebSocket server URL
-  - `SP_JOB_NAME` - Job name from YAML config
-  - `SP_JOB_INSTANCE` - Unique instance identifier (includes timestamp)
-  - `SP_JOB_INSTANCE_NAME` - Alias for `SP_JOB_INSTANCE` (backwards compatibility)
-  - `SP_COMMAND` - The command being executed
-  - `SP_CWD` - Working directory (if configured)
-  - `SP_USER` - User to run as (if configured)
-  - `SP_TIMEOUT` - Job timeout in seconds (if configured)
-
-**Example - Using environment variables in your script:**
-
-```bash
-#!/bin/bash
-# backup.sh
-echo "Job: $SP_JOB_NAME"
-echo "Instance: $SP_JOB_INSTANCE"
-echo "Backup type: $BACKUP_TYPE"
-echo "Retention: $RETENTION_DAYS days"
-# ... perform backup
-```
-
-#### Timeout Behavior
+### Timeout Behavior
 
 When a job exceeds the `timeout` value:
 
-1. Job is marked as timed out
-2. Wrapper receives kill signal
-3. Process receives SIGTERM (graceful shutdown)
-4. After 5 seconds, process receives SIGKILL (force kill)
-5. Job completes with exit code `124`
+1. Process receives SIGTERM (graceful shutdown)
+2. After 5 seconds, process receives SIGKILL (force kill)
+3. Job completes with exit code `124`
 
-#### Wrapper Path Configuration
 
-By default, jobs use `/usr/local/bin/sp_wrapper.py`. Override per-job if needed:
-
-```yaml
-special_job:
-  wrapper_path: '/opt/custom/sp_wrapper.py'
-  # ... rest of configuration
-```
-
-### Maintenance Mode
+## Maintenance Mode
 
 Control which machines can execute jobs using maintenance mode.
 
@@ -395,115 +425,23 @@ Maintenance configuration is hot-reloaded - changes take effect immediately with
 
 Saltpeter uses WebSocket-based communication to eliminate Salt's timeout limitations and provide real-time job monitoring.
 
-#### How It Works
+### How It Works
 
-```
-┌─────────────┐                ┌─────────────┐                ┌─────────────┐
-│  Saltpeter  │                │ Salt Master │                │   Minion    │
-│   Master    │                │             │                │             │
-└──────┬──────┘                └──────┬──────┘                └──────┬──────┘
-       │                              │                              │
-       │ 1. Deploy wrapper via Salt   │                              │
-       ├─────────────────────────────>│                              │
-       │                              │ 2. Execute wrapper           │
-       │                              ├─────────────────────────────>│
-       │                              │                              │
-       │                              │ 3. Return immediately        │
-       │                              │<─────────────────────────────┤
-       │                              │                              │
-       │                 4. WebSocket connection (port 8889)         │
-       │<──────────────────────────────────────────────────────────>│
-       │                              │                              │
-       │ 5. Stream: start, output, heartbeats, complete              │
-       │<──────────────────────────────────────────────────────────┤
-       │                              │                              │
-       │ 6. Control: kill signal      │                              │
-       ├──────────────────────────────────────────────────────────>│
-       │                              │                              │
-```
+1. Saltpeter deploys wrapper script to minions via Salt
+2. Wrapper executes and returns immediately to Salt (no timeout)
+3. Wrapper establishes WebSocket connection to Saltpeter server
+4. Real-time streaming of start, output, heartbeats, and completion
+5. Server can send kill signals to terminate jobs
 
-#### Message Types
-
-**Wrapper → Server:**
-
-1. **Connect** - Initial connection established
-2. **Start** - Job started, includes PID
-3. **Output** - Real-time stdout/stderr streaming
-4. **Heartbeat** - Sent every 5 seconds to prove wrapper is alive
-5. **Complete** - Job finished with exit code and full output
-6. **Error** - Error occurred during execution
-
-**Server → Wrapper:**
-
-1. **Kill** - Terminate the running job
-
-#### Heartbeat Monitoring
+### Heartbeat Monitoring
 
 - Wrapper sends heartbeat every **5 seconds**
 - Server expects heartbeat within **15 seconds** (3 missed beats)
-- If heartbeat times out:
-  - Job marked as failed with exit code `253`
-  - Output appends: `[SALTPETER ERROR: Job lost connection - no heartbeat for X seconds]`
-  - Job removed from running list
+- If heartbeat times out, job is marked as failed with exit code `253`
 
-This provides automatic cleanup if wrappers crash or lose network connectivity.
+### Security
 
-#### Job Control (Kill Functionality)
-
-Jobs can be terminated via HTTP API or UI:
-
-```bash
-# Kill a running job
-curl -X POST http://localhost:8888/kill -d '{"job": "backup_databases"}'
-```
-
-**Kill Process:**
-
-1. API adds kill command to shared queue
-2. WebSocket server detects command
-3. Server sends `kill` message to all wrapper connections for that job
-4. Wrapper terminates subprocess:
-   - Sends SIGTERM (graceful shutdown)
-   - Waits 5 seconds
-   - If still running, sends SIGKILL (force kill)
-5. Wrapper sends completion message with exit code `143`
-6. Job state updated and removed from running list
-
-### Security Model
-
-#### Environment Variables (Not Command-Line Args)
-
-Saltpeter passes configuration to wrappers via **environment variables** instead of command-line arguments.
-
-**Why this matters:**
-
-```bash
-# ❌ BAD: Password visible in process list
-$ ps aux | grep wrapper
-root  12345  python3 wrapper.py ws://server:8889 'mysqldump -pSecretPass123 ...'
-
-# ✅ GOOD: No sensitive data exposed
-$ ps aux | grep wrapper
-root  12345  python3 /usr/local/bin/sp_wrapper.py
-```
-
-**Environment variables used:**
-
-- `SP_WEBSOCKET_URL` - WebSocket server connection URL
-- `SP_JOB_NAME` - Name of the cron job
-- `SP_JOB_INSTANCE` - Unique instance identifier
-- `SP_COMMAND` - **The actual command** (may contain passwords, API keys, etc.)
-- `SP_MACHINE_ID` - Hostname/identifier
-- `SP_CWD` - Working directory
-- `SP_USER` - User to run as
-- `SP_TIMEOUT` - Timeout in seconds
-
-**Additional benefits:**
-
-- No shell escaping issues
-- No command-line length limits
-- Easy to extend without changing interfaces
-- Cleaner code
+Saltpeter passes configuration via **environment variables** instead of command-line arguments, preventing credential leakage in process listings (`ps aux`). Commands containing passwords or API keys are never visible in the process list
 
 ### Exit Codes
 
@@ -517,46 +455,9 @@ root  12345  python3 /usr/local/bin/sp_wrapper.py
 | Other | Command exit code | Exit code from the actual command |
 
 
-## Command-Line Options
-
-```bash
-saltpeter [options]
-```
-
-### Options
-
-| Option | Description | Default |
-|--------|-------------|---------|
-| `-c DIR`, `--configdir DIR` | Configuration directory | `/etc/saltpeter` |
-| `-l DIR`, `--logdir DIR` | Log directory | `/var/log/saltpeter` |
-| `-a`, `--api` | Start HTTP API server | Disabled |
-| `-p PORT`, `--port PORT` | HTTP API port | `8888` |
-| `-w PORT`, `--websocket-port PORT` | WebSocket server port | `8889` |
-| `--websocket-host HOST` | WebSocket bind address | `0.0.0.0` |
-| `--wrapper-path PATH` | Default wrapper path on minions | `/usr/local/bin/sp_wrapper.py` |
-| `-e URL`, `--elasticsearch URL` | Elasticsearch host for logging | None |
-| `-o URL`, `--opensearch URL` | OpenSearch host for logging | None |
-| `-i NAME`, `--index NAME` | ES/OpenSearch index name | `saltpeter` |
-| `-v`, `--version` | Print version and exit | - |
-
-### Example
-
-```bash
-# Full production setup
-saltpeter \
-  -c /etc/saltpeter \
-  -l /var/log/saltpeter \
-  -a -p 8888 \
-  -w 8889 --websocket-host 0.0.0.0 \
-  --wrapper-path /usr/local/bin/sp_wrapper.py \
-  -e http://elasticsearch:9200 \
-  -i saltpeter-prod
-```
-
-
 ## HTTP API
 
-When started with `-a`, Saltpeter provides a REST API on port 8888 (configurable with `-p`).
+When `api_ws` is enabled in the configuration, Saltpeter provides a REST API (default port 8888).
 
 ### Endpoints
 
@@ -643,45 +544,7 @@ Connect to `ws://localhost:8888/ws` for real-time job updates.
 ```
 
 
-## Deployment
 
-### Docker Deployment
-
-See `examples/docker-compose.yml` for a complete Docker setup with Salt master and minions.
-
-```bash
-cd examples
-docker-compose up
-```
-
-This starts:
-- 1 container with Salt master and Saltpeter
-- 2 Salt minion containers
-- Automatic minion key acceptance
-- Example jobs from `examples/config/`
-
-### Production Deployment Checklist
-
-- [ ] Install Saltpeter on Salt master
-- [ ] Deploy wrapper script to all minions
-- [ ] Configure firewall (port 8889)
-- [ ] Create configuration directory `/etc/saltpeter`
-- [ ] Create log directory `/var/log/saltpeter`
-- [ ] Set up systemd service
-- [ ] Configure log rotation
-- [ ] Set up monitoring/alerting on logs
-- [ ] Test with a simple job
-- [ ] Configure Elasticsearch/OpenSearch (optional)
-- [ ] Set up backup of configuration files
-
-### High Availability
-
-For HA setups:
-
-1. **Multiple Saltpeter instances** - Run on different hosts with shared config
-2. **Load balancer** - Distribute WebSocket connections
-3. **Shared state** - Use Redis or similar for shared state (requires code changes)
-4. **Failover** - Use keepalived or similar for automatic failover
 
 
 ## Troubleshooting
@@ -720,184 +583,22 @@ salt '*' cmd.run 'test -f /usr/local/bin/sp_wrapper.py && echo OK'
 salt 'minion1' cmd.run 'timeout 5 bash -c "</dev/tcp/saltpeter-host/8889" && echo "Port open" || echo "Port closed"'
 ```
 
-**Check for heartbeat in logs:**
+**Enable debug logging:**
 
-```bash
-grep "Heartbeat" /var/log/saltpeter/saltpeter.log
-```
+Set `debug: true` in `saltpeter_config` YAML, no restart needed.
 
 ### WebSocket Connection Issues
 
-**Verify firewall:**
+**Verify firewall and port:**
 
 ```bash
-# On Saltpeter server
 firewall-cmd --list-ports | grep 8889
-
-# Test from minion
-telnet saltpeter-host 8889
-```
-
-**Check WebSocket server:**
-
-```bash
 netstat -tlnp | grep 8889
 ```
 
-**Enable debug logging:**
-
-Modify `websocket_server.py` to add more logging, or check existing logs:
+**Test from minion:**
 
 ```bash
-grep "WebSocket" /var/log/saltpeter/saltpeter.log
+telnet saltpeter-host 8889
 ```
-
-### Kill Not Working
-
-**Verify job is running:**
-
-```bash
-curl http://localhost:8888/status | jq '.running'
-```
-
-**Check if kill command sent:**
-
-```bash
-curl -X POST http://localhost:8888/kill -d '{"job": "job_name"}'
-```
-
-**Check wrapper received kill:**
-
-Look for completion with exit code 143:
-
-```bash
-grep "retcode.*143" /var/log/saltpeter/job_name.log
-```
-
-### Heartbeat Timeout Issues
-
-**Check heartbeat interval:**
-
-Wrappers send heartbeat every 5 seconds. Check logs:
-
-```bash
-grep "Heartbeat from" /var/log/saltpeter/saltpeter.log | tail -20
-```
-
-**Verify timeout detection:**
-
-Manually kill a wrapper process and watch logs:
-
-```bash
-# On minion
-pkill -9 -f sp_wrapper.py
-
-# On Saltpeter (wait 15 seconds)
-grep "no heartbeat" /var/log/saltpeter/saltpeter.log
-```
-
-Should see job marked as failed with retcode 253.
-
-
-## Development
-
-### Development with Docker
-
-Use the provided Docker environment:
-
-```bash
-cd examples
-docker-compose up -d
-
-# Watch logs
-docker-compose logs -f saltpeter
-
-# Execute commands in container
-docker-compose exec saltpeter bash
-```
-
-### Running Tests
-
-```bash
-# Test WebSocket server
-python3 test_websocket.py
-
-# Test kill functionality
-python3 test_kill_job.py <job_name>
-```
-
-### Project Structure
-
-```
-saltpeter/
-├── __init__.py           # Package initialization
-├── main.py               # Main orchestration, job scheduling
-├── api.py                # HTTP API server
-├── websocket_server.py   # WebSocket server for wrapper communication
-├── wrapper.py            # Wrapper script (deployed to minions)
-├── timeline.py           # Cron schedule calculations
-└── version.py            # Version information
-```
-
-### Key Functions
-
-**main.py:**
-- `run()` - Execute a scheduled job
-- `processresults_websocket()` - Wait for WebSocket results with timeout/heartbeat monitoring
-- `main()` - Main event loop, schedule checking
-
-**websocket_server.py:**
-- `handle_client()` - Handle wrapper connections and messages
-- `check_commands()` - Background task for kill commands
-
-**wrapper.py:**
-- `run_command_and_stream()` - Execute command and stream output
-- Listen for kill signals while running
-
-### Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Test with Docker environment
-5. Submit a pull request
-
-### Code Style
-
-- Follow PEP 8
-- Use type hints where appropriate
-- Add docstrings to functions
-- Keep functions focused and small
-
-
-## License
-
-See LICENSE file for details.
-
-
-## Support
-
-- GitHub Issues: https://github.com/syscollective/saltpeter/issues
-- Documentation: See this README
-
-
-## Changelog
-
-### Version 2.0 (Current)
-
-- ✅ WebSocket-based job execution (eliminates Salt timeouts)
-- ✅ Bidirectional communication (kill signals from server)
-- ✅ Heartbeat monitoring (15-second timeout detection)
-- ✅ Environment variable configuration (security improvement)
-- ✅ Maintenance mode (global and per-machine)
-- ✅ Configurable wrapper paths
-- ✅ Improved timeout handling (SIGTERM → SIGKILL)
-- ✅ Real-time output streaming
-- ✅ HTTP API for job control
-
-### Version 1.x (Legacy)
-
-- Salt-based polling execution
-- Basic timeout handling
-- Limited job control
 
