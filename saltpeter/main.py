@@ -15,10 +15,37 @@ from crontab import CronTab
 import multiprocessing
 #from pprint import pprint
 
+# Global debug flag (set from params after config load)
+debug_enabled = False
+
+def debug_print(message, flush=True):
+    """Print message only if debug mode is enabled"""
+    if debug_enabled:
+        print(message, flush=flush)
+
 def readconfig(configdir):
     global bad_files
     crons = {}
     saltpeter_maintenance = {'global': False, 'machines': []}
+    saltpeter_config_defaults = {
+        'logdir': '/var/log/saltpeter',
+        'debug': False,
+        'api_ws': False,
+        'api_ws_port': 8888,
+        'api_ws_bind_addr': '0.0.0.0',
+        'machines_ws_port': 8889,
+        'machines_ws_bind_addr': '0.0.0.0',
+        'default_saltpeter_server_host': os.uname().nodename,
+        'default_wrapper_path': '/usr/local/bin/sp_wrapper.py',
+        'default_wrapper_loglevel': 'normal',
+        'default_wrapper_logdir': '/var/log/sp_wrapper',
+        'elasticsearch': '',
+        'opensearch': '',
+        'elasticsearch_index': 'saltpeter',
+        'opensearch_index': 'saltpeter'
+    }
+    saltpeter_config = {}
+    
     for f in os.listdir(configdir):
         if not re.match('^.+\.yaml$',f):
             continue
@@ -33,6 +60,9 @@ def readconfig(configdir):
                         saltpeter_maintenance['global'] = loaded_config[cron]['global']
                     if 'machines' in loaded_config[cron] and isinstance(loaded_config[cron]['machines'], list):
                         saltpeter_maintenance['machines'] = loaded_config[cron]['machines']
+                elif cron == 'saltpeter_config':
+                    # Load global saltpeter configuration
+                    saltpeter_config.update(loaded_config[cron])
                 elif parsecron(cron,loaded_config[cron]) is not False:
                     add_config[cron] = loaded_config[cron]
                     add_config[cron]['group'] = group 
@@ -43,7 +73,13 @@ def readconfig(configdir):
             if f not in bad_files:
                 print('[MAIN] Could not parse file %s: %s' % (f,e), flush=True)
                 bad_files.append(f)
-    return (crons, saltpeter_maintenance)
+    
+    # Apply defaults for any missing saltpeter_config keys
+    for key, default_value in saltpeter_config_defaults.items():
+        if key not in saltpeter_config:
+            saltpeter_config[key] = default_value
+    
+    return (crons, saltpeter_maintenance, saltpeter_config)
 
 
 def parsecron(name, data, time=datetime.now(timezone.utc)):
@@ -675,10 +711,15 @@ def run(name, data, procname, running, state, commands, maintenance, state_updat
     # Prepare command arguments based on wrapper usage
     if use_wrapper:
         # Get wrapper script path - use job-specific path if provided, otherwise use default
-        wrapper_path = data.get('wrapper_path', args.wrapper_path)
+        wrapper_path = data.get('wrapper_path', params.default_wrapper_path)
         
         # Prepare environment variables for the wrapper
-        websocket_url = f"ws://{args.websocket_host}:{args.websocket_port}"
+        saltpeter_server_host = data.get('saltpeter_server_host', params.default_saltpeter_server_host)
+        websocket_url = f"ws://{saltpeter_server_host}:{params.machines_ws_port}"
+        
+        # Get wrapper logging configuration - use job-specific values if provided, otherwise use defaults
+        wrapper_loglevel = data.get('wrapper_loglevel', params.default_wrapper_loglevel)
+        wrapper_logdir = data.get('wrapper_logdir', params.default_wrapper_logdir)
         
         # Build environment variables to pass to the wrapper
         wrapper_env = {
@@ -687,6 +728,8 @@ def run(name, data, procname, running, state, commands, maintenance, state_updat
             'SP_JOB_INSTANCE_NAME': procname,  # For backwards compatibility
             'SP_JOB_INSTANCE': procname,
             'SP_COMMAND': data['command'],
+            'SP_WRAPPER_LOGLEVEL': wrapper_loglevel,
+            'SP_WRAPPER_LOGDIR': wrapper_logdir,
             'PYTHONUNBUFFERED': '1'  # Force Python subprocesses to be unbuffered
         }
         
@@ -972,7 +1015,7 @@ def run(name, data, procname, running, state, commands, maintenance, state_updat
         out=f"Completed: {total_count - failed_count}/{total_count} targets successful")
 
 def debuglog(content):
-    logfile = open(args.logdir+'/'+'debug.log','a')
+    logfile = open(params.logdir+'/'+'debug.log','a')
     logfile.write(content)
     logfile.flush()
     logfile.close()
@@ -980,7 +1023,7 @@ def debuglog(content):
 
 def log(what, cron, group, instance, time, machine='', code=0, out='', status=''):
     try:
-        logfile_name = args.logdir+'/'+cron+'.log'
+        logfile_name = params.logdir+'/'+cron+'.log'
         logfile = open(logfile_name,'a')
     except Exception as e:
         print(f"[MAIN] Could not open logfile {logfile_name}: ", e, flush=True)
@@ -1010,7 +1053,7 @@ def log(what, cron, group, instance, time, machine='', code=0, out='', status=''
     if use_es:
         doc = { 'job_name': cron, "group": group, "job_instance": instance, '@timestamp': time,
                 'return_code': code, 'machine': machine, 'output': out, 'msg_type': what } 
-        index_name = 'saltpeter-%s' % date.today().strftime('%Y.%m.%d')
+        index_name = '%s-%s' % (params.elasticsearch_index, date.today().strftime('%Y.%m.%d'))
         try:
             #es.indices.create(index=index_name, ignore=400)
             es.index(index=index_name, doc_type='_doc', body=doc, request_timeout=20)
@@ -1021,7 +1064,7 @@ def log(what, cron, group, instance, time, machine='', code=0, out='', status=''
     if use_opensearch:
         doc = { 'job_name': cron, "group": group, "job_instance": instance, '@timestamp': time,
                 'return_code': code, 'machine': machine, 'output': out, 'msg_type': what } 
-        index_name = 'saltpeter-%s' % date.today().strftime('%Y.%m.%d')
+        index_name = '%s-%s' % (params.opensearch_index, date.today().strftime('%Y.%m.%d'))
         try:
             #es.indices.create(index=index_name, ignore=400)
             opensearch.index(index=index_name, body=doc, request_timeout=20)
@@ -1093,46 +1136,27 @@ def gettimeline(client, start_date, end_date, req_id, timeline, index_name):
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument('-c', '--configdir', default='/etc/saltpeter', help='Configuration directory location')
+    parser.add_argument('-v', '--version', action='store_true', help='Print version and exit')
+    cli_args = parser.parse_args()
 
-    parser.add_argument('-c', '--configdir', default='/etc/saltpeter',\
-            help='Configuration directory location')
-
-    parser.add_argument('-l', '--logdir', default='/var/log/saltpeter',\
-            help='Log directory location')
-
-    parser.add_argument('-a', '--api', action='store_true' ,\
-            help='Start the http api')
-
-    parser.add_argument('-p', '--port', type=int, default=8888,\
-            help='HTTP api port')
-
-    parser.add_argument('-w', '--websocket-port', type=int, default=8889,\
-            help='WebSocket server port for job communication')
-
-    parser.add_argument('--websocket-host', default='0.0.0.0',\
-            help='WebSocket server host')
-
-    parser.add_argument('--wrapper-path', default='/usr/local/bin/sp_wrapper.py',\
-            help='Default path to wrapper script on minions (default: /usr/local/bin/sp_wrapper.py)')
-
-    parser.add_argument('-e', '--elasticsearch', default='',\
-            help='Elasticsearch host')
-
-    parser.add_argument('-o', '--opensearch', default='',\
-            help='Opensearch host')
-
-    parser.add_argument('-i', '--index', default='saltpeter',\
-            help='Elasticsearch/Opensearch index name')
-
-    parser.add_argument('-v', '--version', action='store_true' ,\
-            help='Print version and exit')
-
-    global args
-    args = parser.parse_args()
-
-    if args.version:
+    if cli_args.version:
         print("[MAIN] Saltpeter version ", version.__version__)
         exit(0)
+    
+    # Load config from YAML (includes defaults in readconfig)
+    global params
+    params = type('Args', (), {'configdir': cli_args.configdir})()
+    
+    (_, _, yaml_config) = readconfig(params.configdir)
+    
+    # Apply YAML config to params object
+    for key, value in yaml_config.items():
+        setattr(params, key, value)
+    
+    # Set global debug flag
+    global debug_enabled
+    debug_enabled = params.debug
 
 
     global bad_crons
@@ -1165,40 +1189,57 @@ def main():
     # Start the WebSocket server for machine communication (pass commands queue for bidirectional communication)
     ws_server = multiprocessing.Process(
         target=machines_endpoint.start_websocket_server,
-        args=('0.0.0.0', args.websocket_port, state, running, statelocks, log, commands, state_update_queues),
+        args=(params.machines_ws_bind_addr, params.machines_ws_port, state, running, statelocks, log, commands, state_update_queues, params.debug),
         name='machines_endpoint'
     )
     ws_server.start()
-    print(f"[MAIN] WebSocket server started on ws://{args.websocket_host}:{args.websocket_port}", flush=True)
+    print(f"[MAIN] Machines WebSocket server listening on {params.machines_ws_bind_addr}:{params.machines_ws_port}, advertising ws://{params.default_saltpeter_server_host}:{params.machines_ws_port}", flush=True)
     
     #start the UI endpoint
-    if args.api:
-        a = multiprocessing.Process(target=ui_endpoint.start, args=(args.port,config,running,state,commands,bad_crons,timeline), name='ui_endpoint')
+    if params.api_ws:
+        a = multiprocessing.Process(target=ui_endpoint.start, args=(params.api_ws_bind_addr,params.api_ws_port,config,running,state,commands,bad_crons,timeline), name='ui_endpoint')
         a.start()
 
-    if args.elasticsearch != '':
+    if params.elasticsearch != '':
         from elasticsearch import Elasticsearch
         use_es = True
         global es
-        es = Elasticsearch(args.elasticsearch, maxsize=50)
+        es = Elasticsearch(params.elasticsearch, maxsize=50)
 
-    if args.opensearch != '':
+    if params.opensearch != '':
         from opensearchpy import OpenSearch
         use_opensearch = True
         global opensearch
-        opensearch = OpenSearch(args.opensearch, maxsize=50, useSSL=False, verify_certs=False)
+        opensearch = OpenSearch(params.opensearch, maxsize=50, useSSL=False, verify_certs=False)
 
 
     #main loop
     prev = datetime.now(timezone.utc)
-    
     while True:
         now = datetime.now(timezone.utc)
         
-        newconfig = readconfig(args.configdir)
-        if ('crons' not in config or config['crons'] != newconfig[0]) or ('maintenance' not in config or config['maintenance'] != newconfig[1]):
-            (config['crons'], config['maintenance']) = newconfig
+        newconfig = readconfig(params.configdir)
+        
+        # Always update crons and maintenance (readconfig handles parse errors per-file)
+        crons_changed = 'crons' not in config or config['crons'] != newconfig[0]
+        maintenance_changed = 'maintenance' not in config or config['maintenance'] != newconfig[1]
+        
+        if crons_changed or maintenance_changed:
+            config['crons'] = newconfig[0]
+            config['maintenance'] = newconfig[1]
             config['serial'] = now.timestamp()
+        
+        # Only update saltpeter_config if present in YAML (keep old if missing/empty)
+        yaml_config = newconfig[2]
+        if yaml_config:
+            saltpeter_config_changed = 'saltpeter_config' not in config or config['saltpeter_config'] != yaml_config
+            if saltpeter_config_changed:
+                config['saltpeter_config'] = yaml_config
+                # Update params from YAML config
+                for key, value in yaml_config.items():
+                    setattr(params, key, value)
+                # Update global debug flag if changed
+                debug_enabled = params.debug
         
         # timeline
         for cmd in commands:
@@ -1206,13 +1247,14 @@ def main():
                 timeline_start_date = cmd['get_timeline']['start_date']
                 timeline_end_date = cmd['get_timeline']['end_date']
                 timeline_id = cmd['get_timeline']['id']
-                index_name = 'saltpeter*'
                 procname = 'timeline'
                 if use_es:
+                    index_name = '%s*' % params.elasticsearch_index
                     p_timeline = multiprocessing.Process(target=gettimeline,\
                             args=(es,timeline_start_date, timeline_end_date, timeline_id, timeline, index_name), name=procname)
                     p_timeline.start()
                 if use_opensearch:
+                    index_name = '%s*' % params.opensearch_index
                     p_timeline = multiprocessing.Process(target=gettimeline,\
                             args=(opensearch,timeline_start_date, timeline_end_date, timeline_id, timeline, index_name), name=procname)
                     p_timeline.start()

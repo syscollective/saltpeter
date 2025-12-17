@@ -13,7 +13,8 @@ from .version import __version__
 
 
 class UIEndpoint:
-    def __init__(self, port, config, running, state, commands, bad_crons, timeline):
+    def __init__(self, bind_addr, port, config, running, state, commands, bad_crons, timeline):
+        self.bind_addr = bind_addr
         self.port = port
         self.config = config
         self.running = running
@@ -388,10 +389,10 @@ class UIEndpoint:
         
         runner = web.AppRunner(app)
         await runner.setup()
-        site = web.TCPSite(runner, '0.0.0.0', self.port)
+        site = web.TCPSite(runner, self.bind_addr, self.port)
         await site.start()
         
-        print(f"[UI WS] Endpoint started on port {self.port} (HTTP + WebSocket on /ws)")
+        print(f"[UI WS] API WebSocket server listening on {self.bind_addr}:{self.port} (HTTP + WebSocket on /ws)")
         
         # Start broadcast task
         broadcast_task = asyncio.create_task(self.broadcast_updates())
@@ -404,7 +405,7 @@ class UIEndpoint:
         asyncio.run(self.start_servers())
 
 
-def start(port, config, running, state, commands, bad_crons, timeline):
+def start(bind_addr, port, config, running, state, commands, bad_crons, timeline):
     """Start the UI endpoint server"""
-    server = UIEndpoint(port, config, running, state, commands, bad_crons, timeline)
+    server = UIEndpoint(bind_addr, port, config, running, state, commands, bad_crons, timeline)
     server.run()

@@ -16,7 +16,8 @@ Environment Variables:
     SP_USER - User to run command as (optional)
     SP_TIMEOUT - Command timeout in seconds (optional)
     SP_OUTPUT_INTERVAL_MS - Minimum interval between output messages in milliseconds (optional, default: 1000)
-    SP_DEBUG_LOG - Path to debug log file for wrapper troubleshooting (optional, e.g., /tmp/sp_wrapper_debug.log)
+    SP_WRAPPER_LOGLEVEL - Wrapper logging level: 'normal', 'debug', 'off' (optional, default: 'normal')
+    SP_WRAPPER_LOGDIR - Directory for wrapper log files (optional, default: '/var/log/sp_wrapper')
 """
 
 import asyncio
@@ -55,7 +56,7 @@ except ImportError:
         # Fallback if version.py not accessible
         __version__ = 'unknown'
 
-async def run_command_and_stream(websocket_url, job_name, job_instance, machine_id, command, cwd=None, user=None, timeout=None):
+async def run_command_and_stream(websocket_url, job_name, job_instance, machine_id, command, cwd=None, user=None, timeout=None, loglevel='normal', logdir='/var/log/sp_wrapper'):
     """
     Run command in subprocess and stream output via WebSocket
     Subprocess runs independently - WebSocket retries every 2 seconds if disconnected
@@ -65,12 +66,40 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
     job's configured timeout is reached, at which point the job is killed.
     """
     
+    # Setup wrapper logging
+    log_file = None
+    log_errors = []  # Collect any logging setup errors to send to server
+    
+    if loglevel in ('normal', 'debug'):
+        try:
+            # Create log directory (mkdir -p)
+            os.makedirs(logdir, mode=0o755, exist_ok=True)
+            log_path = os.path.join(logdir, f"{job_name}.log")
+            # Open in append mode
+            log_file = open(log_path, 'a')
+        except Exception as e:
+            log_errors.append(f"Failed to setup wrapper logging to {logdir}/{job_name}.log: {e}")
+    
     # Create logging function with timestamp and prefix
-    log_prefix = f"{job_name}_{job_instance}"
-    def log(msg):
-        """Log message with timestamp and job prefix to stderr"""
+    log_prefix = f"{job_instance}"
+    def log(msg, level='debug'):
+        """Log message with timestamp and job prefix
+        level: 'info' (always logged if not 'off'), 'debug' (only if loglevel='debug')
+        """
+        if loglevel == 'off':
+            return
+        if level == 'debug' and loglevel != 'debug':
+            return
+        
         timestamp = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
-        print(f"{timestamp} [{log_prefix}] {msg}", file=sys.stderr, flush=True)
+        log_line = f"{timestamp} [{log_prefix}] {msg}\n"
+        
+        if log_file:
+            try:
+                log_file.write(log_line)
+                log_file.flush()
+            except:
+                pass  # Ignore write errors, don't break execution
     
     def create_output_messages(output_data, seq_start):
         """Split large output into chunks and create messages. Returns (messages, next_seq)"""
@@ -169,6 +198,9 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
             'timestamp': datetime.now(timezone.utc).isoformat()
         })
         
+        # Log start
+        log(f'Starting job: {command}', level='info')
+        
         # Add start message to pending queue
         pending_messages.append({
             'type': 'start',
@@ -180,6 +212,11 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
             'timestamp': datetime.now(timezone.utc).isoformat()
         })
         
+        # Prepend any log setup errors to output buffer
+        if log_errors:
+            for error in log_errors:
+                output_buffer.append((time.time(), f"[WRAPPER LOG ERROR] {error}\n"))
+        
         # Main loop - runs while process is alive
         while True:
             # Check if process has finished
@@ -189,7 +226,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
             if timeout is not None and not killed:
                 elapsed = time.time() - job_start_time
                 if elapsed > timeout:
-                    log(f'Job timeout exceeded ({elapsed:.1f}s > {timeout}s), terminating process')
+                    log(f'Job timeout exceeded ({elapsed:.1f}s > {timeout}s), terminating process', level='info')
                     killed = True
                     killed_by_timeout = True
                     
@@ -579,8 +616,16 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
             })
             next_seq += 1
         
+        # Log completion
+        status = 'SUCCESS' if final_retcode == 0 else f'FAILED (exit code: {final_retcode})'
+        if killed_by_timeout:
+            status = f'TIMEOUT (killed after {timeout}s, exit code: {final_retcode})'
+        elif process_killed:
+            status = f'KILLED (exit code: {final_retcode})'
+        log(f'Job completed: {status}', level='info')
+        
         # Add completion message to pending queue
-        log(f'Adding completion message: retcode={final_retcode}, pending_count={len(pending_messages)}')
+        log(f'Adding completion message: retcode={final_retcode}, pending_count={len(pending_messages)}', level='debug')
         pending_messages.append({
             'type': 'complete',
             'job_name': job_name,
@@ -689,9 +734,10 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                 if attempt < max_completion_retries - 1:
                     await asyncio.sleep(retry_interval)
         else:
-            log(f'Failed to send completion after {max_completion_retries} attempts')
+            log(f'Failed to send completion after {max_completion_retries} attempts', level='info')
         
     except Exception as e:
+        log(f'Unexpected error in wrapper: {e}', level='info')
         # Make sure process is terminated if it's still running
         if process and process.poll() is None:
             try:
@@ -702,6 +748,13 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                     process.kill()
                 except:
                     pass
+    finally:
+        # Close log file
+        if log_file:
+            try:
+                log_file.close()
+            except:
+                pass
 
 def main():
     # Print version first (always output to stdout for testing/verification)
@@ -768,22 +821,15 @@ def main():
     sys.stdin.close()
     sys.stdout.close()
     
-    # Check if debug logging is enabled (default to /tmp/sp_wrapper_debug.log)
-    debug_log = os.environ.get('SP_DEBUG_LOG', '/tmp/sp_wrapper_debug.log')
+    # Close stderr - all logging will be through wrapper log file
+    sys.stderr.close()
     
-    # Redirect stderr to debug log file
-    try:
-        stderr_fd = os.open(debug_log, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
-        os.dup2(stderr_fd, 2)
-        if stderr_fd > 2:
-            os.close(stderr_fd)
-        print(f'Wrapper logging to {debug_log}', file=sys.stderr, flush=True)
-    except Exception as e:
-        # If debug log fails, fall back to /dev/null
-        sys.stderr.close()
+    # Get wrapper logging configuration
+    loglevel = os.environ.get('SP_WRAPPER_LOGLEVEL', 'normal')
+    logdir = os.environ.get('SP_WRAPPER_LOGDIR', '/var/log/sp_wrapper')
     
     # Run the command asynchronously
-    asyncio.run(run_command_and_stream(websocket_url, job_name, job_instance, machine_id, command, cwd, user, timeout))
+    asyncio.run(run_command_and_stream(websocket_url, job_name, job_instance, machine_id, command, cwd, user, timeout, loglevel, logdir))
 
 if __name__ == "__main__":
     main()

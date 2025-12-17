@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 import multiprocessing
 
 class WebSocketJobServer:
-    def __init__(self, host='0.0.0.0', port=8889, state=None, running=None, statelocks=None, log_func=None, commands=None, state_update_queues=None):
+    def __init__(self, host='0.0.0.0', port=8889, state=None, running=None, statelocks=None, log_func=None, commands=None, state_update_queues=None, debug=False):
         self.host = host
         self.port = port
         self.state = state
@@ -23,6 +23,12 @@ class WebSocketJobServer:
         self.connections = {}  # Track active connections by job_instance + machine
         self.command_check_task = None  # Background task for checking kill commands
         self.kill_machine_timeouts = {}  # Track machine kills with grace period: {(job_name, machine): timestamp}
+        self.debug = debug
+    
+    def debug_print(self, message, flush=True):
+        """Print debug message only if debug mode is enabled"""
+        if self.debug:
+            print(message, flush=flush)
     
     def send_state_update(self, job_instance, update_msg):
         """Send state update to job process via queue (non-blocking)"""
@@ -84,7 +90,7 @@ class WebSocketJobServer:
                             'last_acked_seq': -1,    # Last sequence we acknowledged
                             'pending_acks': []       # Sequences pending acknowledgement
                         }
-                        print(f"[MACHINES WS][{job_instance}][{machine}] Client connected", flush=True)
+                        self.debug_print(f"[MACHINES WS][{job_instance}][{machine}] Client connected", flush=True)
                         # Send connection acknowledgement
                         await websocket.send(json.dumps({
                             'type': 'ack',
@@ -109,13 +115,16 @@ class WebSocketJobServer:
                             continue
                             
                         # Send state update to job process via queue
-                        self.send_state_update(job_instance, {
+                        start_update = {
                             'type': 'start',
                             'machine': machine,
                             'timestamp': timestamp,
                             'wrapper_version': data.get('version', 'unknown')
-                        })
+                        }
                         
+                        self.send_state_update(job_instance, start_update)
+                        
+                        # Log start
                         print(f"[MACHINES WS][{job_instance}][{machine}] Started (PID: {data.get('pid')}, Version: {data.get('version', 'unknown')})", flush=True)
                         
                         # Send acknowledgement for start message
@@ -136,7 +145,7 @@ class WebSocketJobServer:
                             'timestamp': timestamp
                         })
                         
-                        print(f"[MACHINES WS][{job_instance}][{machine}] Heartbeat at {timestamp}", flush=True)
+                        self.debug_print(f"[MACHINES WS][{job_instance}][{machine}] Heartbeat at {timestamp}", flush=True)
                         
                     elif msg_type == 'output':
                         stream = data.get('stream', 'stdout')
@@ -156,7 +165,7 @@ class WebSocketJobServer:
                                 
                                 if seq < expected_seq:
                                     # Duplicate message - already processed
-                                    print(f"[MACHINES WS][{job_instance}][{machine}] Duplicate output seq {seq} (expected {expected_seq})", flush=True)
+                                    self.debug_print(f"[MACHINES WS][{job_instance}][{machine}] Duplicate output seq {seq} (expected {expected_seq})", flush=True)
                                     # Send ack anyway
                                     await websocket.send(json.dumps({
                                         'type': 'ack',
@@ -168,7 +177,7 @@ class WebSocketJobServer:
                                     
                                 elif seq > expected_seq:
                                     # Out of order - request resend
-                                    print(f"[MACHINES WS][{job_instance}][{machine}] Out of order output seq {seq} (expected {expected_seq})", flush=True)
+                                    self.debug_print(f"[MACHINES WS][{job_instance}][{machine}] Out of order output seq {seq} (expected {expected_seq})", flush=True)
                                     await websocket.send(json.dumps({
                                         'type': 'nack',
                                         'nack_type': 'out_of_order',
@@ -198,7 +207,7 @@ class WebSocketJobServer:
                             try:
                                 await websocket.send(json.dumps(ack_msg))
                             except Exception as e:
-                                print(f"[MACHINES WS][{job_instance}][{machine}] Failed to send output ACK: {e}", flush=True)
+                                self.debug_print(f"[MACHINES WS][{job_instance}][{machine}] Failed to send output ACK: {e}", flush=True)
                         
                         # Send output to job process via queue
                         # Validate job_instance is in running dict (started by main.py)
@@ -229,7 +238,7 @@ class WebSocketJobServer:
                         if client_id in self.connections:
                             server_last_seq = self.connections[client_id].get('last_acked_seq', -1)
                         
-                        print(f"[MACHINES WS][{job_instance}][{machine}] Sync request: client_acked={client_last_acked}, client_next={client_next_seq}, server_last={server_last_seq}", flush=True)
+                        self.debug_print(f"[MACHINES WS][{job_instance}][{machine}] Sync request: client_acked={client_last_acked}, client_next={client_next_seq}, server_last={server_last_seq}", flush=True)
                         
                         sync_response = {
                             'type': 'sync_response',
@@ -243,8 +252,8 @@ class WebSocketJobServer:
                         retcode = data.get('retcode', -1)
                         seq = data.get('seq', None)
                         
-                        print(f"[MACHINES WS][{job_instance}][{machine}] Received completion: retcode={retcode}, seq={seq}", flush=True)
-                        print(f"[MACHINES WS][{job_instance}][{machine}] Validation: in_running={job_instance in self.running}, in_state={job_name in self.state}", flush=True)
+                        self.debug_print(f"[MACHINES WS][{job_instance}][{machine}] Received completion: retcode={retcode}, seq={seq}", flush=True)
+                        self.debug_print(f"[MACHINES WS][{job_instance}][{machine}] Validation: in_running={job_instance in self.running}, in_state={job_name in self.state}", flush=True)
                         
                         # Log if job instance not in running dict (may have timed out or been killed)
                         # but continue to process completion anyway - we want to record actual result
@@ -269,7 +278,7 @@ class WebSocketJobServer:
                                 result = self.state[job_name]['results'].get(machine, {})
                                 if result.get('endtime') and result.get('endtime') != '':
                                     state_updated = True
-                                    print(f"[MACHINES WS][{job_instance}][{machine}] State update confirmed after {(attempt+1)*50}ms", flush=True)
+                                    self.debug_print(f"[MACHINES WS][{job_instance}][{machine}] State update confirmed after {(attempt+1)*50}ms", flush=True)
                                     break
                         
                         if not state_updated:
@@ -286,10 +295,10 @@ class WebSocketJobServer:
                         
                         try:
                             await websocket.send(json.dumps(ack_msg))
-                            print(f"[MACHINES WS][{job_instance}][{machine}] Completion ACK sent", flush=True)
+                            self.debug_print(f"[MACHINES WS][{job_instance}][{machine}] Completion ACK sent", flush=True)
                         except Exception as e:
                             # Connection may be closing - but state is already updated, so this is OK
-                            print(f"[MACHINES WS][{job_instance}][{machine}] Failed to send completion ACK (state already updated): {e}", flush=True)
+                            self.debug_print(f"[MACHINES WS][{job_instance}][{machine}] Failed to send completion ACK (state already updated): {e}", flush=True)
                         
                         print(f"[MACHINES WS][{job_instance}][{machine}] Completed (exit code: {retcode})", flush=True)
                         
@@ -299,7 +308,7 @@ class WebSocketJobServer:
                         
                     elif msg_type == 'killed':
                         # Wrapper acknowledges it was killed
-                        print(f"[MACHINES WS][{job_instance}][{machine}] Acknowledged kill signal", flush=True)
+                        self.debug_print(f"[MACHINES WS][{job_instance}][{machine}] Acknowledged kill signal", flush=True)
                         
                     elif msg_type == 'error':
                         error_msg = data.get('error', 'Unknown error')
@@ -383,7 +392,7 @@ class WebSocketJobServer:
                             # Set stop_signal in running dict to prevent further batches/processing
                             for proc_name, proc_info in list(self.running.items()):
                                 if proc_info.get('name') == job_name:
-                                    print(f"[MACHINES WS] Setting stop_signal for {proc_name}", flush=True)
+                                    self.debug_print(f"[MACHINES WS] Setting stop_signal for {proc_name}", flush=True)
                                     tmprunning = dict(proc_info)
                                     tmprunning['stop_signal'] = True
                                     self.running[proc_name] = tmprunning
@@ -417,7 +426,7 @@ class WebSocketJobServer:
                                     'killmachine': {'job_instance': job_inst, 'machine': machine, 'cron': job_name}
                                 })
                             
-                            print(f"[MACHINES WS] Created {len(machines_to_kill)} killmachine commands for job {job_name}", flush=True)
+                            self.debug_print(f"[MACHINES WS] Created {len(machines_to_kill)} killmachine commands for job {job_name}", flush=True)
                             
                             # Remove the killcron command (replaced by killmachine commands)
                             self.commands.remove(cmd)
@@ -484,13 +493,13 @@ class WebSocketJobServer:
                                 kill_sent = True
                                 # Only log every few seconds to avoid spam
                                 if int(time_elapsed) % 5 == 0:
-                                    print(f"[{job_instance}][{machine_name}] Kill message sent (elapsed: {time_elapsed:.1f}s)", flush=True)
+                                    self.debug_print(f"[{job_instance}][{machine_name}] Kill message sent (elapsed: {time_elapsed:.1f}s)", flush=True)
                             except Exception as e:
                                 if int(time_elapsed) % 5 == 0:
-                                    print(f"[{job_instance}][{machine_name}] Failed to send kill: {e}", flush=True)
+                                    self.debug_print(f"[{job_instance}][{machine_name}] Failed to send kill: {e}", flush=True)
                         
                         if not kill_sent and int(time_elapsed) % 5 == 0:
-                            print(f"[{job_instance}][{machine_name}] No active connection found (elapsed: {time_elapsed:.1f}s)", flush=True)
+                            self.debug_print(f"[{job_instance}][{machine_name}] No active connection found (elapsed: {time_elapsed:.1f}s)", flush=True)
                     
                     # Grace period expired
                     elif time_elapsed >= 30:
@@ -502,7 +511,7 @@ class WebSocketJobServer:
                             'machine': machine_name,
                             'job_name': job_name
                         }):
-                            print(f"[{job_instance}][{machine_name}] Queued force kill after 30s grace period", flush=True)
+                            self.debug_print(f"[{job_instance}][{machine_name}] Queued force kill after 30s grace period", flush=True)
                         else:
                             print(f"[MACHINES WS] Cannot queue force kill for {machine_name} - no job_instance stored for kill command", flush=True)
                         
@@ -539,7 +548,7 @@ class WebSocketJobServer:
             # Start command checking task if we have a command queue
             if self.commands is not None:
                 self.command_check_task = asyncio.create_task(self.check_commands())
-                print(f"[MACHINES WS] Command checker started", flush=True)
+                self.debug_print(f"[MACHINES WS] Command checker started", flush=True)
             
             await asyncio.Future()  # Run forever
     
@@ -547,9 +556,9 @@ class WebSocketJobServer:
         """Run the WebSocket server (blocking)"""
         asyncio.run(self.start_server())
 
-def start_websocket_server(host, port, state, running, statelocks, log_func, commands=None, state_update_queues=None):
+def start_websocket_server(host, port, state, running, statelocks, log_func, commands=None, state_update_queues=None, debug=False):
     """Start WebSocket server in a separate process"""
     server = WebSocketJobServer(host=host, port=port, state=state, running=running, 
                                 statelocks=statelocks, log_func=log_func, commands=commands, 
-                                state_update_queues=state_update_queues)
+                                state_update_queues=state_update_queues, debug=debug)
     server.run()
