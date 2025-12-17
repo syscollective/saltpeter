@@ -1144,6 +1144,15 @@ def main():
         print("[MAIN] Saltpeter version ", version.__version__)
         exit(0)
     
+    # Initialize global variables before first use
+    global bad_crons
+    global bad_files
+    global processlist
+    global use_es
+    global use_opensearch
+    bad_files = []
+    bad_crons = []  # Will be properly initialized with manager later
+    
     # Load config from YAML (includes defaults in readconfig)
     global params
     params = type('Args', (), {'configdir': cli_args.configdir})()
@@ -1158,15 +1167,9 @@ def main():
     global debug_enabled
     debug_enabled = params.debug
 
-
-    global bad_crons
-    global bad_files
-    global processlist
-    global use_es
+    # Initialize remaining globals
     use_es = False
-    global use_opensearch
     use_opensearch = False
-    bad_files = []
     last_run = {}
     processlist = {}
 
