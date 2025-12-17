@@ -620,7 +620,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
         status = 'SUCCESS' if final_retcode == 0 else f'FAILED (exit code: {final_retcode})'
         if killed_by_timeout:
             status = f'TIMEOUT (killed after {timeout}s, exit code: {final_retcode})'
-        elif process_killed:
+        elif killed:
             status = f'KILLED (exit code: {final_retcode})'
         log(f'Job completed: {status}', level='info')
         
