@@ -258,13 +258,24 @@ class WebSocketJobServer:
                             print(f"[MACHINES WS][{job_instance}][{machine}] NOTE - Job instance not in running dict (may have timed out), but recording completion anyway", flush=True)
                         
                         # Send completion to job process via queue
-                        self.send_state_update(job_instance, {
+                        queue_ok = self.send_state_update(job_instance, {
                             'type': 'complete',
                             'machine': machine,
                             'retcode': retcode,
                             'timestamp': timestamp,
                             'seq': seq
                         })
+                        
+                        # If queue doesn't exist, this is an orphaned job - tell wrapper to stop
+                        if not queue_ok:
+                            print(f"[MACHINES WS][{job_instance}][{machine}] Job queue missing (job stopped/restarted), sending error to wrapper", flush=True)
+                            error_msg = {
+                                'type': 'error',
+                                'code': 'JOB_NOT_FOUND',
+                                'message': 'Job no longer exists on server (stopped or restarted)'
+                            }
+                            await websocket.send(json.dumps(error_msg))
+                            break
                         
                         # Wait for job process to update state before ACK (wait indefinitely)
                         state_updated = False

@@ -82,9 +82,9 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
     
     # Create logging function with timestamp and prefix
     log_prefix = f"{job_instance}"
-    def log(msg, level='debug'):
+    def log(msg, level='normal'):
         """Log message with timestamp and job prefix
-        level: 'info' (always logged if not 'off'), 'debug' (only if loglevel='debug')
+        level: 'normal' (always logged if not 'off'), 'debug' (only if loglevel='debug')
         """
         if loglevel == 'off':
             return
@@ -760,6 +760,17 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                         ack_msg = await asyncio.wait_for(websocket.recv(), timeout=remaining)
                         ack_data = json.loads(ack_msg)
                         
+                        if ack_data.get('type') == 'error':
+                            error_code = ack_data.get('code', 'UNKNOWN')
+                            error_msg = ack_data.get('message', 'Unknown error')
+                            log(f'Server error received: {error_code} - {error_msg}')
+                            log(f'Job completed with exit code {final_retcode} but rejected by server')
+                            log(f'Full output follows:')
+                            log(f'--- OUTPUT START ---')
+                            log(full_output)
+                            log(f'--- OUTPUT END ---')
+                            return final_retcode
+                        
                         if ack_data.get('type') == 'nack':
                             log(f'NACK received during completion')
                             raise Exception('NACK received')
@@ -802,7 +813,13 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                 if attempt < max_completion_retries - 1:
                     await asyncio.sleep(retry_interval)
         else:
-            log(f'Failed to send completion after {max_completion_retries} attempts', level='info')
+            # Failed to report completion - log error and dump full output
+            log(f'CRITICAL: Failed to send completion after {max_completion_retries} attempts')
+            log(f'Job completed with exit code {final_retcode} but server unreachable')
+            log(f'Full output follows:')
+            log(f'--- OUTPUT START ---')
+            log(full_output)
+            log(f'--- OUTPUT END ---')
         
     except Exception as e:
         log(f'Unexpected error in wrapper: {e}', level='info')
