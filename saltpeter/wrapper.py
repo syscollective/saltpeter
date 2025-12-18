@@ -455,7 +455,10 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                                 if not line:
                                     break
                                 stream_type = 'stdout' if stream == process.stdout else 'stderr'
-                                output_buffer.append((stream_type, line))
+                                # Prefix stderr lines for distinguishability while preserving order
+                                if stream_type == 'stderr':
+                                    line = '[STDERR] ' + line
+                                output_buffer.append((time.time(), line))
                                 log(f'Buffered line: {repr(line[:50])}... (buffer_size={sum(len(l) for _, l in output_buffer)})')
                                 
                                 # Check if more data is immediately available
