@@ -169,6 +169,11 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
         # Start the subprocess FIRST - runs regardless of WebSocket state
         process = subprocess.Popen(command, **proc_kwargs)
         
+        # Set stdout/stderr to non-blocking mode IMMEDIATELY to avoid losing early output
+        import fcntl
+        fcntl.fcntl(process.stdout.fileno(), fcntl.F_SETFL, os.O_NONBLOCK)
+        fcntl.fcntl(process.stderr.fileno(), fcntl.F_SETFL, os.O_NONBLOCK)
+        
         # Track job start time for timeout enforcement
         job_start_time = time.time()
         
@@ -188,6 +193,11 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
         last_send_time = 0
         last_output_send_time = 0  # Track when we last sent output
         last_sync_request_time = 0  # Track when we last requested sync
+        
+        # Buffer-to-sequence mapping for retransmission support
+        # Maps seq -> absolute buffer position (how much data was included up to that seq)
+        seq_to_buffer_map = {}  # {seq: buffer_end_index}
+        buffer_cleared_up_to = 0  # Absolute position: how many items have been cleared from start
         
         # Add initial connection message to pending queue
         pending_messages.append({
@@ -361,8 +371,22 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                                     waiting_for_ack = False
                                     # Remove all acknowledged messages (up to and including acked_seq)
                                     pending_messages = [m for m in pending_messages if m.get('seq', -1) > acked_seq]
-                                    # Clear output buffer if this was from recent buffer (not old pending)
-                                    output_buffer = []
+                                    
+                                    # Clear output_buffer up to the point covered by acked sequences
+                                    # Find the highest buffer index that was used for sequences <= acked_seq
+                                    clear_up_to = buffer_cleared_up_to
+                                    for seq in sorted([s for s in seq_to_buffer_map.keys() if s <= acked_seq]):
+                                        if seq in seq_to_buffer_map:
+                                            clear_up_to = max(clear_up_to, seq_to_buffer_map[seq])
+                                    
+                                    if clear_up_to > buffer_cleared_up_to:
+                                        # Remove cleared items from buffer
+                                        items_to_clear = clear_up_to - buffer_cleared_up_to
+                                        output_buffer = output_buffer[items_to_clear:]
+                                        buffer_cleared_up_to = clear_up_to
+                                        # Clean up old sequence mappings
+                                        seq_to_buffer_map = {s: idx - items_to_clear for s, idx in seq_to_buffer_map.items() if s > acked_seq}
+                                        log(f'Cleared {items_to_clear} items from buffer (up to seq {acked_seq})')
                                 elif acked_seq == last_acked_seq:
                                     # Duplicate ACK (already processed)
                                     log(f'Duplicate ACK: seq={acked_seq}')
@@ -389,7 +413,18 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                                 waiting_for_ack = False
                                 # Clean up pending messages up to server's position
                                 pending_messages = [m for m in pending_messages if m.get('seq', -1) > server_last_seq]
-                                output_buffer = []
+                                
+                                # Clear buffer up to server's position using same logic as ACK
+                                clear_up_to = buffer_cleared_up_to
+                                for seq in sorted([s for s in seq_to_buffer_map.keys() if s <= server_last_seq]):
+                                    if seq in seq_to_buffer_map:
+                                        clear_up_to = max(clear_up_to, seq_to_buffer_map[seq])
+                                
+                                if clear_up_to > buffer_cleared_up_to:
+                                    items_to_clear = clear_up_to - buffer_cleared_up_to
+                                    output_buffer = output_buffer[items_to_clear:]
+                                    buffer_cleared_up_to = clear_up_to
+                                    seq_to_buffer_map = {s: idx - items_to_clear for s, idx in seq_to_buffer_map.items() if s > server_last_seq}
                             
                             # Don't resend immediately - let normal send logic handle it
                             # This avoids flooding the connection with retries
@@ -411,7 +446,11 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                                     'timestamp': datetime.now(timezone.utc).isoformat()
                                 }
                                 pending_messages.append(output_msg)
+                                # Track mapping for this flush
+                                current_buffer_end = buffer_cleared_up_to + len(output_buffer)
+                                seq_to_buffer_map[next_seq] = current_buffer_end
                                 next_seq += 1
+                                # Clear buffer after kill flush (won't need retransmission)
                                 output_buffer = []
                             
                             # Terminate the process
@@ -451,15 +490,19 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                         for stream in readable:
                             # Read ALL available lines from this stream, not just one
                             while True:
-                                line = stream.readline()
-                                if not line:
+                                try:
+                                    line = stream.readline()
+                                    if not line:
+                                        break
+                                    stream_type = 'stdout' if stream == process.stdout else 'stderr'
+                                    # Prefix stderr lines for distinguishability while preserving order
+                                    if stream_type == 'stderr':
+                                        line = '[STDERR] ' + line
+                                    output_buffer.append((time.time(), line))
+                                    log(f'Buffered line: {repr(line[:50])}... (buffer_size={sum(len(l) for _, l in output_buffer)})')
+                                except BlockingIOError:
+                                    # No more data available (non-blocking mode)
                                     break
-                                stream_type = 'stdout' if stream == process.stdout else 'stderr'
-                                # Prefix stderr lines for distinguishability while preserving order
-                                if stream_type == 'stderr':
-                                    line = '[STDERR] ' + line
-                                output_buffer.append((time.time(), line))
-                                log(f'Buffered line: {repr(line[:50])}... (buffer_size={sum(len(l) for _, l in output_buffer)})')
                                 
                                 # Check if more data is immediately available
                                 # If not, break to avoid blocking on readline()
@@ -497,28 +540,40 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                     size_to_send = (buffer_size >= output_max_size)
                     
                     if output_buffer and (time_to_send or size_to_send) and not waiting_for_ack and websocket is not None:
-                        # Combine all buffered output
-                        combined_output = ''.join(line for _, line in output_buffer)
+                        # Combine all buffered output (only new data not yet converted to messages)
+                        # Find where we left off - this is relative to current buffer after clearing
+                        unsent_buffer_data = output_buffer  # All current buffer items are unsent
+                        combined_output = ''.join(line for _, line in unsent_buffer_data)
                         
-                        # Create messages (may be chunked if large)
-                        output_messages, next_seq = create_output_messages(combined_output, next_seq)
-                        
-                        log(f'Sending buffer: {len(output_messages)} message(s), total_len={len(combined_output)}, reason={"time" if time_to_send else "size"}')
-                        
-                        # Add all messages to pending queue
-                        pending_messages.extend(output_messages)
-                        
-                        # Send first message and wait for ACK before sending rest
-                        try:
-                            await websocket.send(json.dumps(output_messages[0]))
-                            waiting_for_ack = True
-                            last_send_time = current_time
-                            last_output_send_time = current_time
-                            # Don't clear output_buffer until first chunk ACKed!
-                        except:
-                            # Connection lost, mark for reconnect
-                            websocket = None
-                            waiting_for_ack = False
+                        if combined_output:  # Only proceed if there's actually data to send
+                            # Track the starting sequence for this batch
+                            batch_start_seq = next_seq
+                            
+                            # Create messages (may be chunked if large)
+                            output_messages, next_seq = create_output_messages(combined_output, next_seq)
+                            
+                            log(f'Sending buffer: {len(output_messages)} message(s), total_len={len(combined_output)}, reason={"time" if time_to_send else "size"}')
+                            
+                            # Map each sequence to the buffer position it covers
+                            # All sequences in this batch cover up to current buffer length (from buffer_cleared_up_to perspective)
+                            current_buffer_end = buffer_cleared_up_to + len(output_buffer)
+                            for msg in output_messages:
+                                seq_to_buffer_map[msg['seq']] = current_buffer_end
+                            
+                            # Add all messages to pending queue
+                            pending_messages.extend(output_messages)
+                            
+                            # Send first message and wait for ACK before sending rest
+                            try:
+                                await websocket.send(json.dumps(output_messages[0]))
+                                waiting_for_ack = True
+                                last_send_time = current_time
+                                last_output_send_time = current_time
+                                # Don't clear buffer - it will be cleared when server ACKs
+                            except:
+                                # Connection lost, mark for reconnect
+                                websocket = None
+                                waiting_for_ack = False
                     
                     # Send any pending output messages (from multi-chunk or reconnect)
                     # Only send if not waiting for ACK (send one at a time)
@@ -572,7 +627,12 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
         if output_buffer:
             combined_output = ''.join(line for _, line in output_buffer)
             output_messages, next_seq = create_output_messages(combined_output, next_seq)
+            # Track mapping for final flush
+            current_buffer_end = buffer_cleared_up_to + len(output_buffer)
+            for msg in output_messages:
+                seq_to_buffer_map[msg['seq']] = current_buffer_end
             pending_messages.extend(output_messages)
+            # Clear buffer after final flush (process complete, won't need retransmission)
             output_buffer = []
         
         # Read any remaining output (skip if killed, pipes are closed)
