@@ -541,15 +541,10 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
         # Wait before next check
         time.sleep(check_interval)
     
-    # Clean up queue
-    if state_update_queues and procname in state_update_queues:
-        del state_update_queues[procname]
-        print(f"[JOB:{procname}] Cleaned up state update queue", flush=True)
-    
+    # Note: Don't clean up queue here - in batch mode, multiple batches share the same queue
+    # Queue cleanup happens in run() after all batches complete
     # Note: Don't delete running[procname] here - the caller (run function) manages it
     # In batch mode, multiple batches use the same procname and running entry
-
-
 def processresults(client,commands,job,name,group,procname,running,state,targets):
     """
     Legacy function for Salt-based job monitoring
@@ -973,6 +968,11 @@ def run(name, data, procname, running, state, commands, maintenance, state_updat
     # Clean up running state at the end of job execution
     if procname in running:
         del running[procname]
+    
+    # Clean up state update queue at the end of all batches
+    if use_wrapper and state_update_queues and procname in state_update_queues:
+        del state_update_queues[procname]
+        print(f"[JOB:{procname}] Cleaned up state update queue", flush=True)
     
     # Evaluate job success ONCE - single source of truth
     # Count failures from results
