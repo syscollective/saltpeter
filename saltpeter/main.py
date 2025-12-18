@@ -315,8 +315,8 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                     job_state = state[name]
                     if 'results' not in job_state:
                         job_state['results'] = {}
-                        
-                        if msg_type == 'start':
+                    
+                    if msg_type == 'start':
                             # Initialize machine result
                             if machine not in job_state['results']:
                                 job_state['results'][machine] = {}
@@ -329,15 +329,15 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                             connected_targets.add(machine)
                             startup_verified[machine] = True
                             print(f"[JOB:{procname}] Machine {machine} started", flush=True)
-                        
-                        elif msg_type == 'heartbeat':
+                    
+                    elif msg_type == 'heartbeat':
                             # Update heartbeat timestamp
                             if machine not in job_state['results']:
                                 job_state['results'][machine] = {}
                             job_state['results'][machine]['last_heartbeat'] = timestamp
                             last_heartbeat[machine] = time.time()
-                        
-                        elif msg_type == 'output':
+                    
+                    elif msg_type == 'output':
                             # Append output
                             if machine not in job_state['results']:
                                 job_state['results'][machine] = {'ret': '', 'retcode': '', 'starttime': timestamp, 'endtime': ''}
@@ -349,8 +349,8 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                             if seq is not None:
                                 job_state['results'][machine]['last_output_seq'] = seq
                             last_heartbeat[machine] = time.time()
-                        
-                        elif msg_type == 'complete':
+                    
+                    elif msg_type == 'complete':
                             # Mark completion
                             if machine not in job_state['results']:
                                 job_state['results'][machine] = {}
@@ -374,8 +374,8 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                                 job_state['results'][machine]['last_heartbeat'] = last_heartbeat_val
                             
                             print(f"[JOB:{procname}] Machine {machine} completed with retcode {msg.get('retcode')}", flush=True)
-                        
-                        elif msg_type == 'error':
+                    
+                    elif msg_type == 'error':
                             # Mark error
                             job_state['results'][machine] = {
                                 'ret': f"Wrapper error: {msg.get('error')}",
@@ -384,8 +384,8 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                                 'endtime': timestamp
                             }
                             print(f"[JOB:{procname}] Machine {machine} error: {msg.get('error')}", flush=True)
-                        
-                        elif msg_type == 'force_kill':
+                    
+                    elif msg_type == 'force_kill':
                             # Force kill after grace period expired
                             if machine in job_state['results']:
                                 result = job_state['results'][machine]
@@ -396,11 +396,11 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                                         result['ret'] = ''
                                     result['ret'] += "\n[Job terminated by user request - grace period expired after 30s]\n"
                                     print(f"[JOB:{procname}] Forcefully killed {machine} after 30s grace period", flush=True)
-                        
-                        # Commit state update (SINGLE WRITER - safe without deepcopy)
-                        state[name] = job_state
-                        
-                    # Debug: verify state was actually committed to Manager dict
+                    
+                    # Commit state update (SINGLE WRITER - safe without deepcopy)
+                    state[name] = job_state
+                
+                # Debug: verify state was actually committed to Manager dict
                     readback = state.get(name)
                     if readback and 'results' in readback and machine in readback['results']:
                         debug_print(f"[JOB:{procname}][{machine}] State committed: type={msg_type}, has_results=True", flush=True)
