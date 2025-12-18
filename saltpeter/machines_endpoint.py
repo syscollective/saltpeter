@@ -266,22 +266,26 @@ class WebSocketJobServer:
                             'seq': seq
                         })
                         
-                        # Wait briefly for job process to update state, then verify before ACK
+                        # Wait for job process to update state before ACK (wait indefinitely)
                         state_updated = False
-                        for attempt in range(10):  # Try for up to 500ms
+                        attempt = 0
+                        while not state_updated:
                             await asyncio.sleep(0.05)  # 50ms
+                            attempt += 1
+                            
                             # Check if state was updated
                             if job_name in self.state and 'results' in self.state[job_name]:
                                 result = self.state[job_name]['results'].get(machine, {})
                                 if result.get('endtime') and result.get('endtime') != '':
                                     state_updated = True
-                                    self.debug_print(f"[MACHINES WS][{job_instance}][{machine}] State update confirmed after {(attempt+1)*50}ms", flush=True)
+                                    self.debug_print(f"[MACHINES WS][{job_instance}][{machine}] State update confirmed after {attempt*50}ms", flush=True)
                                     break
+                            
+                            # Log warning every 5 seconds
+                            if attempt % 100 == 0:
+                                print(f"[MACHINES WS][{job_instance}][{machine}] WARNING - Still waiting for state update after {attempt*50}ms", flush=True)
                         
-                        if not state_updated:
-                            print(f"[MACHINES WS][{job_instance}][{machine}] WARNING - State not updated after 500ms, sending ACK anyway", flush=True)
-                        
-                        # Send acknowledgement after verifying state update
+                        # Send acknowledgement after state is confirmed updated
                         ack_msg = {
                             'type': 'ack',
                             'ack_type': 'complete',

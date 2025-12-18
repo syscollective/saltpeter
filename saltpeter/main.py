@@ -258,7 +258,7 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
         salt_result: Optional dict with 'completed' and 'result'/'error' from async Salt thread
     """
     start_time = time.time()
-    check_interval = 0.1  # Check every 100ms for queue messages
+    queue_timeout = 0.1  # Block on queue for 100ms, then check other conditions
     
     # Default timeout of 1 hour if not specified
     if timeout is None:
@@ -283,7 +283,6 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
         return
     
     # Monitor WebSocket results for job completion
-    print(f"[JOB:{procname}] Monitoring WebSocket results for {len(targets)} target(s)...", flush=True)
     pending_targets = set(targets)
     connected_targets = set()  # Track which targets have connected via WebSocket
     startup_verified = {}  # Track startup verification for each target
@@ -302,18 +301,20 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
     while pending_targets:
         # Process state updates from WebSocket (SINGLE WRITER pattern)
         try:
-            while True:  # Process all pending messages
-                try:
-                    msg = update_queue.get_nowait()
-                    msg_type = msg.get('type')
-                    machine = msg.get('machine')
-                    timestamp = msg.get('timestamp')
-                    
-                    # Only this function modifies state[name] - no race conditions!
-                    with statelocks[name]:
-                        job_state = state[name]
-                        if 'results' not in job_state:
-                            job_state['results'] = {}
+            # Block waiting for first message (with timeout for other checks)
+            try:
+                msg = update_queue.get(timeout=queue_timeout)
+                
+                # Process this message
+                msg_type = msg.get('type')
+                machine = msg.get('machine')
+                timestamp = msg.get('timestamp')
+                
+                # Only this function modifies state[name] - no race conditions!
+                with statelocks[name]:
+                    job_state = state[name]
+                    if 'results' not in job_state:
+                        job_state['results'] = {}
                         
                         if msg_type == 'start':
                             # Initialize machine result
@@ -399,15 +400,107 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                         # Commit state update (SINGLE WRITER - safe without deepcopy)
                         state[name] = job_state
                         
-                        # Debug: verify state was actually committed to Manager dict
-                        readback = state.get(name)
-                        if readback and 'results' in readback and machine in readback['results']:
-                            debug_print(f"[JOB:{procname}][{machine}] State committed: type={msg_type}, has_results=True", flush=True)
-                        else:
-                            print(f"[JOB:{procname}][{machine}] ERROR - State NOT in Manager dict after commit! type={msg_type}", flush=True)
+                    # Debug: verify state was actually committed to Manager dict
+                    readback = state.get(name)
+                    if readback and 'results' in readback and machine in readback['results']:
+                        debug_print(f"[JOB:{procname}][{machine}] State committed: type={msg_type}, has_results=True", flush=True)
+                    else:
+                        print(f"[JOB:{procname}][{machine}] ERROR - State NOT in Manager dict after commit! type={msg_type}", flush=True)
+                
+                # After processing first message, drain any remaining messages
+                while True:
+                    try:
+                        msg = update_queue.get_nowait()
+                        msg_type = msg.get('type')
+                        machine = msg.get('machine')
+                        timestamp = msg.get('timestamp')
                         
-                except queue.Empty:
-                    break  # No more messages
+                        # Process same logic as above
+                        with statelocks[name]:
+                            job_state = state[name]
+                            if 'results' not in job_state:
+                                job_state['results'] = {}
+                            
+                            if msg_type == 'start':
+                                if machine not in job_state['results']:
+                                    job_state['results'][machine] = {}
+                                job_state['results'][machine]['starttime'] = timestamp
+                                job_state['results'][machine]['ret'] = ''
+                                job_state['results'][machine]['retcode'] = ''
+                                job_state['results'][machine]['endtime'] = ''
+                                job_state['results'][machine]['wrapper_version'] = msg.get('wrapper_version', 'unknown')
+                                last_heartbeat[machine] = time.time()
+                                connected_targets.add(machine)
+                                startup_verified[machine] = True
+                                print(f"[JOB:{procname}] Machine {machine} started", flush=True)
+                            
+                            elif msg_type == 'heartbeat':
+                                if machine not in job_state['results']:
+                                    job_state['results'][machine] = {}
+                                job_state['results'][machine]['last_heartbeat'] = timestamp
+                                last_heartbeat[machine] = time.time()
+                            
+                            elif msg_type == 'output':
+                                if machine not in job_state['results']:
+                                    job_state['results'][machine] = {'ret': '', 'retcode': '', 'starttime': timestamp, 'endtime': ''}
+                                current_output = job_state['results'][machine].get('ret', '')
+                                job_state['results'][machine]['ret'] = current_output + msg.get('data', '')
+                                seq = msg.get('seq')
+                                if seq is not None:
+                                    job_state['results'][machine]['last_output_seq'] = seq
+                                last_heartbeat[machine] = time.time()
+                            
+                            elif msg_type == 'complete':
+                                if machine not in job_state['results']:
+                                    job_state['results'][machine] = {}
+                                starttime = job_state['results'][machine].get('starttime', timestamp)
+                                output = job_state['results'][machine].get('ret', '')
+                                wrapper_version = job_state['results'][machine].get('wrapper_version')
+                                last_heartbeat_val = job_state['results'][machine].get('last_heartbeat')
+                                job_state['results'][machine] = {
+                                    'ret': output,
+                                    'retcode': msg.get('retcode'),
+                                    'starttime': starttime,
+                                    'endtime': timestamp
+                                }
+                                if wrapper_version:
+                                    job_state['results'][machine]['wrapper_version'] = wrapper_version
+                                if last_heartbeat_val:
+                                    job_state['results'][machine]['last_heartbeat'] = last_heartbeat_val
+                                print(f"[JOB:{procname}] Machine {machine} completed with retcode {msg.get('retcode')}", flush=True)
+                            
+                            elif msg_type == 'error':
+                                job_state['results'][machine] = {
+                                    'ret': f"Wrapper error: {msg.get('error')}",
+                                    'retcode': 255,
+                                    'starttime': timestamp,
+                                    'endtime': timestamp
+                                }
+                                print(f"[JOB:{procname}] Machine {machine} error: {msg.get('error')}", flush=True)
+                            
+                            elif msg_type == 'force_kill':
+                                if machine in job_state['results']:
+                                    result = job_state['results'][machine]
+                                    if not result.get('endtime') or result.get('endtime') == '':
+                                        result['endtime'] = datetime.now(timezone.utc)
+                                        result['retcode'] = 143
+                                        if 'ret' not in result:
+                                            result['ret'] = ''
+                                        result['ret'] += "\n[Job terminated by user request - grace period expired after 30s]\n"
+                                        print(f"[JOB:{procname}] Forcefully killed {machine} after 30s grace period", flush=True)
+                            
+                            state[name] = job_state
+                            readback = state.get(name)
+                            if readback and 'results' in readback and machine in readback['results']:
+                                debug_print(f"[JOB:{procname}][{machine}] State committed: type={msg_type}, has_results=True", flush=True)
+                            else:
+                                print(f"[JOB:{procname}][{machine}] ERROR - State NOT in Manager dict after commit! type={msg_type}", flush=True)
+                    
+                    except queue.Empty:
+                        break  # No more messages
+                        
+            except queue.Empty:
+                pass  # Timeout waiting for first message - continue to other checks
         except Exception as e:
             print(f"[JOB:{procname}] Error processing state update: {e}", flush=True)
             import traceback
@@ -545,7 +638,7 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                         
                         # Check if this target has completed (has endtime)
                         if result.get('endtime') and result['endtime'] != '':
-                            print(f"[JOB:{procname}] Target {tgt} completed, removing from pending (retcode: {result.get('retcode')})", flush=True)
+                            debug_print(f"[JOB:{procname}] Target {tgt} completed, removing from pending (retcode: {result.get('retcode')})", flush=True)
                             
                             # Log the completion
                             log(what='machine_result', cron=name, group=group, instance=procname,
@@ -597,8 +690,7 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                 salt_result['abandoned'] = True
             break
         
-        # Wait before next check
-        time.sleep(check_interval)
+        # Loop continues immediately - blocking get() with timeout handles the wait
     
     # Note: Don't clean up queue here - in batch mode, multiple batches share the same queue
     # Queue cleanup happens in run() after all batches complete
