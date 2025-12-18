@@ -810,19 +810,13 @@ def main():
         sys.exit(0)
     
     # Second child (grandchild) - fully detached daemon
-    # Redirect stdin/stdout to /dev/null BEFORE closing file objects
+    # Redirect stdin/stdout/stderr to /dev/null to fully detach
     devnull_fd = os.open('/dev/null', os.O_RDWR)
     os.dup2(devnull_fd, 0)  # stdin
     os.dup2(devnull_fd, 1)  # stdout
+    os.dup2(devnull_fd, 2)  # stderr - redirect instead of closing to avoid Python cleanup errors
     if devnull_fd > 2:
         os.close(devnull_fd)
-    
-    # Now safe to close the Python file objects
-    sys.stdin.close()
-    sys.stdout.close()
-    
-    # Close stderr - all logging will be through wrapper log file
-    sys.stderr.close()
     
     # Get wrapper logging configuration
     loglevel = os.environ.get('SP_WRAPPER_LOGLEVEL', 'normal')
