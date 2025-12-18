@@ -13,6 +13,7 @@ from sys import exit
 from datetime import datetime,timedelta,date,timezone
 from crontab import CronTab
 import multiprocessing
+import threading
 #from pprint import pprint
 
 # Global debug flag (set from params after config load)
@@ -242,11 +243,14 @@ def process_wrapper_results(wrapper_results, name, group, procname, running, sta
     return targets_confirmed_started
 
 
-def processresults_websocket(name, group, procname, running, state, targets, timeout=None, state_update_queues=None, manager=None):
+def processresults_websocket(name, group, procname, running, state, targets, timeout=None, state_update_queues=None, manager=None, salt_result=None):
     """
     Wait for WebSocket-based job results with optional timeout
     Monitors state updates from WebSocket server for job completion
     SINGLE WRITER pattern: This function is the ONLY place that modifies state[name]
+    
+    Args:
+        salt_result: Optional dict with 'completed' and 'result'/'error' from async Salt thread
     """
     start_time = time.time()
     check_interval = 0.1  # Check every 100ms for queue messages
@@ -274,15 +278,18 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
         return
     
     # Monitor WebSocket results for job completion
-    # Wrappers have already been confirmed started by salt.cmd()
     print(f"[JOB:{procname}] Monitoring WebSocket results for {len(targets)} target(s)...", flush=True)
     pending_targets = set(targets)
+    connected_targets = set()  # Track which targets have connected via WebSocket
+    startup_verified = {}  # Track startup verification for each target
     last_heartbeat = {}  # Track last activity time for each target
     job_start_time = time.time()
+    startup_window = 30  # 30 second window to verify wrapper startup
     
-    # Initialize heartbeat tracking for all targets
+    # Initialize tracking for all targets
     for tgt in targets:
         last_heartbeat[tgt] = time.time()
+        startup_verified[tgt] = False
     
     # Track when kill was initiated
     kill_initiated_time = None
@@ -313,6 +320,8 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                             job_state['results'][machine]['endtime'] = ''
                             job_state['results'][machine]['wrapper_version'] = msg.get('wrapper_version', 'unknown')
                             last_heartbeat[machine] = time.time()
+                            connected_targets.add(machine)
+                            startup_verified[machine] = True
                             print(f"[JOB:{procname}] Machine {machine} started", flush=True)
                         
                         elif msg_type == 'heartbeat':
@@ -411,8 +420,50 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                 print(f"[JOB:{procname}] Kill grace period expired, exiting result monitoring", flush=True)
                 break
         
-        # Check if timeout exceeded (with 30s grace period for wrapper to terminate and report)
+        # Check startup verification window (first 60 seconds)
         elapsed = time.time() - job_start_time
+        if elapsed > startup_window:
+            # After startup window, check for targets that never connected
+            for tgt in list(pending_targets):
+                if not startup_verified[tgt]:
+                    # Target never connected - check if Salt has error info
+                    salt_error = None
+                    if salt_result and salt_result.get('completed'):
+                        if salt_result.get('error'):
+                            salt_error = salt_result['error']
+                        elif salt_result.get('result') and tgt in salt_result['result']:
+                            result = salt_result['result'][tgt]
+                            if isinstance(result, dict) and result.get('retcode') != 0:
+                                salt_error = f"Salt error (retcode {result['retcode']}): {result.get('ret', '')}"
+                    
+                    now = datetime.now(timezone.utc)
+                    error_msg = "Wrapper failed to connect"
+                    if salt_error:
+                        error_msg += f" - Salt reported: {salt_error}"
+                    else:
+                        error_msg += " (no response from Salt or wrapper)"
+                    
+                    print(f"[JOB:{procname}] {tgt}: {error_msg}", flush=True)
+                    
+                    with statelocks[name]:
+                        job_state = state[name]
+                        if 'results' not in job_state:
+                            job_state['results'] = {}
+                        job_state['results'][tgt] = {
+                            'ret': error_msg,
+                            'retcode': 254,  # Special code for startup failure
+                            'starttime': job_state.get('last_run', now),
+                            'endtime': now
+                        }
+                        state[name] = job_state
+                    
+                    log(what='machine_result', cron=name, group=group, instance=procname,
+                        machine=tgt, code=254, out=error_msg, time=now)
+                    
+                    pending_targets.remove(tgt)
+                    startup_verified[tgt] = True  # Mark as verified (failed)
+        
+        # Check if timeout exceeded (with 30s grace period for wrapper to terminate and report)
         if elapsed > timeout + 30:
             print(f"[JOB:{procname}] Timeout + grace period exceeded for {pending_targets} ({elapsed:.1f}s > {timeout + 30}s)", flush=True)
             
@@ -536,6 +587,9 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
         # If all targets completed, exit
         if not pending_targets:
             print(f"[JOB:{procname}] All targets completed for {name}, exiting monitor loop", flush=True)
+            # Signal Salt thread to abandon - no need to wait for it
+            if salt_result:
+                salt_result['abandoned'] = True
             break
         
         # Wait before next check
@@ -883,19 +937,40 @@ def run(name, data, procname, running, state, commands, maintenance, state_updat
                         
                         # Run command via Salt
                         if use_wrapper:
-                            # Use run_job for non-blocking execution - wrapper will connect via WebSocket
-                            # Assume all targets will start successfully - let WebSocket monitoring handle failures
-                            debug_print(f"[SALT DEBUG] Calling salt.run_job on chunk={chunk}, cmdargs={cmdargs}")
-                            job = salt.run_job(chunk, 'cmd.run_all', cmdargs, tgt_type='list', listen=False)
-                            debug_print(f"[SALT DEBUG] salt.run_job returned job: {job}")
+                            # Run salt.cmd in background thread - don't block on Salt
+                            # Wrapper WebSocket connection is the source of truth for success
+                            debug_print(f"[SALT DEBUG] Starting async salt.cmd on chunk={chunk}, cmdargs={cmdargs}")
                             
-                            # Assume all targets in chunk will start - WebSocket handler will detect failures
-                            targets_confirmed_started = chunk
-                            print(f"[JOB:{procname}] Launched wrapper on {len(chunk)} target(s), monitoring via WebSocket", flush=True)
+                            salt_result = {'completed': False, 'result': None, 'abandoned': False}
+                            def run_salt_cmd():
+                                try:
+                                    result = salt.cmd(chunk, 'cmd.run_all', cmdargs, tgt_type='list', timeout=30)
+                                    # Only update if not abandoned (job might have finished)
+                                    if not salt_result['abandoned']:
+                                        salt_result['result'] = result
+                                        salt_result['completed'] = True
+                                        debug_print(f"[SALT DEBUG] salt.cmd completed: {result}")
+                                except Exception as e:
+                                    if not salt_result['abandoned']:
+                                        salt_result['completed'] = True
+                                        salt_result['error'] = str(e)
+                                        print(f"[SALT DEBUG] salt.cmd failed: {e}", flush=True)
                             
-                            # Monitor WebSocket results for all targets in this batch
+                            salt_thread = threading.Thread(target=run_salt_cmd, daemon=True)
+                            salt_thread.start()
+                            
+                            # Assume all targets will start - WebSocket connection proves success
+                            print(f"[JOB:{procname}] Launched wrapper via Salt on {len(chunk)} target(s), monitoring via WebSocket", flush=True)
+                            
+                            # Start WebSocket monitoring immediately (real-time streaming)
+                            # Pass salt_result so startup failures can be detected and thread can be abandoned
                             processresults_websocket(name, data['group'], procname, running, state, 
-                                                    targets_confirmed_started, timeout, state_update_queues, manager)
+                                                    chunk, timeout, state_update_queues, manager, salt_result)
+                            
+                            # After WebSocket monitoring completes, log Salt results if available
+                            # Only if not abandoned and actually completed
+                            if not salt_result['abandoned'] and salt_result['completed'] and salt_result.get('result'):
+                                debug_print(f"[SALT DEBUG] Salt result (informational): {salt_result['result']}")
                         else:
                             # Legacy mode - use run_job for non-wrapper execution
                             job = salt.run_job(chunk, 'cmd.run', cmdargs, tgt_type='list', listen=False)
@@ -941,19 +1016,40 @@ def run(name, data, procname, running, state, commands, maintenance, state_updat
                 try:
                     # Run command via Salt
                     if use_wrapper:
-                        # Use run_job for non-blocking execution - wrapper will connect via WebSocket
-                        # Assume all targets will start successfully - let WebSocket monitoring handle failures
-                        debug_print(f"[SALT DEBUG] Calling salt.run_job on targets_up={targets_up}, cmdargs={cmdargs}")
-                        job = salt.run_job(targets_up, 'cmd.run_all', cmdargs, tgt_type='list', listen=False)
-                        debug_print(f"[SALT DEBUG] salt.run_job returned job: {job}")
+                        # Run salt.cmd in background thread - don't block on Salt
+                        # Wrapper WebSocket connection is the source of truth for success
+                        debug_print(f"[SALT DEBUG] Starting async salt.cmd on targets_up={targets_up}, cmdargs={cmdargs}")
                         
-                        # Assume all targets will start - WebSocket handler will detect failures
-                        targets_confirmed_started = targets_up
-                        print(f"[JOB:{procname}] Launched wrapper on {len(targets_up)} target(s), monitoring via WebSocket", flush=True)
+                        salt_result = {'completed': False, 'result': None, 'abandoned': False}
+                        def run_salt_cmd():
+                            try:
+                                result = salt.cmd(targets_up, 'cmd.run_all', cmdargs, tgt_type='list', timeout=30)
+                                # Only update if not abandoned (job might have finished)
+                                if not salt_result['abandoned']:
+                                    salt_result['result'] = result
+                                    salt_result['completed'] = True
+                                    debug_print(f"[SALT DEBUG] salt.cmd completed: {result}")
+                            except Exception as e:
+                                if not salt_result['abandoned']:
+                                    salt_result['completed'] = True
+                                    salt_result['error'] = str(e)
+                                    print(f"[SALT DEBUG] salt.cmd failed: {e}", flush=True)
                         
-                        # Monitor WebSocket results for all targets
+                        salt_thread = threading.Thread(target=run_salt_cmd, daemon=True)
+                        salt_thread.start()
+                        
+                        # Assume all targets will start - WebSocket connection proves success
+                        print(f"[JOB:{procname}] Launched wrapper via Salt on {len(targets_up)} target(s), monitoring via WebSocket", flush=True)
+                        
+                        # Start WebSocket monitoring immediately (real-time streaming)
+                        # Pass salt_result so startup failures can be detected and thread can be abandoned
                         processresults_websocket(name, data['group'], procname, running, state, 
-                                                targets_confirmed_started, timeout, state_update_queues, manager)
+                                                targets_up, timeout, state_update_queues, manager, salt_result)
+                        
+                        # After WebSocket monitoring completes, log Salt results if available
+                        # Only if not abandoned and actually completed
+                        if not salt_result['abandoned'] and salt_result['completed'] and salt_result.get('result'):
+                            debug_print(f"[SALT DEBUG] Salt result (informational): {salt_result['result']}")
                     else:
                         # Legacy mode - use run_job for non-wrapper execution
                         job = salt.run_job(targets_up, 'cmd.run', cmdargs, tgt_type='list', listen=False)
