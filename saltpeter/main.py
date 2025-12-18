@@ -18,10 +18,15 @@ import threading
 
 # Global debug flag (set from params after config load)
 debug_enabled = False
+debug_flag_shared = None  # Will be set to Manager.Value in main()
 
 def debug_print(message, flush=True):
     """Print message only if debug mode is enabled"""
-    if debug_enabled:
+    # Use shared flag if available, otherwise fall back to process-local flag
+    if debug_flag_shared and hasattr(debug_flag_shared, 'value'):
+        if debug_flag_shared.value:
+            print(message, flush=flush)
+    elif debug_enabled:
         print(message, flush=flush)
 
 def readconfig(configdir):
@@ -268,7 +273,7 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
     import queue
     if state_update_queues is not None and procname in state_update_queues:
         update_queue = state_update_queues[procname]
-        print(f"[JOB:{procname}] Using existing state update queue", flush=True)
+        debug_print(f"[JOB:{procname}] Using existing state update queue", flush=True)
     elif manager is not None and state_update_queues is not None:
         update_queue = manager.Queue()
         state_update_queues[procname] = update_queue
@@ -397,7 +402,7 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                         # Debug: verify state was actually committed to Manager dict
                         readback = state.get(name)
                         if readback and 'results' in readback and machine in readback['results']:
-                            print(f"[JOB:{procname}][{machine}] State committed: type={msg_type}, has_results=True", flush=True)
+                            debug_print(f"[JOB:{procname}][{machine}] State committed: type={msg_type}, has_results=True", flush=True)
                         else:
                             print(f"[JOB:{procname}][{machine}] ERROR - State NOT in Manager dict after commit! type={msg_type}", flush=True)
                         
@@ -879,7 +884,7 @@ def run(name, data, procname, running, state, commands, maintenance, state_updat
             if procname not in state_update_queues:
                 update_queue = manager.Queue()
                 state_update_queues[procname] = update_queue
-                print(f"[JOB:{procname}] Created state update queue (before wrapper launch)", flush=True)
+                debug_print(f"[JOB:{procname}] Created state update queue (before wrapper launch)", flush=True)
         
         # Only execute if we have targets
         # Shuffle targets for random selection/distribution
@@ -1070,7 +1075,7 @@ def run(name, data, procname, running, state, commands, maintenance, state_updat
     # Clean up state update queue at the end of all batches
     if use_wrapper and state_update_queues and procname in state_update_queues:
         del state_update_queues[procname]
-        print(f"[JOB:{procname}] Cleaned up state update queue", flush=True)
+        debug_print(f"[JOB:{procname}] Cleaned up state update queue", flush=True)
     
     # Evaluate job success ONCE - single source of truth
     # Count failures from results
@@ -1267,8 +1272,8 @@ def main():
     for key, value in yaml_config.items():
         setattr(params, key, value)
     
-    # Set global debug flag
-    global debug_enabled
+    # Set global debug flags
+    global debug_enabled, debug_flag_shared
     debug_enabled = params.debug
 
     # Initialize remaining globals
@@ -1287,6 +1292,8 @@ def main():
     bad_crons = manager.list()
     timeline = manager.dict()
     state_update_queues = manager.dict()  # job_instance → Queue for state updates from WebSocket
+    debug_flag = manager.Value('b', params.debug)  # Shared boolean for debug flag
+    debug_flag_shared = debug_flag  # Set global reference for debug_print
     last_maintenance_log = datetime.now(timezone.utc)
 
     #timeline['content'] = []
@@ -1296,7 +1303,7 @@ def main():
     # Start the WebSocket server for machine communication (pass commands queue for bidirectional communication)
     ws_server = multiprocessing.Process(
         target=machines_endpoint.start_websocket_server,
-        args=(params.machines_ws_bind_addr, params.machines_ws_port, state, running, statelocks, log, commands, state_update_queues, params.debug),
+        args=(params.machines_ws_bind_addr, params.machines_ws_port, state, running, statelocks, log, commands, state_update_queues, debug_flag),
         name='machines_endpoint'
     )
     ws_server.start()
@@ -1304,7 +1311,7 @@ def main():
     
     #start the UI endpoint
     if params.api_ws:
-        a = multiprocessing.Process(target=ui_endpoint.start, args=(params.api_ws_bind_addr,params.api_ws_port,config,running,state,commands,bad_crons,timeline), name='ui_endpoint')
+        a = multiprocessing.Process(target=ui_endpoint.start, args=(params.api_ws_bind_addr,params.api_ws_port,config,running,state,commands,bad_crons,timeline,debug_flag), name='ui_endpoint')
         a.start()
 
     if params.elasticsearch != '':
@@ -1346,7 +1353,12 @@ def main():
                 for key, value in yaml_config.items():
                     setattr(params, key, value)
                 # Update global debug flag if changed
+                old_debug = debug_flag.value
                 debug_enabled = params.debug
+                # Update shared debug flag for all processes
+                debug_flag.value = params.debug
+                if old_debug != params.debug:
+                    print(f"[MAIN] Debug mode changed: {old_debug} -> {params.debug}", flush=True)
         
         # timeline
         for cmd in commands:

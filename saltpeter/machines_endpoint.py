@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 import multiprocessing
 
 class WebSocketJobServer:
-    def __init__(self, host='0.0.0.0', port=8889, state=None, running=None, statelocks=None, log_func=None, commands=None, state_update_queues=None, debug=False):
+    def __init__(self, host='0.0.0.0', port=8889, state=None, running=None, statelocks=None, log_func=None, commands=None, state_update_queues=None, debug_flag=None):
         self.host = host
         self.port = port
         self.state = state
@@ -23,11 +23,11 @@ class WebSocketJobServer:
         self.connections = {}  # Track active connections by job_instance + machine
         self.command_check_task = None  # Background task for checking kill commands
         self.kill_machine_timeouts = {}  # Track machine kills with grace period: {(job_name, machine): timestamp}
-        self.debug = debug
+        self.debug_flag = debug_flag  # Shared debug flag from Manager
     
     def debug_print(self, message, flush=True):
         """Print debug message only if debug mode is enabled"""
-        if self.debug:
+        if self.debug_flag and self.debug_flag.value:
             print(message, flush=flush)
     
     def send_state_update(self, job_instance, update_msg):
@@ -115,16 +115,13 @@ class WebSocketJobServer:
                             continue
                             
                         # Send state update to job process via queue
-                        start_update = {
+                        self.send_state_update(job_instance, {
                             'type': 'start',
                             'machine': machine,
                             'timestamp': timestamp,
                             'wrapper_version': data.get('version', 'unknown')
-                        }
+                        })
                         
-                        self.send_state_update(job_instance, start_update)
-                        
-                        # Log start
                         print(f"[MACHINES WS][{job_instance}][{machine}] Started (PID: {data.get('pid')}, Version: {data.get('version', 'unknown')})", flush=True)
                         
                         # Send acknowledgement for start message
@@ -556,9 +553,9 @@ class WebSocketJobServer:
         """Run the WebSocket server (blocking)"""
         asyncio.run(self.start_server())
 
-def start_websocket_server(host, port, state, running, statelocks, log_func, commands=None, state_update_queues=None, debug=False):
+def start_websocket_server(host, port, state, running, statelocks, log_func, commands=None, state_update_queues=None, debug_flag=None):
     """Start WebSocket server in a separate process"""
     server = WebSocketJobServer(host=host, port=port, state=state, running=running, 
                                 statelocks=statelocks, log_func=log_func, commands=commands, 
-                                state_update_queues=state_update_queues, debug=debug)
+                                state_update_queues=state_update_queues, debug_flag=debug_flag)
     server.run()

@@ -13,7 +13,7 @@ from .version import __version__
 
 
 class UIEndpoint:
-    def __init__(self, bind_addr, port, config, running, state, commands, bad_crons, timeline):
+    def __init__(self, bind_addr, port, config, running, state, commands, bad_crons, timeline, debug_flag=None):
         self.bind_addr = bind_addr
         self.port = port
         self.config = config
@@ -22,6 +22,7 @@ class UIEndpoint:
         self.commands = commands
         self.bad_crons = bad_crons
         self.timeline = timeline
+        self.debug_flag = debug_flag  # Shared debug flag from Manager
         
         self.ws_connections = {}  # Changed to dict to track per-connection state
         self.cfgserial = ''
@@ -29,8 +30,10 @@ class UIEndpoint:
     
     def debug_print(self, message, flush=True):
         """Print debug message only if debug mode is enabled"""
-        # Check if saltpeter_config exists and has debug flag
-        if 'saltpeter_config' in self.config and self.config['saltpeter_config'].get('debug', False):
+        # Check shared debug flag first, then fall back to config
+        if self.debug_flag and self.debug_flag.value:
+            print(message, flush=flush)
+        elif 'saltpeter_config' in self.config and self.config['saltpeter_config'].get('debug', False):
             print(message, flush=flush)
     
     async def handle_websocket_http(self, request):
@@ -411,7 +414,7 @@ class UIEndpoint:
         asyncio.run(self.start_servers())
 
 
-def start(bind_addr, port, config, running, state, commands, bad_crons, timeline):
+def start(bind_addr, port, config, running, state, commands, bad_crons, timeline, debug_flag=None):
     """Start the UI endpoint server"""
-    server = UIEndpoint(bind_addr, port, config, running, state, commands, bad_crons, timeline)
+    server = UIEndpoint(bind_addr, port, config, running, state, commands, bad_crons, timeline, debug_flag)
     server.run()

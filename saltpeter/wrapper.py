@@ -369,8 +369,9 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                                     log(f'ACK received: seq={acked_seq} (last was {last_acked_seq})')
                                     last_acked_seq = acked_seq
                                     waiting_for_ack = False
-                                    # Remove all acknowledged messages (up to and including acked_seq)
-                                    pending_messages = [m for m in pending_messages if m.get('seq', -1) > acked_seq]
+                                    # Remove all acknowledged output messages (up to and including acked_seq)
+                                    # Keep non-output messages (connect, start) which don't have seq numbers
+                                    pending_messages = [m for m in pending_messages if not (m.get('type') == 'output' and m.get('seq', -1) <= acked_seq)]
                                     
                                     # Clear output_buffer up to the point covered by acked sequences
                                     # Find the highest buffer index that was used for sequences <= acked_seq
@@ -414,7 +415,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                                 # Clean up pending messages up to server's position
                                 pending_messages = [m for m in pending_messages if m.get('seq', -1) > server_last_seq]
                                 
-                                # Clear buffer up to server's position using same logic as ACK
+                                # Clear buffer using same logic as ACK
                                 clear_up_to = buffer_cleared_up_to
                                 for seq in sorted([s for s in seq_to_buffer_map.keys() if s <= server_last_seq]):
                                     if seq in seq_to_buffer_map:
@@ -425,6 +426,9 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                                     output_buffer = output_buffer[items_to_clear:]
                                     buffer_cleared_up_to = clear_up_to
                                     seq_to_buffer_map = {s: idx - items_to_clear for s, idx in seq_to_buffer_map.items() if s > server_last_seq}
+                                
+                                # Remove ACKed output messages from pending
+                                pending_messages = [m for m in pending_messages if not (m.get('type') == 'output' and m.get('seq', -1) <= server_last_seq)]
                             
                             # Don't resend immediately - let normal send logic handle it
                             # This avoids flooding the connection with retries
@@ -705,6 +709,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
         # Retry sending completion and pending messages until successful with ACK
         max_completion_retries = 30  # Try for 60 seconds
         log(f'Starting completion retry loop with {len(pending_messages)} pending messages')
+        acked_indices = []
         for attempt in range(max_completion_retries):
             try:
                 if websocket is None:
