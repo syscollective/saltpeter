@@ -1250,6 +1250,9 @@ def log(what, cron, group, instance, time, machine='', code=0, out='', status=''
         print(f"[MAIN] Could not open logfile {logfile_name}: ", e, flush=True)
         return
 
+    # Process carriage returns for clean output in logs/OpenSearch
+    out_processed = process_carriage_returns(out)
+
     if what == 'start':
         content = "###### Starting %s at %s ################\n" % (instance, time)
     elif what == 'machine_start':
@@ -1261,8 +1264,6 @@ def log(what, cron, group, instance, time, machine='', code=0, out='', status=''
     elif what == 'overlap':
         content = "###### Overlap detected on %s at %s ################\n" % (instance, time)
     else:
-        # Process carriage returns for clean output in logs/OpenSearch
-        out_processed = process_carriage_returns(out)
         content = """########## %s from %s ################
 **** Exit Code %d ******
 %s
