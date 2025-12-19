@@ -153,8 +153,6 @@ class WebSocketJobServer:
                         if job_instance not in self.running:
                             continue
                         
-                        # Check for duplicates BEFORE processing
-                        is_duplicate = False
                         if client_id in self.connections:
                             conn = self.connections[client_id]
                             
@@ -163,16 +161,15 @@ class WebSocketJobServer:
                                 expected_seq = conn['next_expected_seq']
                                 
                                 if seq < expected_seq:
-                                    # Duplicate message - already processed
-                                    is_duplicate = True
+                                    # Duplicate message - already processed, ACK and skip
                                     self.debug_print(f"[MACHINES WS][{job_instance}][{machine}] Duplicate output seq {seq} (expected {expected_seq})", flush=True)
-                                    # Send ack and skip processing
                                     await websocket.send(json.dumps({
                                         'type': 'ack',
                                         'ack_type': 'output',
                                         'seq': seq,
                                         'timestamp': datetime.now(timezone.utc).isoformat()
                                     }))
+                                    continue  # Skip all processing for duplicates
                                     
                                 elif seq > expected_seq:
                                     # Out of order - request resend
@@ -207,10 +204,6 @@ class WebSocketJobServer:
                                 await websocket.send(json.dumps(ack_msg))
                             except Exception as e:
                                 self.debug_print(f"[MACHINES WS][{job_instance}][{machine}] Failed to send output ACK: {e}", flush=True)
-                        
-                        # Skip state update if duplicate
-                        if is_duplicate:
-                            continue
                         
                         # Send output to job process via queue
                         # Validate job_instance is in running dict (started by main.py)

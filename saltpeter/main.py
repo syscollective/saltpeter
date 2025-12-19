@@ -1241,6 +1241,16 @@ def process_carriage_returns(text):
     if not text:
         return text
     
+    # Debug logging to trace \r processing
+    if debug_enabled:
+        has_cr = '\r' in text
+        cr_count = text.count('\r')
+        debug_print(f"[CR DEBUG] Input length: {len(text)}, has \\r: {has_cr}, \\r count: {cr_count}")
+        if has_cr:
+            # Show first 200 chars with \r visible
+            sample = repr(text[:200])
+            debug_print(f"[CR DEBUG] Input sample: {sample}")
+    
     lines = text.split('\n')
     processed = []
     for line in lines:
@@ -1248,10 +1258,18 @@ def process_carriage_returns(text):
             segments = line.split('\r')
             # Filter out empty segments and take the last non-empty one
             non_empty = [s for s in segments if s]
-            processed.append(non_empty[-1] if non_empty else '')
+            result = non_empty[-1] if non_empty else ''
+            if debug_enabled:
+                debug_print(f"[CR DEBUG] Line with \\r: {len(segments)} segments, kept: '{result[:50]}...'")
+            processed.append(result)
         else:
             processed.append(line)
-    return '\n'.join(processed)
+    
+    result_text = '\n'.join(processed)
+    if debug_enabled and '\r' in text:
+        debug_print(f"[CR DEBUG] Output length: {len(result_text)}, lines: {len(processed)}")
+    
+    return result_text
 
 
 def log(what, cron, group, instance, time, machine='', code=0, out='', status=''):
