@@ -136,39 +136,6 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
         
         return messages, seq
     
-    def combine_buffer_with_tags(buffer_items):
-        """Combine buffer items preserving order and adding [STDERR] tags at line boundaries"""
-        result = []
-        at_line_start = True
-        last_stream = None
-        
-        for chunk, stream_type in buffer_items:
-            # Check if we need to add [STDERR] tag
-            # Only add tag when:
-            # 1. Current chunk is STDERR
-            # 2. We're at the start of a line (after \n or \r, or at very beginning)
-            # 3. The chunk itself is not just a line boundary character
-            # 4. We're not continuing a STDERR line from previous chunk
-            needs_tag = (stream_type == 'stderr' and 
-                        at_line_start and 
-                        chunk not in ('\n', '\r') and
-                        last_stream != 'stderr')
-            
-            if needs_tag:
-                result.append('[STDERR] ')
-            
-            result.append(chunk)
-            
-            # Update state
-            if chunk in ('\n', '\r'):
-                at_line_start = True
-                last_stream = None  # Line boundary resets stream tracking
-            else:
-                at_line_start = False
-                last_stream = stream_type
-        
-        return ''.join(result)
-    
     process = None
     websocket = None
     retry_interval = 2
@@ -210,12 +177,21 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
         
         def read_stream(stream, stream_type):
             """Read from stream and put chunks into queue with stream type"""
+            last_stderr_char = '\n'  # Track last stderr character for tagging (local to thread)
             try:
                 while True:
                     chunk = stream.read(1)  # Read byte-by-byte for perfect interleaving
                     if not chunk:
                         break
-                    output_queue.put((chunk, stream_type))
+                    
+                    # Add [STDERR] tag at stderr line boundaries
+                    if stream_type == 'stderr':
+                        if last_stderr_char == '\n' and chunk != '\n':
+                            output_queue.put(('[STDERR] ', 'stderr'))
+                        output_queue.put((chunk, stream_type))
+                        last_stderr_char = chunk
+                    else:
+                        output_queue.put((chunk, stream_type))
             except Exception as e:
                 log(f'Stream reader error ({stream_type}): {e}')
             finally:
@@ -295,7 +271,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                     
                     # Flush any buffered output before terminating
                     if output_buffer and websocket is not None:
-                        combined_output = combine_buffer_with_tags(output_buffer)
+                        combined_output = ''.join(chunk for chunk, _ in output_buffer)
                         output_msg = {
                             'type': 'output',
                             'job_name': job_name,
@@ -491,7 +467,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
 
                             # Flush any buffered output BEFORE closing pipes
                             if output_buffer and websocket is not None:
-                                combined_output = combine_buffer_with_tags(output_buffer)
+                                combined_output = ''.join(chunk for chunk, _ in output_buffer)
                                 output_msg = {
                                     'type': 'output',
                                     'job_name': job_name,
@@ -575,8 +551,8 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                         
                         # No sorting needed - queue preserves natural ordering
                         
-                        # Combine bytes in order, adding [STDERR] prefix at line boundaries
-                        combined_output = combine_buffer_with_tags(unsent_buffer_data)
+                        # Combine bytes in order (tags already added at queue level)
+                        combined_output = ''.join(chunk for chunk, _ in unsent_buffer_data)
                         
                         if combined_output:  # Only proceed if there's actually data to send
                             # Track the starting sequence for this batch
@@ -686,7 +662,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
         
         # Add remaining output if any
         if remaining_chunks:
-            combined_remainder = combine_buffer_with_tags(remaining_chunks)
+            combined_remainder = ''.join(chunk for chunk, _ in remaining_chunks)
             if combined_remainder:
                 remainder_messages, next_seq = create_output_messages(combined_remainder, next_seq)
                 pending_messages.extend(remainder_messages)
