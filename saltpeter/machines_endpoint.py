@@ -153,6 +153,8 @@ class WebSocketJobServer:
                         if job_instance not in self.running:
                             continue
                         
+                        # Check for duplicates BEFORE processing
+                        is_duplicate = False
                         if client_id in self.connections:
                             conn = self.connections[client_id]
                             
@@ -162,15 +164,15 @@ class WebSocketJobServer:
                                 
                                 if seq < expected_seq:
                                     # Duplicate message - already processed
+                                    is_duplicate = True
                                     self.debug_print(f"[MACHINES WS][{job_instance}][{machine}] Duplicate output seq {seq} (expected {expected_seq})", flush=True)
-                                    # Send ack anyway
+                                    # Send ack and skip processing
                                     await websocket.send(json.dumps({
                                         'type': 'ack',
                                         'ack_type': 'output',
                                         'seq': seq,
                                         'timestamp': datetime.now(timezone.utc).isoformat()
                                     }))
-                                    continue
                                     
                                 elif seq > expected_seq:
                                     # Out of order - request resend
@@ -205,6 +207,10 @@ class WebSocketJobServer:
                                 await websocket.send(json.dumps(ack_msg))
                             except Exception as e:
                                 self.debug_print(f"[MACHINES WS][{job_instance}][{machine}] Failed to send output ACK: {e}", flush=True)
+                        
+                        # Skip state update if duplicate
+                        if is_duplicate:
+                            continue
                         
                         # Send output to job process via queue
                         # Validate job_instance is in running dict (started by main.py)
