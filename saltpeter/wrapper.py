@@ -186,9 +186,11 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                     
                     # Add [STDERR] tag at stderr line boundaries
                     if stream_type == 'stderr':
-                        if last_stderr_char == '\n' and chunk != '\n':
-                            output_queue.put(('[STDERR] ', 'stderr'))
-                        output_queue.put((chunk, stream_type))
+                        if last_stderr_char in ('\n', '\r'):
+                            # Put tag + first character together atomically
+                            output_queue.put(('[STDERR] ' + chunk, 'stderr'))
+                        else:
+                            output_queue.put((chunk, stream_type))
                         last_stderr_char = chunk
                     else:
                         output_queue.put((chunk, stream_type))
@@ -636,7 +638,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
         # Process finished - ensure ALL buffered output is sent
         # Force send even if waiting_for_ack (this is the final flush)
         if output_buffer:
-            combined_output = combine_buffer_with_tags(output_buffer)
+            combined_output = ''.join(chunk for chunk, _ in output_buffer)
             output_messages, next_seq = create_output_messages(combined_output, next_seq)
             # Track mapping for final flush
             current_buffer_end = buffer_cleared_up_to + len(output_buffer)
