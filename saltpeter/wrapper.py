@@ -189,6 +189,11 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                     if not chunk:
                         break
                     
+                    # Debug: log when each character is read
+                    import time
+                    timestamp = time.time()
+                    log(f'[READ {stream_type}] {repr(chunk)} at {timestamp:.6f}', level='debug')
+                    
                     # Add [STDERR] tag at stderr line boundaries
                     if stream_type == 'stderr':
                         if last_stderr_char in ('\n', '\r'):
