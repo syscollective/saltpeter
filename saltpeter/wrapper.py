@@ -140,19 +140,32 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
         """Combine buffer items preserving order and adding [STDERR] tags at line boundaries"""
         result = []
         at_line_start = True
+        last_stream = None
         
         for chunk, stream_type in buffer_items:
-            if stream_type == 'stderr':
-                # Add [STDERR] tag if we're at the start of a new line
-                if at_line_start and chunk not in ('\n', '\r'):
-                    result.append('[STDERR] ')
-                result.append(chunk)
-                # Track if we just saw a newline or carriage return
-                at_line_start = (chunk in ('\n', '\r'))
+            # Check if we need to add [STDERR] tag
+            # Only add tag when:
+            # 1. Current chunk is STDERR
+            # 2. We're at the start of a line (after \n or \r, or at very beginning)
+            # 3. The chunk itself is not just a line boundary character
+            # 4. We're not continuing a STDERR line from previous chunk
+            needs_tag = (stream_type == 'stderr' and 
+                        at_line_start and 
+                        chunk not in ('\n', '\r') and
+                        last_stream != 'stderr')
+            
+            if needs_tag:
+                result.append('[STDERR] ')
+            
+            result.append(chunk)
+            
+            # Update state
+            if chunk in ('\n', '\r'):
+                at_line_start = True
+                last_stream = None  # Line boundary resets stream tracking
             else:
-                # stdout - just append
-                result.append(chunk)
-                at_line_start = (chunk in ('\n', '\r'))
+                at_line_start = False
+                last_stream = stream_type
         
         return ''.join(result)
     
