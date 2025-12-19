@@ -518,26 +518,36 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                 print(f"[JOB:{procname}] Kill grace period expired, exiting result monitoring", flush=True)
                 break
         
-        # Check startup verification window (first 60 seconds)
+        # Check startup verification window
         elapsed = time.time() - job_start_time
-        if elapsed > startup_window:
+        
+        # If Salt completed, check results immediately (don't wait for startup_window)
+        check_now = salt_result and salt_result.get('completed')
+        
+        if check_now or elapsed > startup_window:
             # After startup window, check for targets that never connected
             for tgt in list(pending_targets):
                 if not startup_verified[tgt]:
                     # Target never connected - check if Salt has error info
                     salt_error = None
                     if salt_result and salt_result.get('completed'):
-                        if salt_result.get('error'):
-                            salt_error = salt_result['error']
-                        elif salt_result.get('result') and tgt in salt_result['result']:
-                            result = salt_result['result'][tgt]
-                            if isinstance(result, dict) and result.get('retcode') != 0:
-                                salt_error = f"Salt error (retcode {result['retcode']}): {result.get('ret', '')}"
+                    if salt_result.get('error'):
+                        salt_error = salt_result['error']
+                    elif salt_result.get('result') and tgt in salt_result['result']:
+                        result = salt_result['result'][tgt]
+                        if isinstance(result, dict) and result.get('retcode') != 0:
+                            stderr = result.get('stderr', '').strip()
+                            stdout = result.get('stdout', '').strip()
+                            salt_error = f"Exit code {result['retcode']}"
+                            if stderr:
+                                salt_error += f"\nSTDERR: {stderr}"
+                            if stdout:
+                                salt_error += f"\nSTDOUT: {stdout}"
                     
                     now = datetime.now(timezone.utc)
-                    error_msg = "Wrapper failed to connect"
+                    error_msg = "Wrapper failed to start" if check_now else "Wrapper failed to connect within 30s"
                     if salt_error:
-                        error_msg += f" - Salt reported: {salt_error}"
+                        error_msg += f" - {salt_error}"
                     else:
                         error_msg += " (no response from Salt or wrapper)"
                     
