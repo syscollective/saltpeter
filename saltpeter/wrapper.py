@@ -523,7 +523,6 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                             try:
                                 chunk, stream_type = output_queue.get_nowait()
                                 output_buffer.append((chunk, stream_type))
-                                log(f'Buffered {stream_type} chunk: {len(chunk)} bytes (buffer_size={sum(len(l) for l, _ in output_buffer)})')
                             except queue.Empty:
                                 break
                     except Exception as e:
@@ -552,7 +551,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                                 waiting_for_ack = False
                     
                     # Check if we should send buffered output (time or size based)
-                    buffer_size = sum(len(line) for _, line, _ in output_buffer)
+                    buffer_size = sum(len(chunk) for chunk, _ in output_buffer)
                     time_to_send = (current_time - last_output_send_time >= output_interval)
                     size_to_send = (buffer_size >= output_max_size)
                     
