@@ -136,6 +136,26 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
         
         return messages, seq
     
+    def combine_buffer_with_tags(buffer_items):
+        """Combine buffer items preserving order and adding [STDERR] tags at line boundaries"""
+        result = []
+        at_line_start = True
+        
+        for chunk, stream_type in buffer_items:
+            if stream_type == 'stderr':
+                # Add [STDERR] tag if we're at the start of a new line
+                if at_line_start and chunk != '\n':
+                    result.append('[STDERR] ')
+                result.append(chunk)
+                # Track if we just saw a newline
+                at_line_start = (chunk == '\n')
+            else:
+                # stdout - just append
+                result.append(chunk)
+                at_line_start = (chunk == '\n')
+        
+        return ''.join(result)
+    
     process = None
     websocket = None
     retry_interval = 2
@@ -262,14 +282,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                     
                     # Flush any buffered output before terminating
                     if output_buffer and websocket is not None:
-                        combined_parts = []
-                        for line, stream_type in output_buffer:
-                            if stream_type == 'stderr':
-                                prefixed = ''.join('[STDERR] ' + text_line for text_line in line.splitlines(keepends=True))
-                                combined_parts.append(prefixed)
-                            else:
-                                combined_parts.append(line)
-                        combined_output = ''.join(combined_parts)
+                        combined_output = combine_buffer_with_tags(output_buffer)
                         output_msg = {
                             'type': 'output',
                             'job_name': job_name,
@@ -465,14 +478,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
 
                             # Flush any buffered output BEFORE closing pipes
                             if output_buffer and websocket is not None:
-                                combined_parts = []
-                                for line, stream_type in output_buffer:
-                                    if stream_type == 'stderr':
-                                        prefixed = ''.join('[STDERR] ' + text_line for text_line in line.splitlines(keepends=True))
-                                        combined_parts.append(prefixed)
-                                    else:
-                                        combined_parts.append(line)
-                                combined_output = ''.join(combined_parts)
+                                combined_output = combine_buffer_with_tags(output_buffer)
                                 output_msg = {
                                     'type': 'output',
                                     'job_name': job_name,
@@ -557,18 +563,8 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                         
                         # No sorting needed - queue preserves natural ordering
                         
-                        # Combine output with [STDERR] prefix only at line beginnings
-                        combined_parts = []
-                        for line, stream_type in unsent_buffer_data:
-                            if stream_type == 'stderr':
-                                # Prefix each line with [STDERR], handling multi-line content
-                                prefixed = ''
-                                for text_line in line.splitlines(keepends=True):
-                                    prefixed += '[STDERR] ' + text_line
-                                combined_parts.append(prefixed)
-                            else:
-                                combined_parts.append(line)
-                        combined_output = ''.join(combined_parts)
+                        # Combine bytes in order, adding [STDERR] prefix at line boundaries
+                        combined_output = combine_buffer_with_tags(unsent_buffer_data)
                         
                         if combined_output:  # Only proceed if there's actually data to send
                             # Track the starting sequence for this batch
@@ -650,14 +646,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
         # Process finished - ensure ALL buffered output is sent
         # Force send even if waiting_for_ack (this is the final flush)
         if output_buffer:
-            combined_parts = []
-            for line, stream_type in output_buffer:
-                if stream_type == 'stderr':
-                    prefixed = ''.join('[STDERR] ' + text_line for text_line in line.splitlines(keepends=True))
-                    combined_parts.append(prefixed)
-                else:
-                    combined_parts.append(line)
-            combined_output = ''.join(combined_parts)
+            combined_output = combine_buffer_with_tags(output_buffer)
             output_messages, next_seq = create_output_messages(combined_output, next_seq)
             # Track mapping for final flush
             current_buffer_end = buffer_cleared_up_to + len(output_buffer)
@@ -683,14 +672,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
         
         # Add remaining output if any
         if remaining_chunks:
-            combined_parts = []
-            for chunk, stream_type in remaining_chunks:
-                if stream_type == 'stderr':
-                    prefixed = ''.join('[STDERR] ' + text_line for text_line in chunk.splitlines(keepends=True))
-                    combined_parts.append(prefixed)
-                else:
-                    combined_parts.append(chunk)
-            combined_remainder = ''.join(combined_parts)
+            combined_remainder = combine_buffer_with_tags(remaining_chunks)
             if combined_remainder:
                 remainder_messages, next_seq = create_output_messages(combined_remainder, next_seq)
                 pending_messages.extend(remainder_messages)
