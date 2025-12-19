@@ -344,7 +344,8 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                             
                             current_output = job_state['results'][machine].get('ret', '')
                             new_data = msg.get('data', '')
-                            debug_print(f"[OUTPUT DEBUG] Appending {len(new_data)} bytes, has \\r: {'\r' in new_data}, sample: {repr(new_data[:50])}")
+                            has_cr = '\r' in new_data
+                            debug_print(f"[OUTPUT DEBUG] Appending {len(new_data)} bytes, has \\r: {has_cr}, sample: {repr(new_data[:50])}")
                             job_state['results'][machine]['ret'] = current_output + new_data
                             
                             seq = msg.get('seq')
@@ -1283,7 +1284,8 @@ def log(what, cron, group, instance, time, machine='', code=0, out='', status=''
         return
 
     # Process carriage returns for clean output in logs/OpenSearch
-    debug_print(f"[LOG DEBUG] Before CR processing: length={len(out)}, has \\r: {'\r' in out}, sample: {repr(out[:100])}")
+    has_cr = '\r' in out
+    debug_print(f"[LOG DEBUG] Before CR processing: length={len(out)}, has \\r: {has_cr}, sample: {repr(out[:100])}")
     out_processed = process_carriage_returns(out)
 
     if what == 'start':

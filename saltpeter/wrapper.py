@@ -573,7 +573,8 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                             output_messages, next_seq = create_output_messages(combined_output, next_seq)
                             
                             log(f'Sending buffer: {len(output_messages)} message(s), total_len={len(combined_output)}, reason={"time" if time_to_send else "size"}', level='debug')
-                            log(f'[WRAPPER OUTPUT DEBUG] Combined output has \\r: {"\\r" in combined_output}, sample: {repr(combined_output[:100])}', level='debug')
+                            has_cr = '\r' in combined_output
+                            log(f'[WRAPPER OUTPUT DEBUG] Combined output has \\r: {has_cr}, sample: {repr(combined_output[:100])}', level='debug')
                             
                             # Map each sequence to the buffer position it covers
                             # All sequences in this batch cover up to current buffer length (from buffer_cleared_up_to perspective)
