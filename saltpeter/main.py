@@ -1222,6 +1222,26 @@ def debuglog(content):
     logfile.close()
 
 
+def process_carriage_returns(text):
+    """
+    Process carriage returns (\r) in text by keeping only the last segment per line.
+    This simulates terminal behavior where \r returns to line start and overwrites.
+    Used to clean up progress bar output for storage (logs/OpenSearch).
+    """
+    if not text:
+        return text
+    
+    lines = text.split('\n')
+    processed = []
+    for line in lines:
+        if '\r' in line:
+            segments = line.split('\r')
+            processed.append(segments[-1])  # Keep last segment (final state)
+        else:
+            processed.append(line)
+    return '\n'.join(processed)
+
+
 def log(what, cron, group, instance, time, machine='', code=0, out='', status=''):
     try:
         logfile_name = params.logdir+'/'+cron+'.log'
@@ -1241,11 +1261,13 @@ def log(what, cron, group, instance, time, machine='', code=0, out='', status=''
     elif what == 'overlap':
         content = "###### Overlap detected on %s at %s ################\n" % (instance, time)
     else:
+        # Process carriage returns for clean output in logs/OpenSearch
+        out_processed = process_carriage_returns(out)
         content = """########## %s from %s ################
 **** Exit Code %d ******
 %s
 ####### END %s from %s at %s #########
-""" % (machine, instance, code, out, machine, instance, time)
+""" % (machine, instance, code, out_processed, machine, instance, time)
 
     logfile.write(content)
     logfile.flush()
@@ -1253,7 +1275,7 @@ def log(what, cron, group, instance, time, machine='', code=0, out='', status=''
 
     if use_es:
         doc = { 'job_name': cron, "group": group, "job_instance": instance, '@timestamp': time,
-                'return_code': code, 'machine': machine, 'output': out, 'msg_type': what } 
+                'return_code': code, 'machine': machine, 'output': out_processed, 'msg_type': what } 
         index_name = '%s-%s' % (params.elasticsearch_index, date.today().strftime('%Y.%m.%d'))
         try:
             #es.indices.create(index=index_name, ignore=400)
@@ -1264,7 +1286,7 @@ def log(what, cron, group, instance, time, machine='', code=0, out='', status=''
 
     if use_opensearch:
         doc = { 'job_name': cron, "group": group, "job_instance": instance, '@timestamp': time,
-                'return_code': code, 'machine': machine, 'output': out, 'msg_type': what } 
+                'return_code': code, 'machine': machine, 'output': out_processed, 'msg_type': what } 
         index_name = '%s-%s' % (params.opensearch_index, date.today().strftime('%Y.%m.%d'))
         try:
             #es.indices.create(index=index_name, ignore=400)

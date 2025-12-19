@@ -144,15 +144,15 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
         for chunk, stream_type in buffer_items:
             if stream_type == 'stderr':
                 # Add [STDERR] tag if we're at the start of a new line
-                if at_line_start and chunk != '\n':
+                if at_line_start and chunk not in ('\n', '\r'):
                     result.append('[STDERR] ')
                 result.append(chunk)
-                # Track if we just saw a newline
-                at_line_start = (chunk == '\n')
+                # Track if we just saw a newline or carriage return
+                at_line_start = (chunk in ('\n', '\r'))
             else:
                 # stdout - just append
                 result.append(chunk)
-                at_line_start = (chunk == '\n')
+                at_line_start = (chunk in ('\n', '\r'))
         
         return ''.join(result)
     
