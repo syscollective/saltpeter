@@ -176,13 +176,13 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
         output_queue = queue.Queue()
         
         def read_stream(stream, stream_type):
-            """Read from stream and put chunks into queue with timestamp and type"""
+            """Read from stream and put chunks into queue with stream type"""
             try:
                 while True:
-                    chunk = stream.read(4096)  # Read in chunks
+                    chunk = stream.read(1)  # Read byte-by-byte for perfect interleaving
                     if not chunk:
                         break
-                    output_queue.put((time.time(), chunk, stream_type))
+                    output_queue.put((chunk, stream_type))
             except Exception as e:
                 log(f'Stream reader error ({stream_type}): {e}')
             finally:
@@ -211,7 +211,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
         last_acked_seq = -1
         waiting_for_ack = False
         last_send_time = 0
-        last_output_send_time = 0  # Track when we last sent output
+        last_output_send_time = time.time()  # Track when we last sent output (start from now)
         last_sync_request_time = 0  # Track when we last requested sync
         
         # Buffer-to-sequence mapping for retransmission support
@@ -263,7 +263,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                     # Flush any buffered output before terminating
                     if output_buffer and websocket is not None:
                         combined_parts = []
-                        for _, line, stream_type in output_buffer:
+                        for line, stream_type in output_buffer:
                             if stream_type == 'stderr':
                                 prefixed = ''.join('[STDERR] ' + text_line for text_line in line.splitlines(keepends=True))
                                 combined_parts.append(prefixed)
@@ -466,7 +466,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                             # Flush any buffered output BEFORE closing pipes
                             if output_buffer and websocket is not None:
                                 combined_parts = []
-                                for _, line, stream_type in output_buffer:
+                                for line, stream_type in output_buffer:
                                     if stream_type == 'stderr':
                                         prefixed = ''.join('[STDERR] ' + text_line for text_line in line.splitlines(keepends=True))
                                         combined_parts.append(prefixed)
@@ -515,9 +515,9 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                     try:
                         while True:
                             try:
-                                timestamp, chunk, stream_type = output_queue.get_nowait()
-                                output_buffer.append((timestamp, chunk, stream_type))
-                                log(f'Buffered {stream_type} chunk: {len(chunk)} bytes (buffer_size={sum(len(l) for _, l, _ in output_buffer)})')
+                                chunk, stream_type = output_queue.get_nowait()
+                                output_buffer.append((chunk, stream_type))
+                                log(f'Buffered {stream_type} chunk: {len(chunk)} bytes (buffer_size={sum(len(l) for l, _ in output_buffer)})')
                             except queue.Empty:
                                 break
                     except Exception as e:
@@ -555,9 +555,11 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                         # Find where we left off - this is relative to current buffer after clearing
                         unsent_buffer_data = output_buffer  # All current buffer items are unsent
                         
+                        # No sorting needed - queue preserves natural ordering
+                        
                         # Combine output with [STDERR] prefix only at line beginnings
                         combined_parts = []
-                        for _, line, stream_type in unsent_buffer_data:
+                        for line, stream_type in unsent_buffer_data:
                             if stream_type == 'stderr':
                                 # Prefix each line with [STDERR], handling multi-line content
                                 prefixed = ''
@@ -649,7 +651,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
         # Force send even if waiting_for_ack (this is the final flush)
         if output_buffer:
             combined_parts = []
-            for _, line, stream_type in output_buffer:
+            for line, stream_type in output_buffer:
                 if stream_type == 'stderr':
                     prefixed = ''.join('[STDERR] ' + text_line for text_line in line.splitlines(keepends=True))
                     combined_parts.append(prefixed)
@@ -674,15 +676,15 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
         remaining_chunks = []
         try:
             while True:
-                timestamp, chunk, stream_type = output_queue.get_nowait()
-                remaining_chunks.append((timestamp, chunk, stream_type))
+                chunk, stream_type = output_queue.get_nowait()
+                remaining_chunks.append((chunk, stream_type))
         except queue.Empty:
             pass
         
         # Add remaining output if any
         if remaining_chunks:
             combined_parts = []
-            for _, chunk, stream_type in remaining_chunks:
+            for chunk, stream_type in remaining_chunks:
                 if stream_type == 'stderr':
                     prefixed = ''.join('[STDERR] ' + text_line for text_line in chunk.splitlines(keepends=True))
                     combined_parts.append(prefixed)
