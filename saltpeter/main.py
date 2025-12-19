@@ -531,18 +531,18 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                     # Target never connected - check if Salt has error info
                     salt_error = None
                     if salt_result and salt_result.get('completed'):
-                    if salt_result.get('error'):
-                        salt_error = salt_result['error']
-                    elif salt_result.get('result') and tgt in salt_result['result']:
-                        result = salt_result['result'][tgt]
-                        if isinstance(result, dict) and result.get('retcode') != 0:
-                            stderr = result.get('stderr', '').strip()
-                            stdout = result.get('stdout', '').strip()
-                            salt_error = f"Exit code {result['retcode']}"
-                            if stderr:
-                                salt_error += f"\nSTDERR: {stderr}"
-                            if stdout:
-                                salt_error += f"\nSTDOUT: {stdout}"
+                        if salt_result.get('error'):
+                            salt_error = salt_result['error']
+                        elif salt_result.get('result') and tgt in salt_result['result']:
+                            result = salt_result['result'][tgt]
+                            if isinstance(result, dict) and result.get('retcode') != 0:
+                                stderr = result.get('stderr', '').strip()
+                                stdout = result.get('stdout', '').strip()
+                                salt_error = f"Exit code {result['retcode']}"
+                                if stderr:
+                                    salt_error += f"\nSTDERR: {stderr}"
+                                if stdout:
+                                    salt_error += f"\nSTDOUT: {stdout}"
                     
                     now = datetime.now(timezone.utc)
                     error_msg = "Wrapper failed to start" if check_now else "Wrapper failed to connect within 30s"
