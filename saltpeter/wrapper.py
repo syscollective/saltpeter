@@ -154,7 +154,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
             'stdout': subprocess.PIPE,
             'stderr': subprocess.PIPE,
             'shell': True,
-            'text': True,
+            'text': False,  # Binary mode - we'll wrap with TextIOWrapper
             'bufsize': 0  # Unbuffered for real-time output
         }
         
@@ -169,6 +169,11 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
         # Start the subprocess FIRST - runs regardless of WebSocket state
         process = subprocess.Popen(command, **proc_kwargs)
         
+        # Wrap binary streams with TextIOWrapper to read characters while preserving \r
+        import io
+        stdout_text = io.TextIOWrapper(process.stdout, encoding='utf-8', errors='replace', newline='', line_buffering=False)
+        stderr_text = io.TextIOWrapper(process.stderr, encoding='utf-8', errors='replace', newline='', line_buffering=False)
+        
         # Use threads to read stdout/stderr in real-time without blocking
         # This preserves output order better than select() with non-blocking reads
         import threading
@@ -180,7 +185,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
             last_stderr_char = '\n'  # Track last stderr character for tagging (local to thread)
             try:
                 while True:
-                    chunk = stream.read(1)  # Read byte-by-byte for perfect interleaving
+                    chunk = stream.read(1)  # Read character-by-character
                     if not chunk:
                         break
                     
@@ -200,8 +205,8 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                 stream.close()
         
         # Start reader threads
-        stdout_thread = threading.Thread(target=read_stream, args=(process.stdout, 'stdout'), daemon=True)
-        stderr_thread = threading.Thread(target=read_stream, args=(process.stderr, 'stderr'), daemon=True)
+        stdout_thread = threading.Thread(target=read_stream, args=(stdout_text, 'stdout'), daemon=True)
+        stderr_thread = threading.Thread(target=read_stream, args=(stderr_text, 'stderr'), daemon=True)
         stdout_thread.start()
         stderr_thread.start()
         
