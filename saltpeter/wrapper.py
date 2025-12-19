@@ -728,7 +728,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
         
         # Filter out messages that were already ACKed during job execution
         # This prevents unnecessary retransmission of messages that succeeded
-        pending_messages = [msg for msg in pending_messages if msg.get('seq') not in acked_seqs]
+        pending_messages = [msg for msg in pending_messages if not (msg.get('type') == 'output' and msg.get('seq', -1) <= last_acked_seq)]
         log(f'Filtered pending messages: {len(pending_messages)} need to be sent (already ACKed messages removed)', level='debug')
         
         # Retry sending completion and pending messages until successful with ACK
