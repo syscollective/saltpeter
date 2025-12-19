@@ -1246,7 +1246,9 @@ def process_carriage_returns(text):
     for line in lines:
         if '\r' in line:
             segments = line.split('\r')
-            processed.append(segments[-1])  # Keep last segment (final state)
+            # Filter out empty segments and take the last non-empty one
+            non_empty = [s for s in segments if s]
+            processed.append(non_empty[-1] if non_empty else '')
         else:
             processed.append(line)
     return '\n'.join(processed)
