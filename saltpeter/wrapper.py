@@ -155,7 +155,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
             'stderr': subprocess.PIPE,
             'shell': True,
             'text': True,
-            'bufsize': 1  # Line buffered
+            'bufsize': 0  # Unbuffered for real-time output
         }
         
         if cwd:
@@ -169,10 +169,30 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
         # Start the subprocess FIRST - runs regardless of WebSocket state
         process = subprocess.Popen(command, **proc_kwargs)
         
-        # Set stdout/stderr to non-blocking mode IMMEDIATELY to avoid losing early output
-        import fcntl
-        fcntl.fcntl(process.stdout.fileno(), fcntl.F_SETFL, os.O_NONBLOCK)
-        fcntl.fcntl(process.stderr.fileno(), fcntl.F_SETFL, os.O_NONBLOCK)
+        # Use threads to read stdout/stderr in real-time without blocking
+        # This preserves output order better than select() with non-blocking reads
+        import threading
+        import queue
+        output_queue = queue.Queue()
+        
+        def read_stream(stream, stream_type):
+            """Read from stream and put chunks into queue with timestamp and type"""
+            try:
+                while True:
+                    chunk = stream.read(4096)  # Read in chunks
+                    if not chunk:
+                        break
+                    output_queue.put((time.time(), chunk, stream_type))
+            except Exception as e:
+                log(f'Stream reader error ({stream_type}): {e}')
+            finally:
+                stream.close()
+        
+        # Start reader threads
+        stdout_thread = threading.Thread(target=read_stream, args=(process.stdout, 'stdout'), daemon=True)
+        stderr_thread = threading.Thread(target=read_stream, args=(process.stderr, 'stderr'), daemon=True)
+        stdout_thread.start()
+        stderr_thread.start()
         
         # Track job start time for timeout enforcement
         job_start_time = time.time()
@@ -242,7 +262,14 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                     
                     # Flush any buffered output before terminating
                     if output_buffer and websocket is not None:
-                        combined_output = ''.join(line for _, line in output_buffer)
+                        combined_parts = []
+                        for _, line, stream_type in output_buffer:
+                            if stream_type == 'stderr':
+                                prefixed = ''.join('[STDERR] ' + text_line for text_line in line.splitlines(keepends=True))
+                                combined_parts.append(prefixed)
+                            else:
+                                combined_parts.append(line)
+                        combined_output = ''.join(combined_parts)
                         output_msg = {
                             'type': 'output',
                             'job_name': job_name,
@@ -438,7 +465,14 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
 
                             # Flush any buffered output BEFORE closing pipes
                             if output_buffer and websocket is not None:
-                                combined_output = ''.join(line for _, line in output_buffer)
+                                combined_parts = []
+                                for _, line, stream_type in output_buffer:
+                                    if stream_type == 'stderr':
+                                        prefixed = ''.join('[STDERR] ' + text_line for text_line in line.splitlines(keepends=True))
+                                        combined_parts.append(prefixed)
+                                    else:
+                                        combined_parts.append(line)
+                                combined_output = ''.join(combined_parts)
                                 output_msg = {
                                     'type': 'output',
                                     'job_name': job_name,
@@ -459,15 +493,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                             
                             # Terminate the process
                             if process and process.poll() is None:
-                                # Close the pipes before terminating to avoid blocking on communicate()
-                                try:
-                                    if process.stdout:
-                                        process.stdout.close()
-                                    if process.stderr:
-                                        process.stderr.close()
-                                except:
-                                    pass
-
+                                # Threads will handle stream closing automatically
                                 process.terminate()
 
                                 # Give it 10 seconds to terminate gracefully
@@ -485,36 +511,17 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                     except json.JSONDecodeError:
                         pass
                     
-                    # Read available output
+                    # Read available output from queue (non-blocking)
                     try:
-                        # Non-blocking read from stdout/stderr
-                        import select
-                        readable, _, _ = select.select([process.stdout, process.stderr], [], [], 0.1)
-                        
-                        for stream in readable:
-                            # Read ALL available lines from this stream, not just one
-                            while True:
-                                try:
-                                    line = stream.readline()
-                                    if not line:
-                                        break
-                                    stream_type = 'stdout' if stream == process.stdout else 'stderr'
-                                    # Prefix stderr lines for distinguishability while preserving order
-                                    if stream_type == 'stderr':
-                                        line = '[STDERR] ' + line
-                                    output_buffer.append((time.time(), line))
-                                    log(f'Buffered line: {repr(line[:50])}... (buffer_size={sum(len(l) for _, l in output_buffer)})')
-                                except BlockingIOError:
-                                    # No more data available (non-blocking mode)
-                                    break
-                                
-                                # Check if more data is immediately available
-                                # If not, break to avoid blocking on readline()
-                                ready, _, _ = select.select([stream], [], [], 0)
-                                if not ready:
-                                    break
-                    except Exception:
-                        pass
+                        while True:
+                            try:
+                                timestamp, chunk, stream_type = output_queue.get_nowait()
+                                output_buffer.append((timestamp, chunk, stream_type))
+                                log(f'Buffered {stream_type} chunk: {len(chunk)} bytes (buffer_size={sum(len(l) for _, l, _ in output_buffer)})')
+                            except queue.Empty:
+                                break
+                    except Exception as e:
+                        log(f'Error reading output queue: {e}')
                     
                     # If waiting for ACK too long, request sync from server
                     current_time = time.time()
@@ -539,7 +546,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                                 waiting_for_ack = False
                     
                     # Check if we should send buffered output (time or size based)
-                    buffer_size = sum(len(line) for _, line in output_buffer)
+                    buffer_size = sum(len(line) for _, line, _ in output_buffer)
                     time_to_send = (current_time - last_output_send_time >= output_interval)
                     size_to_send = (buffer_size >= output_max_size)
                     
@@ -547,7 +554,19 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                         # Combine all buffered output (only new data not yet converted to messages)
                         # Find where we left off - this is relative to current buffer after clearing
                         unsent_buffer_data = output_buffer  # All current buffer items are unsent
-                        combined_output = ''.join(line for _, line in unsent_buffer_data)
+                        
+                        # Combine output with [STDERR] prefix only at line beginnings
+                        combined_parts = []
+                        for _, line, stream_type in unsent_buffer_data:
+                            if stream_type == 'stderr':
+                                # Prefix each line with [STDERR], handling multi-line content
+                                prefixed = ''
+                                for text_line in line.splitlines(keepends=True):
+                                    prefixed += '[STDERR] ' + text_line
+                                combined_parts.append(prefixed)
+                            else:
+                                combined_parts.append(line)
+                        combined_output = ''.join(combined_parts)
                         
                         if combined_output:  # Only proceed if there's actually data to send
                             # Track the starting sequence for this batch
@@ -629,7 +648,14 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
         # Process finished - ensure ALL buffered output is sent
         # Force send even if waiting_for_ack (this is the final flush)
         if output_buffer:
-            combined_output = ''.join(line for _, line in output_buffer)
+            combined_parts = []
+            for _, line, stream_type in output_buffer:
+                if stream_type == 'stderr':
+                    prefixed = ''.join('[STDERR] ' + text_line for text_line in line.splitlines(keepends=True))
+                    combined_parts.append(prefixed)
+                else:
+                    combined_parts.append(line)
+            combined_output = ''.join(combined_parts)
             output_messages, next_seq = create_output_messages(combined_output, next_seq)
             # Track mapping for final flush
             current_buffer_end = buffer_cleared_up_to + len(output_buffer)
@@ -639,19 +665,30 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
             # Clear buffer after final flush (process complete, won't need retransmission)
             output_buffer = []
         
-        # Read any remaining output (skip if killed, pipes are closed)
-        stdout_remainder = None
-        stderr_remainder = None
+        # Wait for threads to finish reading any remaining output
+        # Give threads up to 2 seconds to finish reading after process exits
+        stdout_thread.join(timeout=2)
+        stderr_thread.join(timeout=2)
         
-        if not killed:
-            try:
-                stdout_remainder, stderr_remainder = process.communicate()
-            except Exception:
-                pass
+        # Drain any remaining items from queue
+        remaining_chunks = []
+        try:
+            while True:
+                timestamp, chunk, stream_type = output_queue.get_nowait()
+                remaining_chunks.append((timestamp, chunk, stream_type))
+        except queue.Empty:
+            pass
         
-        # Add all remaining output
-        if stdout_remainder or stderr_remainder:
-            combined_remainder = (stdout_remainder or '') + (stderr_remainder or '')
+        # Add remaining output if any
+        if remaining_chunks:
+            combined_parts = []
+            for _, chunk, stream_type in remaining_chunks:
+                if stream_type == 'stderr':
+                    prefixed = ''.join('[STDERR] ' + text_line for text_line in chunk.splitlines(keepends=True))
+                    combined_parts.append(prefixed)
+                else:
+                    combined_parts.append(chunk)
+            combined_remainder = ''.join(combined_parts)
             if combined_remainder:
                 remainder_messages, next_seq = create_output_messages(combined_remainder, next_seq)
                 pending_messages.extend(remainder_messages)
