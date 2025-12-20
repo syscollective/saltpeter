@@ -562,8 +562,6 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                                 last_stderr_char = char
                             else:
                                 output_buffer.append((char, stream_type))
-                    except Exception as e:
-                        log(f'Error reading output queue: {e}')
                     
                     # If waiting for ACK too long, request sync from server
                     current_time = time.time()
