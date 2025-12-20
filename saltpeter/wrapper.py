@@ -148,6 +148,26 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
     output_max_size = 500 * 1024  # Hardcoded: 500KB to stay well under 1MB frame limit
     max_chunk_size = 500 * 1024  # Hardcoded: split messages larger than 500KB
     
+    # Background task for receiving WebSocket messages
+    # This ensures kill/control messages are never missed
+    async def websocket_receiver(ws, msg_queue):
+        """Continuously receive messages and put them in queue"""
+        try:
+            while True:
+                message = await ws.recv()
+                await msg_queue.put(message)
+        except Exception:
+            # Connection closed or error - just exit
+            pass
+    
+    def close_websocket():
+        """Helper to close websocket and cancel receiver task"""
+        nonlocal websocket, recv_task
+        websocket = None
+        if recv_task is not None:
+            recv_task.cancel()
+            recv_task = None
+    
     try:
         # Prepare subprocess arguments - combine stdout and stderr
         proc_kwargs = {
@@ -189,6 +209,11 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
         last_send_time = 0
         last_output_send_time = time.time()  # Track when we last sent output (start from now)
         last_sync_request_time = 0  # Track when we last requested sync
+        
+        # Incoming message queue for kill/control messages
+        # This ensures we never miss kill messages regardless of what main loop is doing
+        incoming_messages = asyncio.Queue()
+        recv_task = None  # Background task for receiving WebSocket messages
         
         # Buffer-to-sequence mapping for retransmission support
         # Add initial connection message to pending queue
@@ -277,12 +302,16 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                             websockets.connect(websocket_url),
                             timeout=2
                         )
+                        # Start background receiver task
+                        if recv_task is not None:
+                            recv_task.cancel()
+                        recv_task = asyncio.create_task(websocket_receiver(websocket, incoming_messages))
                     except AttributeError as e:
                         # Python hashlib missing sha1 - fatal error, cannot use WebSocket
                         if 'sha1' in str(e):
                             log(f'ERROR: Python installation missing hashlib.sha1 - WebSocket unavailable')
                             log(f'ERROR: Continuing without server communication - job will appear to hang')
-                            websocket = None
+                            close_websocket()
                             # Don't retry - this is fatal
                             last_retry = current_time + 999999  # Prevent future retries
                             continue
@@ -290,7 +319,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                     except Exception as e:
                         # Connection failed, will retry after interval
                         log(f'Connection failed: {type(e).__name__}: {e}')
-                        websocket = None
+                        close_websocket()
                         last_retry = current_time
                         continue
                     
@@ -309,7 +338,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                                     pending_messages = [m for m in pending_messages if m['type'] != 'connect']
                             except:
                                 # If send/ack fails, connection is bad
-                                websocket = None
+                                close_websocket()
                                 break
                         
                         # Send start message if still pending and wait for ACK
@@ -325,7 +354,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                                         pending_messages = [m for m in pending_messages if m['type'] != 'start']
                                 except:
                                     # If send/ack fails, connection is bad
-                                    websocket = None
+                                    close_websocket()
                                     break
                         
                         # After reconnect, resend all pending output messages
@@ -336,20 +365,21 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                                     await websocket.send(json.dumps(unsent_msg))
                                     log(f'Resent pending seq={unsent_msg.get("seq")}')
                                 except:
-                                    websocket = None
+                                    close_websocket()
                                     break
                             
                     except Exception:
                         # Connection failed, will retry after interval
-                        websocket = None
+                        close_websocket()
                         last_retry = current_time
             
             # If connected, handle communication
             if websocket is not None:
                 try:
-                    # Check for incoming messages from server (non-blocking)
+                    # Check for incoming messages from queue (populated by background receiver)
+                    # This ensures we never miss kill messages regardless of what else is happening
                     try:
-                        message = await asyncio.wait_for(websocket.recv(), timeout=0.1)
+                        message = await asyncio.wait_for(incoming_messages.get(), timeout=0.01)
                         data = json.loads(message)
                         log(f'Received message: type={data.get("type")}', level='debug')
                         
@@ -484,7 +514,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                                 await websocket.send(json.dumps(sync_request))
                                 last_sync_request_time = current_time
                             except:
-                                websocket = None
+                                close_websocket()
                                 waiting_for_ack = False
                     
                     # Check if we should send buffered output (time or size based)
@@ -516,7 +546,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                                 # Don't clear buffer - it will be cleared when server ACKs
                             except:
                                 # Connection lost, mark for reconnect
-                                websocket = None
+                                close_websocket()
                                 waiting_for_ack = False
                     
                     # Send any pending output messages (from multi-chunk or reconnect)
@@ -532,12 +562,12 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                                 last_send_time = current_time
                                 log(f'Sent pending output seq={next_msg.get("seq")}')
                             except:
-                                websocket = None
+                                close_websocket()
                                 waiting_for_ack = False
                 
                 except Exception:
                     # Any error means connection is bad
-                    websocket = None
+                    close_websocket()
                 
                 # Send heartbeat at calculated interval - do this regardless of other state
                 current_time = time.time()
@@ -555,7 +585,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                             last_heartbeat = current_time
                         except:
                             # Connection lost
-                            websocket = None
+                            close_websocket()
                     else:
                         # Update heartbeat timer even if disconnected to avoid spam when reconnecting
                         last_heartbeat = current_time
