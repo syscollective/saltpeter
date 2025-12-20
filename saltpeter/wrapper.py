@@ -169,14 +169,6 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
         # Start the subprocess FIRST - runs regardless of WebSocket state
         process = subprocess.Popen(command, **proc_kwargs)
         
-        # Set streams to non-blocking mode
-        import fcntl
-        import os
-        fl = fcntl.fcntl(process.stdout, fcntl.F_GETFL)
-        fcntl.fcntl(process.stdout, fcntl.F_SETFL, fl | os.O_NONBLOCK)
-        fl = fcntl.fcntl(process.stderr, fcntl.F_GETFL)
-        fcntl.fcntl(process.stderr, fcntl.F_SETFL, fl | os.O_NONBLOCK)
-        
         # Wrap binary streams with TextIOWrapper to read characters while preserving \r
         import io
         stdout_text = io.TextIOWrapper(process.stdout, encoding='utf-8', errors='replace', newline='', line_buffering=False)
@@ -215,8 +207,6 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                                     break
                                 # Immediately put in queue - NO processing
                                 raw_output_queue.put((chunk, stream_type))
-                            except BlockingIOError:
-                                break
                             except Exception:
                                 break
             except Exception as e:
