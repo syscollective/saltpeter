@@ -275,10 +275,11 @@ class WebSocketJobServer:
                             await websocket.send(json.dumps(error_msg))
                             break
                         
-                        # Wait for job process to update state before ACK (wait indefinitely)
+                        # Wait for job process to update state before ACK (with timeout)
                         state_updated = False
                         attempt = 0
-                        while not state_updated:
+                        max_attempts = 600  # 30 seconds max (600 * 50ms)
+                        while not state_updated and attempt < max_attempts:
                             await asyncio.sleep(0.05)  # 50ms
                             attempt += 1
                             
@@ -293,6 +294,10 @@ class WebSocketJobServer:
                             # Log warning every 5 seconds
                             if attempt % 100 == 0:
                                 print(f"[MACHINES WS][{job_instance}][{machine}] WARNING - Still waiting for state update after {attempt*50}ms", flush=True)
+                        
+                        if not state_updated:
+                            print(f"[MACHINES WS][{job_instance}][{machine}] ERROR - State update timeout after 30s, closing connection", flush=True)
+                            break
                         
                         # Send acknowledgement after state is confirmed updated
                         ack_msg = {
