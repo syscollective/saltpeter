@@ -330,8 +330,8 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                         for msg in [m for m in pending_messages if m['type'] == 'connect']:
                             try:
                                 await websocket.send(json.dumps(msg))
-                                # Wait for connect ACK
-                                ack_msg = await asyncio.wait_for(websocket.recv(), timeout=2)
+                                # Wait for connect ACK from queue (background receiver is running)
+                                ack_msg = await asyncio.wait_for(incoming_messages.get(), timeout=2)
                                 ack_data = json.loads(ack_msg)
                                 if ack_data.get('type') == 'ack' and ack_data.get('ack_type') == 'connect':
                                     # Remove connect message from pending
@@ -346,8 +346,8 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                             for msg in [m for m in pending_messages if m['type'] == 'start']:
                                 try:
                                     await websocket.send(json.dumps(msg))
-                                    # Wait for start ACK
-                                    ack_msg = await asyncio.wait_for(websocket.recv(), timeout=2)
+                                    # Wait for start ACK from queue (background receiver is running)
+                                    ack_msg = await asyncio.wait_for(incoming_messages.get(), timeout=2)
                                     ack_data = json.loads(ack_msg)
                                     if ack_data.get('type') == 'ack' and ack_data.get('ack_type') == 'start':
                                         # Remove start message from pending after ACK
