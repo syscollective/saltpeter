@@ -28,6 +28,7 @@ import os
 import json
 import time
 import socket
+import signal
 from datetime import datetime, timezone
 
 # Monkey-patch hashlib.sha1 for FIPS compatibility
@@ -177,7 +178,8 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
             'stderr': subprocess.STDOUT,  # Merge stderr into stdout for correct ordering
             'shell': True,
             'text': False,  # Binary mode to preserve \r
-            'bufsize': 0  # Unbuffered
+            'bufsize': 0,  # Unbuffered
+            'preexec_fn': os.setsid  # Create new session - allows killing process group
         }
         
         if cwd:
@@ -186,7 +188,8 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
         if user and os.geteuid() == 0:  # Only if running as root
             import pwd
             pw_record = pwd.getpwnam(user)
-            proc_kwargs['preexec_fn'] = lambda: os.setuid(pw_record.pw_uid)
+            # Chain preexec functions: setsid + setuid
+            proc_kwargs['preexec_fn'] = lambda: (os.setsid(), os.setuid(pw_record.pw_uid))
         
         # Start the subprocess
         process = subprocess.Popen(command, **proc_kwargs)
@@ -438,7 +441,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                             log(f'KILL message received from server', level='normal')
                             killed = True
 
-                            # Flush any buffered output BEFORE closing pipes
+                            # Flush any buffered output BEFORE terminating
                             if output_buffer and websocket is not None:
                                 combined_output = ''.join(output_buffer)
                                 output_msg = {
@@ -452,24 +455,80 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                                     'timestamp': datetime.now(timezone.utc).isoformat()
                                 }
                                 pending_messages.append(output_msg)
-                                # Track mapping for this flush
-                                current_buffer_end = buffer_cleared_up_to + len(output_buffer)
-                                seq_to_buffer_map[next_seq] = current_buffer_end
                                 next_seq += 1
-                                # Clear buffer after kill flush (won't need retransmission)
+                                # Clear buffer after kill flush
                                 output_buffer = []
                             
-                            # Terminate the process
+                            # Terminate the process group (kills shell + all children)
                             if process and process.poll() is None:
-                                # Threads will handle stream closing automatically
-                                process.terminate()
-
-                                # Give it 10 seconds to terminate gracefully
+                                log(f'Sending SIGTERM to process group', level='normal')
                                 try:
-                                    process.wait(timeout=10)
-                                except subprocess.TimeoutExpired:
-                                    process.kill()
-                                    process.wait()
+                                    # Kill the entire process group (negative PID)
+                                    os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+                                except ProcessLookupError:
+                                    # Process already dead
+                                    pass
+
+                                # Give it 5 seconds to terminate gracefully, sending heartbeats
+                                kill_start = time.time()
+                                while time.time() - kill_start < 5:
+                                    if process.poll() is not None:
+                                        log(f'Process group terminated gracefully', level='normal')
+                                        break
+                                    # Send heartbeat to keep server happy
+                                    if websocket and time.time() - last_heartbeat >= 1:
+                                        try:
+                                            await websocket.send(json.dumps({
+                                                'type': 'heartbeat',
+                                                'job_name': job_name,
+                                                'job_instance': job_instance,
+                                                'machine': machine_id,
+                                                'timestamp': datetime.now(timezone.utc).isoformat()
+                                            }))
+                                            last_heartbeat = time.time()
+                                        except:
+                                            pass
+                                    await asyncio.sleep(0.5)
+                                
+                                # If still alive, escalate to SIGKILL
+                                if process.poll() is None:
+                                    log(f'Process did not terminate, sending SIGKILL repeatedly', level='normal')
+                                    # Retry SIGKILL every 5 seconds until process dies
+                                    max_kill_attempts = 10  # 50 seconds total
+                                    for attempt in range(max_kill_attempts):
+                                        try:
+                                            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+                                        except ProcessLookupError:
+                                            break
+                                        
+                                        # Wait 5s, sending heartbeats
+                                        attempt_start = time.time()
+                                        while time.time() - attempt_start < 5:
+                                            if process.poll() is not None:
+                                                log(f'Process group killed after {attempt+1} SIGKILL attempts', level='normal')
+                                                break
+                                            # Send heartbeat
+                                            if websocket and time.time() - last_heartbeat >= 1:
+                                                try:
+                                                    await websocket.send(json.dumps({
+                                                        'type': 'heartbeat',
+                                                        'job_name': job_name,
+                                                        'job_instance': job_instance,
+                                                        'machine': machine_id,
+                                                        'timestamp': datetime.now(timezone.utc).isoformat()
+                                                    }))
+                                                    last_heartbeat = time.time()
+                                                except:
+                                                    pass
+                                            await asyncio.sleep(0.5)
+                                        
+                                        if process.poll() is not None:
+                                            break
+                                        
+                                        if attempt < max_kill_attempts - 1:
+                                            log(f'Process still alive after SIGKILL attempt {attempt+1}, retrying...', level='normal')
+                                        else:
+                                            log(f'WARNING: Process still alive after {max_kill_attempts} SIGKILL attempts', level='normal')
 
                             break
                             
@@ -943,20 +1002,10 @@ def main():
                     # Couldn't read PID - lockfile corrupted or inaccessible
                     raise Exception(f"Failed to read lockfile {lockfile_path}: {read_err}")
         except Exception as e:
-            # Lockfile acquisition failed - report error through wrapper and exit
-            # This ensures proper logging and server notification
-            error_msg = f"CRITICAL: {e}"
-            # Try to report via wrapper mechanism (will log and attempt server notification)
-            try:
-                asyncio.run(run_command_and_stream(
-                    websocket_url, job_name, job_instance, machine_id, 
-                    f"exit 254",  # Dummy command that fails immediately
-                    cwd, user, timeout, loglevel, logdir, lockfile_handle
-                ))
-            except:
-                pass
-            # Exit with special code for startup failure
-            os._exit(254)
+            # Lockfile acquisition failed - inject error and run wrapper normally
+            error_msg = f"LOCKFILE ERROR: {e}\n"
+            # Override command to just echo the error
+            command = f"echo '{error_msg}' && exit 254"
     
     # Run the command asynchronously
     asyncio.run(run_command_and_stream(websocket_url, job_name, job_instance, machine_id, command, cwd, user, timeout, loglevel, logdir, lockfile_handle))
