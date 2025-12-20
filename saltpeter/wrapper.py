@@ -169,10 +169,6 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
         # Start the subprocess
         process = subprocess.Popen(command, **proc_kwargs)
         
-        # Wrap stdout to preserve \r characters
-        import io
-        stdout_text = io.TextIOWrapper(process.stdout, encoding='utf-8', errors='replace', newline='')
-        
         # Track job start time for timeout enforcement
         job_start_time = time.time()
         
@@ -445,13 +441,18 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                     # Read available output from stdout only (stderr merged into it)
                     try:
                         import select
-                        ready, _, _ = select.select([stdout_text], [], [], 0)
+                        ready, _, _ = select.select([process.stdout], [], [], 0)
                         if ready:
-                            # Read up to 8KB of available data to capture \r updates
-                            chunk = stdout_text.read(8192)
+                            # Read binary data without blocking
+                            chunk = process.stdout.read(8192)
                             if chunk:
-                                output_buffer.append(chunk)
-                                full_output.append(chunk)  # Keep for local logging
+                                # Try UTF-8 first, fall back to latin-1 (accepts all bytes)
+                                try:
+                                    text = chunk.decode('utf-8')
+                                except UnicodeDecodeError:
+                                    text = chunk.decode('latin-1')
+                                output_buffer.append(text)
+                                full_output.append(text)  # Keep for local logging
                     except Exception as e:
                         log(f'Error reading output: {e}')
                     
@@ -567,9 +568,13 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
         
         # Read any remaining output
         try:
-            remaining = stdout_text.read()
+            remaining = process.stdout.read()
             if remaining:
-                remainder_messages, next_seq = create_output_messages(remaining, next_seq)
+                try:
+                    text = remaining.decode('utf-8')
+                except UnicodeDecodeError:
+                    text = remaining.decode('latin-1')
+                remainder_messages, next_seq = create_output_messages(text, next_seq)
                 pending_messages.extend(remainder_messages)
         except Exception:
             pass
