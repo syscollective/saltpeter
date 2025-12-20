@@ -57,7 +57,7 @@ except ImportError:
         # Fallback if version.py not accessible
         __version__ = 'unknown'
 
-async def run_command_and_stream(websocket_url, job_name, job_instance, machine_id, command, cwd=None, user=None, timeout=None, loglevel='normal', logdir='/var/log/sp_wrapper', lockfile_handle=None):
+async def run_command_and_stream(websocket_url, job_name, job_instance, machine_id, command, cwd=None, user=None, timeout=None, loglevel='normal', logdir='/var/log/sp_wrapper', lockfile_path=None):
     """
     Run command in subprocess and stream output via WebSocket
     Subprocess runs independently - WebSocket retries every 2 seconds if disconnected
@@ -66,7 +66,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
     Heartbeats are sent every 5 seconds. Communication is retried until the 
     job's configured timeout is reached, at which point the job is killed.
     
-    lockfile_handle: If provided, will be released in finally block (overlap prevention)
+    lockfile_path: If provided, lockfile will be deleted in finally block (overlap prevention)
     """
     
     # Setup wrapper logging
@@ -864,12 +864,10 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                 except:
                     pass
     finally:
-        # Release lockfile if held
-        if lockfile_handle:
+        # Delete lockfile (lock auto-released on process exit)
+        if lockfile_path:
             try:
-                import fcntl
-                fcntl.flock(lockfile_handle.fileno(), fcntl.LOCK_UN)
-                lockfile_handle.close()
+                os.unlink(lockfile_path)
             except:
                 pass
         
@@ -965,42 +963,70 @@ def main():
             if lockdir and lockdir != '/tmp':
                 os.makedirs(lockdir, mode=0o777, exist_ok=True)
             
-            # Try to acquire exclusive lock
-            lockfile_handle = open(lockfile_path, 'w')
+            # Try to acquire exclusive lock using 'a+' mode (append+read, doesn't truncate)
+            lockfile_handle = open(lockfile_path, 'a+')
             import fcntl
             try:
                 fcntl.flock(lockfile_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                # Write our PID to the lockfile (this is the actual job process)
+                # Got the lock - truncate and write our PID
+                lockfile_handle.seek(0)
+                lockfile_handle.truncate()
                 lockfile_handle.write(f"{os.getpid()}\n")
                 lockfile_handle.flush()
             except BlockingIOError:
                 # Lock already held by another process
+                # Read existing PID before closing (file wasn't truncated)
+                lockfile_handle.seek(0)
+                pid_str = lockfile_handle.read().strip()
                 lockfile_handle.close()
                 lockfile_handle = None
                 
-                # Try to read PID from lockfile
-                try:
-                    with open(lockfile_path, 'r') as lf:
-                        old_pid = int(lf.read().strip())
-                    # Check if process exists
+                # Handle empty or invalid lockfile - treat as stale
+                if not pid_str:
+                    # Empty lockfile - stale, remove and retry
                     try:
-                        os.kill(old_pid, 0)  # Signal 0 just checks existence
-                        # Process exists - overlap not allowed
-                        # This will be caught as retcode 254 by server (startup failure)
-                        raise Exception(f"Job {job_name} already running (PID {old_pid}), overlap not allowed")
-                    except OSError:
-                        # Process doesn't exist - stale lock, try to remove and acquire
+                        os.unlink(lockfile_path)
+                        lockfile_handle = open(lockfile_path, 'a+')
+                        fcntl.flock(lockfile_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        lockfile_handle.seek(0)
+                        lockfile_handle.truncate()
+                        lockfile_handle.write(f"{os.getpid()}\n")
+                        lockfile_handle.flush()
+                    except Exception as cleanup_err:
+                        raise Exception(f"Failed to clean up empty lockfile {lockfile_path}: {cleanup_err}")
+                else:
+                    try:
+                        old_pid = int(pid_str)
+                    except ValueError:
+                        # Corrupted lockfile - remove and retry
                         try:
                             os.unlink(lockfile_path)
-                            lockfile_handle = open(lockfile_path, 'w')
+                            lockfile_handle = open(lockfile_path, 'a+')
                             fcntl.flock(lockfile_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                            lockfile_handle.seek(0)
+                            lockfile_handle.truncate()
                             lockfile_handle.write(f"{os.getpid()}\n")
                             lockfile_handle.flush()
                         except Exception as cleanup_err:
-                            raise Exception(f"Failed to clean up stale lockfile {lockfile_path}: {cleanup_err}")
-                except (ValueError, OSError, IOError) as read_err:
-                    # Couldn't read PID - lockfile corrupted or inaccessible
-                    raise Exception(f"Failed to read lockfile {lockfile_path}: {read_err}")
+                            raise Exception(f"Failed to clean up corrupted lockfile {lockfile_path}: {cleanup_err}")
+                    else:
+                        # Valid PID - check if process exists
+                        try:
+                            os.kill(old_pid, 0)  # Signal 0 just checks existence
+                            # Process exists - overlap not allowed
+                            raise Exception(f"Job {job_name} already running (PID {old_pid}), overlap not allowed")
+                        except OSError:
+                            # Process doesn't exist - stale lock, remove and acquire
+                            try:
+                                os.unlink(lockfile_path)
+                                lockfile_handle = open(lockfile_path, 'a+')
+                                fcntl.flock(lockfile_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                                lockfile_handle.seek(0)
+                                lockfile_handle.truncate()
+                                lockfile_handle.write(f"{os.getpid()}\n")
+                                lockfile_handle.flush()
+                            except Exception as cleanup_err:
+                                raise Exception(f"Failed to clean up stale lockfile {lockfile_path}: {cleanup_err}")
         except Exception as e:
             # Lockfile acquisition failed - inject error and run wrapper normally
             error_msg = f"LOCKFILE ERROR: {e}\n"
@@ -1008,7 +1034,7 @@ def main():
             command = f"echo '{error_msg}' && exit 254"
     
     # Run the command asynchronously
-    asyncio.run(run_command_and_stream(websocket_url, job_name, job_instance, machine_id, command, cwd, user, timeout, loglevel, logdir, lockfile_handle))
+    asyncio.run(run_command_and_stream(websocket_url, job_name, job_instance, machine_id, command, cwd, user, timeout, loglevel, logdir, lockfile_path))
 
 if __name__ == "__main__":
     main()
