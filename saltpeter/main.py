@@ -344,8 +344,6 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                             
                             current_output = job_state['results'][machine].get('ret', '')
                             new_data = msg.get('data', '')
-                            has_cr = '\r' in new_data
-                            debug_print(f"[OUTPUT DEBUG] Appending {len(new_data)} bytes, has \\r: {has_cr}, sample: {repr(new_data[:50])}")
                             job_state['results'][machine]['ret'] = current_output + new_data
                             
                             seq = msg.get('seq')
@@ -1244,16 +1242,6 @@ def process_carriage_returns(text):
     if not text:
         return text
     
-    # Debug logging to trace \r processing
-    if debug_enabled:
-        has_cr = '\r' in text
-        cr_count = text.count('\r')
-        debug_print(f"[CR DEBUG] Input length: {len(text)}, has \\r: {has_cr}, \\r count: {cr_count}")
-        if has_cr:
-            # Show first 200 chars with \r visible
-            sample = repr(text[:200])
-            debug_print(f"[CR DEBUG] Input sample: {sample}")
-    
     lines = text.split('\n')
     processed = []
     for line in lines:
@@ -1262,8 +1250,6 @@ def process_carriage_returns(text):
             # Filter out empty segments and take the last non-empty one
             non_empty = [s for s in segments if s]
             result = non_empty[-1] if non_empty else ''
-            if debug_enabled:
-                debug_print(f"[CR DEBUG] Line with \\r: {len(segments)} segments, kept: '{result[:50]}...'")
             processed.append(result)
         else:
             processed.append(line)
@@ -1284,8 +1270,6 @@ def log(what, cron, group, instance, time, machine='', code=0, out='', status=''
         return
 
     # Process carriage returns for clean output in logs/OpenSearch
-    has_cr = '\r' in out
-    debug_print(f"[LOG DEBUG] Before CR processing: length={len(out)}, has \\r: {has_cr}, sample: {repr(out[:100])}")
     out_processed = process_carriage_returns(out)
 
     if what == 'start':

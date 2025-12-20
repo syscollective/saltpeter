@@ -174,46 +174,17 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
         stdout_text = io.TextIOWrapper(process.stdout, encoding='utf-8', errors='replace', newline='', line_buffering=False)
         stderr_text = io.TextIOWrapper(process.stderr, encoding='utf-8', errors='replace', newline='', line_buffering=False)
         
-        # Use threads to read stdout/stderr in real-time without blocking
-        # This preserves output order better than select() with non-blocking reads
-        import threading
-        import queue
-        output_queue = queue.Queue()
+        # Use select() to read from both streams in order
+        # This preserves cross-stream ordering better than separate threads
+        import selectors
+        import os
         
-        def read_stream(stream, stream_type):
-            """Read from stream and put chunks into queue with stream type"""
-            last_stderr_char = '\n'  # Track last stderr character for tagging (local to thread)
-            try:
-                while True:
-                    chunk = stream.read(1)  # Read character-by-character
-                    if not chunk:
-                        break
-                    
-                    # Debug: log when each character is read
-                    import time
-                    timestamp = time.time()
-                    log(f'[READ {stream_type}] {repr(chunk)} at {timestamp:.6f}', level='debug')
-                    
-                    # Add [STDERR] tag at stderr line boundaries
-                    if stream_type == 'stderr':
-                        if last_stderr_char in ('\n', '\r'):
-                            # Put tag + first character together atomically
-                            output_queue.put(('[STDERR] ' + chunk, 'stderr'))
-                        else:
-                            output_queue.put((chunk, stream_type))
-                        last_stderr_char = chunk
-                    else:
-                        output_queue.put((chunk, stream_type))
-            except Exception as e:
-                log(f'Stream reader error ({stream_type}): {e}')
-            finally:
-                stream.close()
+        sel = selectors.DefaultSelector()
+        sel.register(stdout_text, selectors.EVENT_READ, data='stdout')
+        sel.register(stderr_text, selectors.EVENT_READ, data='stderr')
         
-        # Start reader threads
-        stdout_thread = threading.Thread(target=read_stream, args=(stdout_text, 'stdout'), daemon=True)
-        stderr_thread = threading.Thread(target=read_stream, args=(stderr_text, 'stderr'), daemon=True)
-        stdout_thread.start()
-        stderr_thread.start()
+        output_buffer = []
+        last_stderr_char = '\n'  # Track last stderr character for tagging
         
         # Track job start time for timeout enforcement
         job_start_time = time.time()
@@ -518,14 +489,26 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                     except json.JSONDecodeError:
                         pass
                     
-                    # Read available output from queue (non-blocking)
+                    # Read available output from both streams using selector (non-blocking)
                     try:
-                        while True:
-                            try:
-                                chunk, stream_type = output_queue.get_nowait()
-                                output_buffer.append((chunk, stream_type))
-                            except queue.Empty:
-                                break
+                        events = sel.select(timeout=0)
+                        for key, mask in events:
+                            stream = key.fileobj
+                            stream_type = key.data
+                            
+                            # Read one character from this stream
+                            chunk = stream.read(1)
+                            if chunk:
+                                # Add [STDERR] tag at stderr line boundaries
+                                if stream_type == 'stderr':
+                                    if last_stderr_char in ('\n', '\r'):
+                                        # Put tag + first character together
+                                        output_buffer.append(('[STDERR] ' + chunk, 'stderr'))
+                                    else:
+                                        output_buffer.append((chunk, stream_type))
+                                    last_stderr_char = chunk
+                                else:
+                                    output_buffer.append((chunk, stream_type))
                     except Exception as e:
                         log(f'Error reading output queue: {e}')
                     
@@ -574,8 +557,6 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                             output_messages, next_seq = create_output_messages(combined_output, next_seq)
                             
                             log(f'Sending buffer: {len(output_messages)} message(s), total_len={len(combined_output)}, reason={"time" if time_to_send else "size"}', level='debug')
-                            has_cr = '\r' in combined_output
-                            log(f'[WRAPPER OUTPUT DEBUG] Combined output has \\r: {has_cr}, sample: {repr(combined_output[:100])}', level='debug')
                             
                             # Map each sequence to the buffer position it covers
                             # All sequences in this batch cover up to current buffer length (from buffer_cleared_up_to perspective)
@@ -658,19 +639,29 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
             # Clear buffer after final flush (process complete, won't need retransmission)
             output_buffer = []
         
-        # Wait for threads to finish reading any remaining output
-        # Give threads up to 2 seconds to finish reading after process exits
-        stdout_thread.join(timeout=2)
-        stderr_thread.join(timeout=2)
-        
-        # Drain any remaining items from queue
+        # Read any remaining output from both streams after process exits
+        # Poll with short timeout to catch any buffered data
         remaining_chunks = []
-        try:
-            while True:
-                chunk, stream_type = output_queue.get_nowait()
-                remaining_chunks.append((chunk, stream_type))
-        except queue.Empty:
-            pass
+        for _ in range(100):  # Try up to 100 times (2 seconds total)
+            events = sel.select(timeout=0.02)
+            if not events:
+                break
+            for key, mask in events:
+                stream = key.fileobj
+                stream_type = key.data
+                chunk = stream.read(1)
+                if chunk:
+                    if stream_type == 'stderr':
+                        if last_stderr_char in ('\n', '\r'):
+                            remaining_chunks.append(('[STDERR] ' + chunk, 'stderr'))
+                        else:
+                            remaining_chunks.append((chunk, stream_type))
+                        last_stderr_char = chunk
+                    else:
+                        remaining_chunks.append((chunk, stream_type))
+        
+        # Cleanup selector
+        sel.close()
         
         # Add remaining output if any
         if remaining_chunks:
