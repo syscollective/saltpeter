@@ -149,13 +149,13 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
     max_chunk_size = 500 * 1024  # Hardcoded: split messages larger than 500KB
     
     try:
-        # Prepare subprocess arguments
+        # Prepare subprocess arguments - combine stdout and stderr
         proc_kwargs = {
             'stdout': subprocess.PIPE,
-            'stderr': subprocess.PIPE,
+            'stderr': subprocess.STDOUT,  # Merge stderr into stdout for correct ordering
             'shell': True,
-            'text': False,  # Binary mode - we'll wrap with TextIOWrapper
-            'bufsize': 0  # Unbuffered for real-time output
+            'text': True,
+            'bufsize': 1  # Line buffered
         }
         
         if cwd:
@@ -166,64 +166,15 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
             pw_record = pwd.getpwnam(user)
             proc_kwargs['preexec_fn'] = lambda: os.setuid(pw_record.pw_uid)
         
-        # Start the subprocess FIRST - runs regardless of WebSocket state
+        # Start the subprocess
         process = subprocess.Popen(command, **proc_kwargs)
-        
-        # Wrap binary streams with TextIOWrapper to read characters while preserving \r
-        import io
-        stdout_text = io.TextIOWrapper(process.stdout, encoding='utf-8', errors='replace', newline='', line_buffering=False)
-        stderr_text = io.TextIOWrapper(process.stderr, encoding='utf-8', errors='replace', newline='', line_buffering=False)
-        
-        # Use single thread with select() to drain both pipes into queue as fast as possible
-        # This preserves ordering better than separate threads
-        import threading
-        import queue
-        import selectors
-        
-        raw_output_queue = queue.Queue()  # FIFO queue of (chunk, stream_type)
-        drain_active = True
-        
-        def drain_pipes():
-            """Single thread draining both pipes using select()"""
-            nonlocal drain_active
-            
-            sel = selectors.DefaultSelector()
-            sel.register(stdout_text, selectors.EVENT_READ, data='stdout')
-            sel.register(stderr_text, selectors.EVENT_READ, data='stderr')
-            
-            try:
-                while drain_active:
-                    # Wait for data on either stream (with timeout to check drain_active)
-                    events = sel.select(timeout=0.1)
-                    for key, mask in events:
-                        stream = key.fileobj
-                        stream_type = key.data
-                        
-                        # Read one line at a time - readline() returns as soon as \n or EOF
-                        try:
-                            line = stream.readline()
-                            if line:
-                                raw_output_queue.put((line, stream_type))
-                        except Exception:
-                            pass
-            except Exception as e:
-                log(f'Drain thread error: {e}')
-            finally:
-                sel.close()
-                drain_active = False
-        
-        # Start single drain thread
-        drain_thread = threading.Thread(target=drain_pipes, daemon=True)
-        drain_thread.start()
-        
-        output_buffer = []
-        last_stderr_char = '\n'  # Track last stderr character for tagging
         
         # Track job start time for timeout enforcement
         job_start_time = time.time()
         
         last_heartbeat = time.time()
-        output_buffer = []
+        output_buffer = []  # Unsent output (cleared after converting to messages)
+        full_output = []  # Complete output for local logging
         killed = False
         killed_by_timeout = False
         pending_messages = []
@@ -240,10 +191,6 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
         last_sync_request_time = 0  # Track when we last requested sync
         
         # Buffer-to-sequence mapping for retransmission support
-        # Maps seq -> absolute buffer position (how much data was included up to that seq)
-        seq_to_buffer_map = {}  # {seq: buffer_end_index}
-        buffer_cleared_up_to = 0  # Absolute position: how many items have been cleared from start
-        
         # Add initial connection message to pending queue
         pending_messages.append({
             'type': 'connect',
@@ -270,7 +217,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
         # Prepend any log setup errors to output buffer
         if log_errors:
             for error in log_errors:
-                output_buffer.append((time.time(), f"[WRAPPER LOG ERROR] {error}\n"))
+                output_buffer.append(f"[WRAPPER LOG ERROR] {error}\n")
         
         # Main loop - runs while process is alive
         while True:
@@ -287,7 +234,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                     
                     # Flush any buffered output before terminating
                     if output_buffer and websocket is not None:
-                        combined_output = ''.join(chunk for chunk, _ in output_buffer)
+                        combined_output = ''.join(output_buffer)
                         output_msg = {
                             'type': 'output',
                             'job_name': job_name,
@@ -415,24 +362,8 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                                     last_acked_seq = acked_seq
                                     waiting_for_ack = False
                                     # Remove all acknowledged output messages (up to and including acked_seq)
-                                    # Keep non-output messages (connect, start) which don't have seq numbers
                                     pending_messages = [m for m in pending_messages if not (m.get('type') == 'output' and m.get('seq', -1) <= acked_seq)]
-                                    
-                                    # Clear output_buffer up to the point covered by acked sequences
-                                    # Find the highest buffer index that was used for sequences <= acked_seq
-                                    clear_up_to = buffer_cleared_up_to
-                                    for seq in sorted([s for s in seq_to_buffer_map.keys() if s <= acked_seq]):
-                                        if seq in seq_to_buffer_map:
-                                            clear_up_to = max(clear_up_to, seq_to_buffer_map[seq])
-                                    
-                                    if clear_up_to > buffer_cleared_up_to:
-                                        # Remove cleared items from buffer
-                                        items_to_clear = clear_up_to - buffer_cleared_up_to
-                                        output_buffer = output_buffer[items_to_clear:]
-                                        buffer_cleared_up_to = clear_up_to
-                                        # Clean up old sequence mappings
-                                        seq_to_buffer_map = {s: idx - items_to_clear for s, idx in seq_to_buffer_map.items() if s > acked_seq}
-                                        log(f'Cleared {items_to_clear} items from buffer (up to seq {acked_seq})')
+                                    log(f'Cleared pending messages up to seq {acked_seq}')
                                 elif acked_seq == last_acked_seq:
                                     # Duplicate ACK (already processed)
                                     log(f'Duplicate ACK: seq={acked_seq}')
@@ -457,21 +388,6 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                                 # Server is ahead or equal, update our state
                                 last_acked_seq = server_last_seq
                                 waiting_for_ack = False
-                                # Clean up pending messages up to server's position
-                                pending_messages = [m for m in pending_messages if m.get('seq', -1) > server_last_seq]
-                                
-                                # Clear buffer using same logic as ACK
-                                clear_up_to = buffer_cleared_up_to
-                                for seq in sorted([s for s in seq_to_buffer_map.keys() if s <= server_last_seq]):
-                                    if seq in seq_to_buffer_map:
-                                        clear_up_to = max(clear_up_to, seq_to_buffer_map[seq])
-                                
-                                if clear_up_to > buffer_cleared_up_to:
-                                    items_to_clear = clear_up_to - buffer_cleared_up_to
-                                    output_buffer = output_buffer[items_to_clear:]
-                                    buffer_cleared_up_to = clear_up_to
-                                    seq_to_buffer_map = {s: idx - items_to_clear for s, idx in seq_to_buffer_map.items() if s > server_last_seq}
-                                
                                 # Remove ACKed output messages from pending
                                 pending_messages = [m for m in pending_messages if not (m.get('type') == 'output' and m.get('seq', -1) <= server_last_seq)]
                             
@@ -483,7 +399,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
 
                             # Flush any buffered output BEFORE closing pipes
                             if output_buffer and websocket is not None:
-                                combined_output = ''.join(chunk for chunk, _ in output_buffer)
+                                combined_output = ''.join(output_buffer)
                                 output_msg = {
                                     'type': 'output',
                                     'job_name': job_name,
@@ -522,33 +438,17 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                     except json.JSONDecodeError:
                         pass
                     
-                    # Read available output from both streams using selector (non-blocking)
-                    # First: QUICKLY read all available data from ALL streams without processing
-                    # This minimizes delays that could cause ordering issues
-                    raw_chunks = []  # List of (chunk, stream_type) tuples
+                    # Read available output from stdout only (stderr merged into it)
                     try:
-                        # Pull all available items from queue (non-blocking)
-                        while True:
-                            try:
-                                chunk, stream_type = raw_output_queue.get_nowait()
-                                raw_chunks.append((chunk, stream_type))
-                            except queue.Empty:
-                                break
+                        import select
+                        ready, _, _ = select.select([process.stdout], [], [], 0)
+                        if ready:
+                            line = process.stdout.readline()
+                            if line:
+                                output_buffer.append(line)
+                                full_output.append(line)  # Keep for local logging
                     except Exception as e:
-                        log(f'Error reading output queue: {e}')
-                    
-                    # Second: Process the read data (add STDERR tags)
-                    for chunk, stream_type in raw_chunks:
-                        for char in chunk:
-                            if stream_type == 'stderr':
-                                if last_stderr_char in ('\n', '\r'):
-                                    # Put tag + first character together
-                                    output_buffer.append(('[STDERR] ' + char, 'stderr'))
-                                else:
-                                    output_buffer.append((char, stream_type))
-                                last_stderr_char = char
-                            else:
-                                output_buffer.append((char, stream_type))
+                        log(f'Error reading output: {e}')
                     
                     # If waiting for ACK too long, request sync from server
                     current_time = time.time()
@@ -573,37 +473,24 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                                 waiting_for_ack = False
                     
                     # Check if we should send buffered output (time or size based)
-                    buffer_size = sum(len(chunk) for chunk, _ in output_buffer)
+                    buffer_size = sum(len(line) for line in output_buffer)
                     time_to_send = (current_time - last_output_send_time >= output_interval)
                     size_to_send = (buffer_size >= output_max_size)
                     
                     if output_buffer and (time_to_send or size_to_send) and not waiting_for_ack and websocket is not None:
-                        # Combine all buffered output (only new data not yet converted to messages)
-                        # Find where we left off - this is relative to current buffer after clearing
-                        unsent_buffer_data = output_buffer  # All current buffer items are unsent
+                        # Combine all buffered output
+                        combined_output = ''.join(output_buffer)
                         
-                        # No sorting needed - queue preserves natural ordering
-                        
-                        # Combine bytes in order (tags already added at queue level)
-                        combined_output = ''.join(chunk for chunk, _ in unsent_buffer_data)
-                        
-                        if combined_output:  # Only proceed if there's actually data to send
-                            # Track the starting sequence for this batch
-                            batch_start_seq = next_seq
-                            
+                        if combined_output:
                             # Create messages (may be chunked if large)
                             output_messages, next_seq = create_output_messages(combined_output, next_seq)
                             
                             log(f'Sending buffer: {len(output_messages)} message(s), total_len={len(combined_output)}, reason={"time" if time_to_send else "size"}', level='debug')
                             
-                            # Map each sequence to the buffer position it covers
-                            # All sequences in this batch cover up to current buffer length (from buffer_cleared_up_to perspective)
-                            current_buffer_end = buffer_cleared_up_to + len(output_buffer)
-                            for msg in output_messages:
-                                seq_to_buffer_map[msg['seq']] = current_buffer_end
-                            
                             # Add all messages to pending queue
                             pending_messages.extend(output_messages)
+                            # Clear buffer now that it's been converted to messages
+                            output_buffer = []
                             
                             # Send first message and wait for ACK before sending rest
                             try:
@@ -677,34 +564,14 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
             # Clear buffer after final flush (process complete, won't need retransmission)
             output_buffer = []
         
-        # Wait for drain thread to finish
-        drain_active = False
-        drain_thread.join(timeout=2)
-        
-        # Drain any remaining items from queue
-        remaining_chunks = []
+        # Read any remaining output
         try:
-            while True:
-                chunk, stream_type = raw_output_queue.get_nowait()
-                # Process for STDERR tagging
-                for char in chunk:
-                    if stream_type == 'stderr':
-                        if last_stderr_char in ('\n', '\r'):
-                            remaining_chunks.append(('[STDERR] ' + char, 'stderr'))
-                        else:
-                            remaining_chunks.append((char, stream_type))
-                        last_stderr_char = char
-                    else:
-                        remaining_chunks.append((char, stream_type))
-        except queue.Empty:
-            pass
-        
-        # Add remaining output if any
-        if remaining_chunks:
-            combined_remainder = ''.join(chunk for chunk, _ in remaining_chunks)
-            if combined_remainder:
-                remainder_messages, next_seq = create_output_messages(combined_remainder, next_seq)
+            remaining = process.stdout.read()
+            if remaining:
+                remainder_messages, next_seq = create_output_messages(remaining, next_seq)
                 pending_messages.extend(remainder_messages)
+        except Exception:
+            pass
         
         # Determine final return code
         final_retcode = process.returncode
