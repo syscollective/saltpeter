@@ -884,6 +884,9 @@ def run(name, data, procname, running, state, commands, maintenance, state_updat
         wrapper_loglevel = data.get('wrapper_loglevel', params.default_wrapper_loglevel)
         wrapper_logdir = data.get('wrapper_logdir', params.default_wrapper_logdir)
         
+        # Check if overlap is allowed (explicit opt-in required)
+        allow_overlap = (data.get('allow_overlap') == 'i know what i am doing!')
+        
         # Build environment variables to pass to the wrapper
         wrapper_env = {
             'SP_WEBSOCKET_URL': websocket_url,
@@ -893,8 +896,13 @@ def run(name, data, procname, running, state, commands, maintenance, state_updat
             'SP_COMMAND': data['command'],
             'SP_WRAPPER_LOGLEVEL': wrapper_loglevel,
             'SP_WRAPPER_LOGDIR': wrapper_logdir,
+            'SP_ALLOW_OVERLAP': 'true' if allow_overlap else 'false',
             'PYTHONUNBUFFERED': '1'  # Force Python subprocesses to be unbuffered
         }
+        
+        # Optional: custom lockfile path (per-job configuration)
+        if 'lockfile' in data:
+            wrapper_env['SP_LOCKFILE'] = data['lockfile']
         
         if 'cwd' in data:
             wrapper_env['SP_CWD'] = data['cwd']

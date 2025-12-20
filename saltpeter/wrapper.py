@@ -56,7 +56,7 @@ except ImportError:
         # Fallback if version.py not accessible
         __version__ = 'unknown'
 
-async def run_command_and_stream(websocket_url, job_name, job_instance, machine_id, command, cwd=None, user=None, timeout=None, loglevel='normal', logdir='/var/log/sp_wrapper'):
+async def run_command_and_stream(websocket_url, job_name, job_instance, machine_id, command, cwd=None, user=None, timeout=None, loglevel='normal', logdir='/var/log/sp_wrapper', lockfile_handle=None):
     """
     Run command in subprocess and stream output via WebSocket
     Subprocess runs independently - WebSocket retries every 2 seconds if disconnected
@@ -64,6 +64,8 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
     
     Heartbeats are sent every 5 seconds. Communication is retried until the 
     job's configured timeout is reached, at which point the job is killed.
+    
+    lockfile_handle: If provided, will be released in finally block (overlap prevention)
     """
     
     # Setup wrapper logging
@@ -686,6 +688,10 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                             websockets.connect(websocket_url),
                             timeout=2
                         )
+                        # Restart background receiver task for completion phase
+                        if recv_task is not None:
+                            recv_task.cancel()
+                        recv_task = asyncio.create_task(websocket_receiver(websocket, incoming_messages))
                     except AttributeError as e:
                         # Python hashlib missing sha1 - fatal error, cannot use WebSocket
                         if 'sha1' in str(e):
@@ -724,7 +730,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                             log(f'ACK timeout: received {len(received_acks)}/{len(expected_acks)} ACKs')
                             raise Exception('ACK timeout')
                         
-                        ack_msg = await asyncio.wait_for(websocket.recv(), timeout=remaining)
+                        ack_msg = await asyncio.wait_for(incoming_messages.get(), timeout=remaining)
                         ack_data = json.loads(ack_msg)
                         
                         if ack_data.get('type') == 'error':
@@ -733,8 +739,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                             log(f'Server error received: {error_code} - {error_msg}')
                             log(f'Job completed with exit code {final_retcode} but rejected by server')
                             log(f'Full output follows:')
-                            log(f'--- OUTPUT START ---')
-                            log(''.join(full_output))
+                            log(f'--- OUTPUT START ---\n' + ''.join(full_output))
                             log(f'--- OUTPUT END ---')
                             return final_retcode
                         
@@ -784,8 +789,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
             log(f'CRITICAL: Failed to send completion after {max_completion_retries} attempts')
             log(f'Job completed with exit code {final_retcode} but server unreachable')
             log(f'Full output follows:')
-            log(f'--- OUTPUT START ---')
-            log(''.join(full_output))
+            log(f'--- OUTPUT START ---\n' + ''.join(full_output))
             log(f'--- OUTPUT END ---')
         
     except Exception as e:
@@ -801,6 +805,15 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                 except:
                     pass
     finally:
+        # Release lockfile if held
+        if lockfile_handle:
+            try:
+                import fcntl
+                fcntl.flock(lockfile_handle.fileno(), fcntl.LOCK_UN)
+                lockfile_handle.close()
+            except:
+                pass
+        
         # Close log file
         if log_file:
             try:
@@ -874,8 +887,79 @@ def main():
     loglevel = os.environ.get('SP_WRAPPER_LOGLEVEL', 'normal')
     logdir = os.environ.get('SP_WRAPPER_LOGDIR', '/var/log/sp_wrapper')
     
+    # Get overlap configuration
+    allow_overlap_str = os.environ.get('SP_ALLOW_OVERLAP', 'true').lower()
+    allow_overlap = allow_overlap_str in ('true', '1', 'yes')
+    lockfile_path = os.environ.get('SP_LOCKFILE')  # Optional custom lockfile path
+    
+    # Handle lockfile for overlap prevention (AFTER double fork, using correct PID)
+    lockfile_handle = None
+    if not allow_overlap:
+        if lockfile_path is None:
+            # Default: /tmp/sp_wrapper_{job_name}.lock
+            # Use bare /tmp (world-writable) to work across users
+            lockfile_path = f'/tmp/sp_wrapper_{job_name}.lock'
+        
+        try:
+            # Create lock directory if custom path specified and doesn't exist
+            lockdir = os.path.dirname(lockfile_path)
+            if lockdir and lockdir != '/tmp':
+                os.makedirs(lockdir, mode=0o777, exist_ok=True)
+            
+            # Try to acquire exclusive lock
+            lockfile_handle = open(lockfile_path, 'w')
+            import fcntl
+            try:
+                fcntl.flock(lockfile_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                # Write our PID to the lockfile (this is the actual job process)
+                lockfile_handle.write(f"{os.getpid()}\n")
+                lockfile_handle.flush()
+            except BlockingIOError:
+                # Lock already held by another process
+                lockfile_handle.close()
+                lockfile_handle = None
+                
+                # Try to read PID from lockfile
+                try:
+                    with open(lockfile_path, 'r') as lf:
+                        old_pid = int(lf.read().strip())
+                    # Check if process exists
+                    try:
+                        os.kill(old_pid, 0)  # Signal 0 just checks existence
+                        # Process exists - overlap not allowed
+                        # This will be caught as retcode 254 by server (startup failure)
+                        raise Exception(f"Job {job_name} already running (PID {old_pid}), overlap not allowed")
+                    except OSError:
+                        # Process doesn't exist - stale lock, try to remove and acquire
+                        try:
+                            os.unlink(lockfile_path)
+                            lockfile_handle = open(lockfile_path, 'w')
+                            fcntl.flock(lockfile_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                            lockfile_handle.write(f"{os.getpid()}\n")
+                            lockfile_handle.flush()
+                        except Exception as cleanup_err:
+                            raise Exception(f"Failed to clean up stale lockfile {lockfile_path}: {cleanup_err}")
+                except (ValueError, OSError, IOError) as read_err:
+                    # Couldn't read PID - lockfile corrupted or inaccessible
+                    raise Exception(f"Failed to read lockfile {lockfile_path}: {read_err}")
+        except Exception as e:
+            # Lockfile acquisition failed - report error through wrapper and exit
+            # This ensures proper logging and server notification
+            error_msg = f"CRITICAL: {e}"
+            # Try to report via wrapper mechanism (will log and attempt server notification)
+            try:
+                asyncio.run(run_command_and_stream(
+                    websocket_url, job_name, job_instance, machine_id, 
+                    f"exit 254",  # Dummy command that fails immediately
+                    cwd, user, timeout, loglevel, logdir, lockfile_handle
+                ))
+            except:
+                pass
+            # Exit with special code for startup failure
+            os._exit(254)
+    
     # Run the command asynchronously
-    asyncio.run(run_command_and_stream(websocket_url, job_name, job_instance, machine_id, command, cwd, user, timeout, loglevel, logdir))
+    asyncio.run(run_command_and_stream(websocket_url, job_name, job_instance, machine_id, command, cwd, user, timeout, loglevel, logdir, lockfile_handle))
 
 if __name__ == "__main__":
     main()
