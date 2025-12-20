@@ -199,16 +199,13 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                         stream = key.fileobj
                         stream_type = key.data
                         
-                        # Read all available data from this stream
-                        while True:
-                            try:
-                                chunk = stream.read(8192)
-                                if not chunk:
-                                    break
-                                # Immediately put in queue - NO processing
-                                raw_output_queue.put((chunk, stream_type))
-                            except Exception:
-                                break
+                        # Read one line at a time - readline() returns as soon as \n or EOF
+                        try:
+                            line = stream.readline()
+                            if line:
+                                raw_output_queue.put((line, stream_type))
+                        except Exception:
+                            pass
             except Exception as e:
                 log(f'Drain thread error: {e}')
             finally:
