@@ -57,7 +57,7 @@ except ImportError:
         # Fallback if version.py not accessible
         __version__ = 'unknown'
 
-async def run_command_and_stream(websocket_url, job_name, job_instance, machine_id, command, cwd=None, user=None, timeout=None, loglevel='normal', logdir='/var/log/sp_wrapper', lockfile_path=None):
+async def run_command_and_stream(websocket_url, job_name, job_instance, machine_id, command, cwd=None, user=None, timeout=None, loglevel='normal', logdir='/var/log/sp_wrapper', lockfile_path=None, lockfile_acquired=False):
     """
     Run command in subprocess and stream output via WebSocket
     Subprocess runs independently - WebSocket retries every 2 seconds if disconnected
@@ -66,7 +66,8 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
     Heartbeats are sent every 5 seconds. Communication is retried until the 
     job's configured timeout is reached, at which point the job is killed.
     
-    lockfile_path: If provided, lockfile will be deleted in finally block (overlap prevention)
+    lockfile_path: Path to lockfile (for deletion in finally if acquired)
+    lockfile_acquired: If True, lockfile will be deleted in finally block
     """
     
     # Setup wrapper logging
@@ -864,8 +865,8 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                 except:
                     pass
     finally:
-        # Delete lockfile (lock auto-released on process exit)
-        if lockfile_path:
+        # Delete lockfile if we acquired it
+        if lockfile_path and lockfile_acquired:
             try:
                 os.unlink(lockfile_path)
             except:
@@ -950,69 +951,48 @@ def main():
     lockfile_path = os.environ.get('SP_LOCKFILE')  # Optional custom lockfile path
     
     # Handle lockfile for overlap prevention (AFTER double fork, using correct PID)
-    lockfile_handle = None
+    lockfile_acquired = False
     if not allow_overlap:
         if lockfile_path is None:
             # Default: /tmp/sp_wrapper_{job_name}.lock
             # Use bare /tmp (world-writable) to work across users
             lockfile_path = f'/tmp/sp_wrapper_{job_name}.lock'
         
-        try:
-            # Create lock directory if custom path specified and doesn't exist
-            lockdir = os.path.dirname(lockfile_path)
-            if lockdir and lockdir != '/tmp':
-                os.makedirs(lockdir, mode=0o777, exist_ok=True)
-            
-            # Try to acquire exclusive lock using 'a+' mode (append+read, doesn't truncate)
-            lockfile_handle = open(lockfile_path, 'a+')
-            import fcntl
+        # Create lock directory if custom path specified and doesn't exist
+        lockdir = os.path.dirname(lockfile_path)
+        if lockdir and lockdir != '/tmp':
+            os.makedirs(lockdir, mode=0o777, exist_ok=True)
+        
+        should_write_pid = True
+        # Check if lockfile exists
+        if os.path.exists(lockfile_path):
+            # Read PID from existing file
             try:
-                fcntl.flock(lockfile_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                # Got the lock - truncate and write our PID
-                lockfile_handle.seek(0)
-                lockfile_handle.truncate()
-                lockfile_handle.write(f"{os.getpid()}\n")
-                lockfile_handle.flush()
-            except BlockingIOError:
-                # Lock already held by another process
-                # Read existing PID (file wasn't truncated since we couldn't get lock)
-                lockfile_handle.seek(0)
-                pid_str = lockfile_handle.read().strip()
-                lockfile_handle.close()
+                with open(lockfile_path, 'r') as f:
+                    pid_str = f.read().strip()
                 
-                # Handle empty or invalid lockfile
-                if not pid_str:
-                    # Empty but locked - another instance is starting right now
-                    raise Exception(f"Job {job_name} lockfile exists but is empty (another instance may be starting)")
-                
-                try:
+                if pid_str:
                     old_pid = int(pid_str)
-                except ValueError:
-                    # Corrupted but locked - fail (don't touch files we don't own)
-                    raise Exception(f"Job {job_name} lockfile corrupted: {repr(pid_str)}")
-                
-                # Valid PID - check if process exists
-                try:
-                    os.kill(old_pid, 0)  # Signal 0 just checks existence
-                    # Process exists - overlap not allowed
-                    raise Exception(f"Job {job_name} already running (PID {old_pid}), overlap not allowed")
-                except OSError:
-                    # Process doesn't exist - stale lock, remove and re-acquire
-                    os.unlink(lockfile_path)
-                    lockfile_handle = open(lockfile_path, 'a+')
-                    fcntl.flock(lockfile_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    lockfile_handle.seek(0)
-                    lockfile_handle.truncate()
-                    lockfile_handle.write(f"{os.getpid()}\n")
-                    lockfile_handle.flush()
-        except Exception as e:
-            # Lockfile acquisition failed - inject error and run wrapper normally
-            error_msg = f"LOCKFILE ERROR: {e}\n"
-            # Override command to just echo the error
-            command = f"echo '{error_msg}' && exit 254"
+                    # Check if process is still running
+                    os.kill(old_pid, 0)
+                    # Process exists - don't write our PID
+                    should_write_pid = False
+            except (ValueError, OSError):
+                # PID invalid or process doesn't exist - write our PID
+                pass
+        
+        # Write our PID if no conflict (create new or overwrite stale)
+        if should_write_pid:
+            try:
+                with open(lockfile_path, 'w') as f:
+                    f.write(f"{os.getpid()}\n")
+                lockfile_acquired = True
+            except:
+                # Failed to write - just proceed without lockfile
+                pass
     
     # Run the command asynchronously
-    asyncio.run(run_command_and_stream(websocket_url, job_name, job_instance, machine_id, command, cwd, user, timeout, loglevel, logdir, lockfile_path))
+    asyncio.run(run_command_and_stream(websocket_url, job_name, job_instance, machine_id, command, cwd, user, timeout, loglevel, logdir, lockfile_path, lockfile_acquired))
 
 if __name__ == "__main__":
     main()
