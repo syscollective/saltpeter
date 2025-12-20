@@ -149,12 +149,11 @@ def processstart(chunk,name,group,procname,state):
         result = { 'ret': '', 'retcode': '',
             'starttime': starttime, 'endtime': ''}
         #do this crap to propagate changes; this is somewhat acceptable since this object is not modified anywhere else
-        with statelocks[name]:
-            job_state = state[name]
-            if 'results' not in job_state:
-                job_state['results'] = {}
-            job_state['results'][target] = result
-            state[name] = job_state
+        job_state = state[name]
+        if 'results' not in job_state:
+            job_state['results'] = {}
+        job_state['results'][target] = result
+        state[name] = job_state
 
         log(cron=name, group=group, what='machine_start', instance=procname,
                 time=starttime, machine=target)
@@ -167,24 +166,23 @@ def handle_wrapper_failure(machine, retcode, output, name, group, procname, runn
     now = datetime.now(timezone.utc)
     
     # Update state with failure
-    with statelocks[name]:
-        job_state = state[name]
-        if 'results' not in job_state:
-            job_state['results'] = {}
+    job_state = state[name]
+    if 'results' not in job_state:
+        job_state['results'] = {}
         
-        # Always create/update entry with endtime to prevent heartbeat monitoring
-        if machine not in job_state['results']:
-            job_state['results'][machine] = {
-                'ret': '',
-                'retcode': '',
-                'starttime': now,
-                'endtime': ''
-            }
+    # Always create/update entry with endtime to prevent heartbeat monitoring
+    if machine not in job_state['results']:
+        job_state['results'][machine] = {
+            'ret': '',
+            'retcode': '',
+            'starttime': now,
+            'endtime': ''
+        }
         
-        job_state['results'][machine]['endtime'] = now
-        job_state['results'][machine]['retcode'] = retcode
-        job_state['results'][machine]['ret'] = f"Wrapper execution failed:\n{output}"
-        state[name] = job_state
+    job_state['results'][machine]['endtime'] = now
+    job_state['results'][machine]['retcode'] = retcode
+    job_state['results'][machine]['ret'] = f"Wrapper execution failed:\n{output}"
+    state[name] = job_state
     
     # Log the failure
     log(what='machine_result', cron=name, group=group,
@@ -311,13 +309,116 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                 timestamp = msg.get('timestamp')
                 
                 # Only this function modifies state[name] - no race conditions!
-                with statelocks[name]:
-                    job_state = state[name]
-                    if 'results' not in job_state:
-                        job_state['results'] = {}
+                job_state = state[name]
+                if 'results' not in job_state:
+                    job_state['results'] = {}
                     
-                    if msg_type == 'start':
-                            # Initialize machine result
+                if msg_type == 'start':
+                        # Initialize machine result
+                        if machine not in job_state['results']:
+                            job_state['results'][machine] = {}
+                        job_state['results'][machine]['starttime'] = timestamp
+                        job_state['results'][machine]['ret'] = ''
+                        job_state['results'][machine]['retcode'] = ''
+                        job_state['results'][machine]['endtime'] = ''
+                        job_state['results'][machine]['wrapper_version'] = msg.get('wrapper_version', 'unknown')
+                        last_heartbeat[machine] = time.time()
+                        connected_targets.add(machine)
+                        startup_verified[machine] = True
+                        print(f"[JOB:{procname}] Machine {machine} started", flush=True)
+                    
+                elif msg_type == 'heartbeat':
+                        # Update heartbeat timestamp
+                        if machine not in job_state['results']:
+                            job_state['results'][machine] = {}
+                        job_state['results'][machine]['last_heartbeat'] = timestamp
+                        last_heartbeat[machine] = time.time()
+                    
+                elif msg_type == 'output':
+                        # Append output
+                        if machine not in job_state['results']:
+                            job_state['results'][machine] = {'ret': '', 'retcode': '', 'starttime': timestamp, 'endtime': ''}
+                            
+                        current_output = job_state['results'][machine].get('ret', '')
+                        new_data = msg.get('data', '')
+                        job_state['results'][machine]['ret'] = current_output + new_data
+                            
+                        seq = msg.get('seq')
+                        if seq is not None:
+                            job_state['results'][machine]['last_output_seq'] = seq
+                        last_heartbeat[machine] = time.time()
+                    
+                elif msg_type == 'complete':
+                        # Mark completion
+                        if machine not in job_state['results']:
+                            job_state['results'][machine] = {}
+                            
+                        # Get existing data
+                        starttime = job_state['results'][machine].get('starttime', timestamp)
+                        output = job_state['results'][machine].get('ret', '')
+                        wrapper_version = job_state['results'][machine].get('wrapper_version')
+                        last_heartbeat_val = job_state['results'][machine].get('last_heartbeat')
+                            
+                        # Set final result
+                        job_state['results'][machine] = {
+                            'ret': output,
+                            'retcode': msg.get('retcode'),
+                            'starttime': starttime,
+                            'endtime': timestamp
+                        }
+                        if wrapper_version:
+                            job_state['results'][machine]['wrapper_version'] = wrapper_version
+                        if last_heartbeat_val:
+                            job_state['results'][machine]['last_heartbeat'] = last_heartbeat_val
+                            
+                        print(f"[JOB:{procname}] Machine {machine} completed with retcode {msg.get('retcode')}", flush=True)
+                    
+                elif msg_type == 'error':
+                    # Mark error
+                    job_state['results'][machine] = {
+                        'ret': f"Wrapper error: {msg.get('error')}",
+                        'retcode': 255,
+                        'starttime': timestamp,
+                        'endtime': timestamp
+                    }
+                    print(f"[JOB:{procname}] Machine {machine} error: {msg.get('error')}", flush=True)
+                
+                elif msg_type == 'force_kill':
+                    # Force kill after grace period expired
+                    if machine in job_state['results']:
+                        result = job_state['results'][machine]
+                        if not result.get('endtime') or result.get('endtime') == '':
+                            result['endtime'] = datetime.now(timezone.utc)
+                            result['retcode'] = 143
+                            if 'ret' not in result:
+                                result['ret'] = ''
+                            result['ret'] += "\n[Job terminated by user request - grace period expired after 30s]\n"
+                            print(f"[JOB:{procname}] Forcefully killed {machine} after 30s grace period", flush=True)
+                    
+                # Commit state update (SINGLE WRITER - safe without deepcopy)
+                state[name] = job_state
+                
+                # Debug: verify state was actually committed to Manager dict
+                readback = state.get(name)
+                if readback and 'results' in readback and machine in readback['results']:
+                    debug_print(f"[JOB:{procname}][{machine}] State committed: type={msg_type}, has_results=True", flush=True)
+                else:
+                    print(f"[JOB:{procname}][{machine}] ERROR - State NOT in Manager dict after commit! type={msg_type}", flush=True)
+                
+                # After processing first message, drain any remaining messages
+                while True:
+                    try:
+                        msg = update_queue.get_nowait()
+                        msg_type = msg.get('type')
+                        machine = msg.get('machine')
+                        timestamp = msg.get('timestamp')
+                        
+                        # Process same logic as above
+                        job_state = state[name]
+                        if 'results' not in job_state:
+                            job_state['results'] = {}
+                            
+                        if msg_type == 'start':
                             if machine not in job_state['results']:
                                 job_state['results'][machine] = {}
                             job_state['results'][machine]['starttime'] = timestamp
@@ -329,40 +430,30 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                             connected_targets.add(machine)
                             startup_verified[machine] = True
                             print(f"[JOB:{procname}] Machine {machine} started", flush=True)
-                    
-                    elif msg_type == 'heartbeat':
-                            # Update heartbeat timestamp
+                            
+                        elif msg_type == 'heartbeat':
                             if machine not in job_state['results']:
                                 job_state['results'][machine] = {}
                             job_state['results'][machine]['last_heartbeat'] = timestamp
                             last_heartbeat[machine] = time.time()
-                    
-                    elif msg_type == 'output':
-                            # Append output
+                            
+                        elif msg_type == 'output':
                             if machine not in job_state['results']:
                                 job_state['results'][machine] = {'ret': '', 'retcode': '', 'starttime': timestamp, 'endtime': ''}
-                            
                             current_output = job_state['results'][machine].get('ret', '')
-                            new_data = msg.get('data', '')
-                            job_state['results'][machine]['ret'] = current_output + new_data
-                            
+                            job_state['results'][machine]['ret'] = current_output + msg.get('data', '')
                             seq = msg.get('seq')
                             if seq is not None:
                                 job_state['results'][machine]['last_output_seq'] = seq
                             last_heartbeat[machine] = time.time()
-                    
-                    elif msg_type == 'complete':
-                            # Mark completion
+                            
+                        elif msg_type == 'complete':
                             if machine not in job_state['results']:
                                 job_state['results'][machine] = {}
-                            
-                            # Get existing data
                             starttime = job_state['results'][machine].get('starttime', timestamp)
                             output = job_state['results'][machine].get('ret', '')
                             wrapper_version = job_state['results'][machine].get('wrapper_version')
                             last_heartbeat_val = job_state['results'][machine].get('last_heartbeat')
-                            
-                            # Set final result
                             job_state['results'][machine] = {
                                 'ret': output,
                                 'retcode': msg.get('retcode'),
@@ -373,11 +464,9 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                                 job_state['results'][machine]['wrapper_version'] = wrapper_version
                             if last_heartbeat_val:
                                 job_state['results'][machine]['last_heartbeat'] = last_heartbeat_val
-                            
                             print(f"[JOB:{procname}] Machine {machine} completed with retcode {msg.get('retcode')}", flush=True)
-                    
-                    elif msg_type == 'error':
-                            # Mark error
+                            
+                        elif msg_type == 'error':
                             job_state['results'][machine] = {
                                 'ret': f"Wrapper error: {msg.get('error')}",
                                 'retcode': 255,
@@ -385,9 +474,8 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                                 'endtime': timestamp
                             }
                             print(f"[JOB:{procname}] Machine {machine} error: {msg.get('error')}", flush=True)
-                    
-                    elif msg_type == 'force_kill':
-                            # Force kill after grace period expired
+                            
+                        elif msg_type == 'force_kill':
                             if machine in job_state['results']:
                                 result = job_state['results'][machine]
                                 if not result.get('endtime') or result.get('endtime') == '':
@@ -397,105 +485,13 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                                         result['ret'] = ''
                                     result['ret'] += "\n[Job terminated by user request - grace period expired after 30s]\n"
                                     print(f"[JOB:{procname}] Forcefully killed {machine} after 30s grace period", flush=True)
-                    
-                    # Commit state update (SINGLE WRITER - safe without deepcopy)
-                    state[name] = job_state
-                
-                # Debug: verify state was actually committed to Manager dict
-                    readback = state.get(name)
-                    if readback and 'results' in readback and machine in readback['results']:
-                        debug_print(f"[JOB:{procname}][{machine}] State committed: type={msg_type}, has_results=True", flush=True)
-                    else:
-                        print(f"[JOB:{procname}][{machine}] ERROR - State NOT in Manager dict after commit! type={msg_type}", flush=True)
-                
-                # After processing first message, drain any remaining messages
-                while True:
-                    try:
-                        msg = update_queue.get_nowait()
-                        msg_type = msg.get('type')
-                        machine = msg.get('machine')
-                        timestamp = msg.get('timestamp')
-                        
-                        # Process same logic as above
-                        with statelocks[name]:
-                            job_state = state[name]
-                            if 'results' not in job_state:
-                                job_state['results'] = {}
                             
-                            if msg_type == 'start':
-                                if machine not in job_state['results']:
-                                    job_state['results'][machine] = {}
-                                job_state['results'][machine]['starttime'] = timestamp
-                                job_state['results'][machine]['ret'] = ''
-                                job_state['results'][machine]['retcode'] = ''
-                                job_state['results'][machine]['endtime'] = ''
-                                job_state['results'][machine]['wrapper_version'] = msg.get('wrapper_version', 'unknown')
-                                last_heartbeat[machine] = time.time()
-                                connected_targets.add(machine)
-                                startup_verified[machine] = True
-                                print(f"[JOB:{procname}] Machine {machine} started", flush=True)
-                            
-                            elif msg_type == 'heartbeat':
-                                if machine not in job_state['results']:
-                                    job_state['results'][machine] = {}
-                                job_state['results'][machine]['last_heartbeat'] = timestamp
-                                last_heartbeat[machine] = time.time()
-                            
-                            elif msg_type == 'output':
-                                if machine not in job_state['results']:
-                                    job_state['results'][machine] = {'ret': '', 'retcode': '', 'starttime': timestamp, 'endtime': ''}
-                                current_output = job_state['results'][machine].get('ret', '')
-                                job_state['results'][machine]['ret'] = current_output + msg.get('data', '')
-                                seq = msg.get('seq')
-                                if seq is not None:
-                                    job_state['results'][machine]['last_output_seq'] = seq
-                                last_heartbeat[machine] = time.time()
-                            
-                            elif msg_type == 'complete':
-                                if machine not in job_state['results']:
-                                    job_state['results'][machine] = {}
-                                starttime = job_state['results'][machine].get('starttime', timestamp)
-                                output = job_state['results'][machine].get('ret', '')
-                                wrapper_version = job_state['results'][machine].get('wrapper_version')
-                                last_heartbeat_val = job_state['results'][machine].get('last_heartbeat')
-                                job_state['results'][machine] = {
-                                    'ret': output,
-                                    'retcode': msg.get('retcode'),
-                                    'starttime': starttime,
-                                    'endtime': timestamp
-                                }
-                                if wrapper_version:
-                                    job_state['results'][machine]['wrapper_version'] = wrapper_version
-                                if last_heartbeat_val:
-                                    job_state['results'][machine]['last_heartbeat'] = last_heartbeat_val
-                                print(f"[JOB:{procname}] Machine {machine} completed with retcode {msg.get('retcode')}", flush=True)
-                            
-                            elif msg_type == 'error':
-                                job_state['results'][machine] = {
-                                    'ret': f"Wrapper error: {msg.get('error')}",
-                                    'retcode': 255,
-                                    'starttime': timestamp,
-                                    'endtime': timestamp
-                                }
-                                print(f"[JOB:{procname}] Machine {machine} error: {msg.get('error')}", flush=True)
-                            
-                            elif msg_type == 'force_kill':
-                                if machine in job_state['results']:
-                                    result = job_state['results'][machine]
-                                    if not result.get('endtime') or result.get('endtime') == '':
-                                        result['endtime'] = datetime.now(timezone.utc)
-                                        result['retcode'] = 143
-                                        if 'ret' not in result:
-                                            result['ret'] = ''
-                                        result['ret'] += "\n[Job terminated by user request - grace period expired after 30s]\n"
-                                        print(f"[JOB:{procname}] Forcefully killed {machine} after 30s grace period", flush=True)
-                            
-                            state[name] = job_state
-                            readback = state.get(name)
-                            if readback and 'results' in readback and machine in readback['results']:
-                                debug_print(f"[JOB:{procname}][{machine}] State committed: type={msg_type}, has_results=True", flush=True)
-                            else:
-                                print(f"[JOB:{procname}][{machine}] ERROR - State NOT in Manager dict after commit! type={msg_type}", flush=True)
+                        state[name] = job_state
+                        readback = state.get(name)
+                        if readback and 'results' in readback and machine in readback['results']:
+                            debug_print(f"[JOB:{procname}][{machine}] State committed: type={msg_type}, has_results=True", flush=True)
+                        else:
+                            print(f"[JOB:{procname}][{machine}] ERROR - State NOT in Manager dict after commit! type={msg_type}", flush=True)
                     
                     except queue.Empty:
                         break  # No more messages
@@ -554,17 +550,16 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                     
                     print(f"[JOB:{procname}] {tgt}: {error_msg}", flush=True)
                     
-                    with statelocks[name]:
-                        job_state = state[name]
-                        if 'results' not in job_state:
-                            job_state['results'] = {}
-                        job_state['results'][tgt] = {
-                            'ret': error_msg,
-                            'retcode': 254,  # Special code for startup failure
-                            'starttime': job_state.get('last_run', now),
-                            'endtime': now
-                        }
-                        state[name] = job_state
+                    job_state = state[name]
+                    if 'results' not in job_state:
+                        job_state['results'] = {}
+                    job_state['results'][tgt] = {
+                        'ret': error_msg,
+                        'retcode': 254,  # Special code for startup failure
+                        'starttime': job_state.get('last_run', now),
+                        'endtime': now
+                    }
+                    state[name] = job_state
                     
                     log(what='machine_result', cron=name, group=group, instance=procname,
                         machine=tgt, code=254, out=error_msg, time=now)
@@ -578,29 +573,28 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
             
             # Mark remaining targets as timed out
             now = datetime.now(timezone.utc)
-            with statelocks[name]:
-                job_state = state[name]
-                if 'results' not in job_state:
-                    job_state['results'] = {}
+            job_state = state[name]
+            if 'results' not in job_state:
+                job_state['results'] = {}
                 
-                for tgt in pending_targets:
-                    if tgt in job_state['results']:
-                        starttime = job_state['results'][tgt].get('starttime', now)
-                        output = job_state['results'][tgt].get('ret', '')
-                    else:
-                        starttime = job_state.get('last_run', now)
-                        output = ''
+            for tgt in pending_targets:
+                if tgt in job_state['results']:
+                    starttime = job_state['results'][tgt].get('starttime', now)
+                    output = job_state['results'][tgt].get('ret', '')
+                else:
+                    starttime = job_state.get('last_run', now)
+                    output = ''
                     
-                    output += "\n[SALTPETER ERROR: Job exceeded timeout]\n"
+                output += "\n[SALTPETER ERROR: Job exceeded timeout]\n"
                     
-                    job_state['results'][tgt] = {
-                        'ret': output,
-                        'retcode': 124,  # Timeout exit code
-                        'starttime': starttime,
-                        'endtime': now
-                    }
+                job_state['results'][tgt] = {
+                    'ret': output,
+                    'retcode': 124,  # Timeout exit code
+                    'starttime': starttime,
+                    'endtime': now
+                }
                 
-                state[name] = job_state
+            state[name] = job_state
             
             # Log timeout for remaining targets
             for tgt in pending_targets:
@@ -615,83 +609,82 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
         
         # Check which targets have completed or timed out
         now = datetime.now(timezone.utc)
-        with statelocks[name]:
-            if name in state and 'results' in state[name]:
-                for tgt in list(pending_targets):
-                    if tgt in state[name]['results']:
-                        result = state[name]['results'][tgt]
+        if name in state and 'results' in state[name]:
+            for tgt in list(pending_targets):
+                if tgt in state[name]['results']:
+                    result = state[name]['results'][tgt]
                         
-                        # Update last heartbeat time from state (set by WebSocket server)
-                        if 'last_heartbeat' in result and result['last_heartbeat']:
-                            # Convert ISO timestamp to Unix timestamp
-                            try:
-                                hb_time = result['last_heartbeat']
-                                if isinstance(hb_time, str):
-                                    hb_time = datetime.fromisoformat(hb_time)
-                                if isinstance(hb_time, datetime):
-                                    last_heartbeat[tgt] = hb_time.timestamp()
-                                else:
-                                    # Assume it's already a timestamp
-                                    last_heartbeat[tgt] = float(hb_time)
-                            except:
-                                pass
+                    # Update last heartbeat time from state (set by WebSocket server)
+                    if 'last_heartbeat' in result and result['last_heartbeat']:
+                        # Convert ISO timestamp to Unix timestamp
+                        try:
+                            hb_time = result['last_heartbeat']
+                            if isinstance(hb_time, str):
+                                hb_time = datetime.fromisoformat(hb_time)
+                            if isinstance(hb_time, datetime):
+                                last_heartbeat[tgt] = hb_time.timestamp()
+                            else:
+                                # Assume it's already a timestamp
+                                last_heartbeat[tgt] = float(hb_time)
+                        except:
+                            pass
                         
-                        # Initialize heartbeat timer on first check if we have a starttime
-                        if tgt not in last_heartbeat and result.get('starttime'):
-                            try:
-                                start = result['starttime']
-                                if isinstance(start, str):
-                                    start = datetime.fromisoformat(start)
-                                if isinstance(start, datetime):
-                                    last_heartbeat[tgt] = start.timestamp()
-                            except:
-                                last_heartbeat[tgt] = time.time()
+                    # Initialize heartbeat timer on first check if we have a starttime
+                    if tgt not in last_heartbeat and result.get('starttime'):
+                        try:
+                            start = result['starttime']
+                            if isinstance(start, str):
+                                start = datetime.fromisoformat(start)
+                            if isinstance(start, datetime):
+                                last_heartbeat[tgt] = start.timestamp()
+                        except:
+                            last_heartbeat[tgt] = time.time()
                         
-                        # Check if this target has completed (has endtime)
-                        if result.get('endtime') and result['endtime'] != '':
-                            debug_print(f"[JOB:{procname}] Target {tgt} completed, removing from pending (retcode: {result.get('retcode')})", flush=True)
+                    # Check if this target has completed (has endtime)
+                    if result.get('endtime') and result['endtime'] != '':
+                        debug_print(f"[JOB:{procname}] Target {tgt} completed, removing from pending (retcode: {result.get('retcode')})", flush=True)
                             
-                            # Log the completion
+                        # Log the completion
+                        log(what='machine_result', cron=name, group=group, instance=procname,
+                            machine=tgt, code=result.get('retcode', 0), 
+                            out=result.get('ret', ''), time=result['endtime'])
+                            
+                        # Remove from running list
+                        if procname in running and 'machines' in running[procname]:
+                            if tgt in running[procname]['machines']:
+                                tmprunning = dict(running[procname])
+                                tmprunning['machines'] = [m for m in tmprunning['machines'] if m != tgt]
+                                running[procname] = tmprunning
+                            
+                        pending_targets.remove(tgt)
+                        continue
+                        
+                    # Check for heartbeat timeout
+                    if tgt in last_heartbeat:
+                        time_since_heartbeat = time.time() - last_heartbeat[tgt]
+                        if time_since_heartbeat > heartbeat_timeout:
+                            print(f"[JOB:{procname}] Heartbeat timeout for {tgt} ({time_since_heartbeat:.1f}s since last activity)", flush=True)
+                                
+                            # Mark as failed with heartbeat timeout
+                            job_state = state[name]
+                            starttime = result.get('starttime', now)
+                            output = result.get('ret', '')
+                            output += f"\n[SALTPETER ERROR: Job lost connection - no heartbeat for {time_since_heartbeat:.0f} seconds]\n"
+                                
+                            job_state['results'][tgt] = {
+                                'ret': output,
+                                'retcode': 253,  # Special code for heartbeat timeout
+                                'starttime': starttime,
+                                'endtime': now
+                            }
+                            state[name] = job_state
+                                
+                            # Log the failure
                             log(what='machine_result', cron=name, group=group, instance=procname,
-                                machine=tgt, code=result.get('retcode', 0), 
-                                out=result.get('ret', ''), time=result['endtime'])
-                            
-                            # Remove from running list
-                            if procname in running and 'machines' in running[procname]:
-                                if tgt in running[procname]['machines']:
-                                    tmprunning = dict(running[procname])
-                                    tmprunning['machines'] = [m for m in tmprunning['machines'] if m != tgt]
-                                    running[procname] = tmprunning
-                            
+                                machine=tgt, code=253, out=output, time=now)
+                                
+                            # Remove from pending
                             pending_targets.remove(tgt)
-                            continue
-                        
-                        # Check for heartbeat timeout
-                        if tgt in last_heartbeat:
-                            time_since_heartbeat = time.time() - last_heartbeat[tgt]
-                            if time_since_heartbeat > heartbeat_timeout:
-                                print(f"[JOB:{procname}] Heartbeat timeout for {tgt} ({time_since_heartbeat:.1f}s since last activity)", flush=True)
-                                
-                                # Mark as failed with heartbeat timeout
-                                job_state = state[name]
-                                starttime = result.get('starttime', now)
-                                output = result.get('ret', '')
-                                output += f"\n[SALTPETER ERROR: Job lost connection - no heartbeat for {time_since_heartbeat:.0f} seconds]\n"
-                                
-                                job_state['results'][tgt] = {
-                                    'ret': output,
-                                    'retcode': 253,  # Special code for heartbeat timeout
-                                    'starttime': starttime,
-                                    'endtime': now
-                                }
-                                state[name] = job_state
-                                
-                                # Log the failure
-                                log(what='machine_result', cron=name, group=group, instance=procname,
-                                    machine=tgt, code=253, out=output, time=now)
-                                
-                                # Remove from pending
-                                pending_targets.remove(tgt)
         
         # If all targets completed, exit
         if not pending_targets:
@@ -748,17 +741,16 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
                 r = i[m]['retcode']
                 o = i[m]['ret']
             result = { 'ret': o, 'retcode': r, 'starttime': state[name]['results'][m]['starttime'], 'endtime': datetime.now(timezone.utc) }
-            with statelocks[name]:
-                job_state = state[name]
-                if 'results' not in job_state:
-                    job_state['results'] = {}
-                job_state['results'][m] = result
-                state[name] = job_state
+            job_state = state[name]
+            if 'results' not in job_state:
+                job_state['results'] = {}
+            job_state['results'][m] = result
+            state[name] = job_state
 
-                if procname in running and m in running[procname]['machines']:
-                    tmprunning = running[procname]
-                    tmprunning['machines'].remove(m)
-                    running[procname] = tmprunning
+            if procname in running and m in running[procname]['machines']:
+                tmprunning = running[procname]
+                tmprunning['machines'].remove(m)
+                running[procname] = tmprunning
 
             log(what='machine_result',cron=name, group=group, instance=procname, machine=m,
                 code=r, out=o, time=result['endtime'])
@@ -786,22 +778,21 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
                     r = job_listing['Result'][m]['retcode']
                     result = { 'ret': o, 'retcode': r, 'starttime': state[name]['results'][m]['starttime'], 'endtime': datetime.now(timezone.utc) }
                     send_log = False
-                    with statelocks[name]:
-                        job_state = state[name]
-                        if 'results' not in job_state:
-                            job_state['results'] = {}
+                    job_state = state[name]
+                    if 'results' not in job_state:
+                        job_state['results'] = {}
 
-                        #print(f'state before check if m not in tmprresults: {state[name]}')
-                        if m not in job_state['results'] or job_state['results'][m]['endtime'] =='':
-                            job_state['results'][m] = result
-                            state[name] = job_state
+                    #print(f'state before check if m not in tmprresults: {state[name]}')
+                    if m not in job_state['results'] or job_state['results'][m]['endtime'] =='':
+                        job_state['results'][m] = result
+                        state[name] = job_state
 
-                            if procname in running and m in running[procname]['machines']:
-                                tmprunning = running[procname]
-                                tmprunning['machines'].remove(m)
-                                running[procname] = tmprunning
+                        if procname in running and m in running[procname]['machines']:
+                            tmprunning = running[procname]
+                            tmprunning['machines'].remove(m)
+                            running[procname] = tmprunning
 
-                            send_log = True
+                        send_log = True
 
                     if send_log:
                         log(what='machine_result',cron=name, group=group, instance=procname, machine=m,
@@ -825,18 +816,17 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
             log(what='machine_result',cron=name, group=group, instance=procname, machine=tgt,
                 code=255, out="Target did not return anything", time=now)
 
-            with statelocks[name]:
-                job_state = state[name]
-                job_state['results'][tgt] = { 'ret': "Target did not return anything",
-                        'retcode': 255,
-                        'starttime': starttime,
-                        'endtime': now }
-                state[name] = job_state
+            job_state = state[name]
+            job_state['results'][tgt] = { 'ret': "Target did not return anything",
+                    'retcode': 255,
+                    'starttime': starttime,
+                    'endtime': now }
+            state[name] = job_state
 
-                if procname in running and m in running[procname]['machines']:
-                    tmprunning = running[procname]
-                    tmprunning['machines'].remove(m)
-                    running[procname] = tmprunning
+            if procname in running and m in running[procname]['machines']:
+                tmprunning = running[procname]
+                tmprunning['machines'].remove(m)
+                running[procname] = tmprunning
 
 
 
@@ -850,18 +840,16 @@ def run(name, data, procname, running, state, commands, maintenance, state_updat
         if name == running[instance]['name']:
             log(what='overlap', cron=name, group=data['group'], instance=instance,
                  time=datetime.now(timezone.utc))
-            with statelocks[name]:
-                job_state = state[name]
-                job_state['overlap'] = True
-                state[name] = job_state
+            job_state = state[name]
+            job_state['overlap'] = True
+            state[name] = job_state
             if 'allow_overlap' not in data or data['allow_overlap'] != 'i know what i am doing!':
                 return
 
     # Clear results from previous run at the start
-    with statelocks[name]:
-        job_state = state[name]
-        job_state['results'] = {}
-        state[name] = job_state
+    job_state = state[name]
+    job_state['results'] = {}
+    state[name] = job_state
 
     import salt.client
     salt = salt.client.LocalClient()
@@ -931,15 +919,14 @@ def run(name, data, procname, running, state, commands, maintenance, state_updat
 
     now = datetime.now(timezone.utc)
     running[procname] = {'started': now, 'name': name, 'machines': []}
-    with statelocks[name]:
-        job_state = state[name]
-        job_state['last_run'] = now
-        job_state['overlap'] = False
-        job_state['group'] = data['group']  # Store group for WebSocket handler
-        # Clear previous results when starting a fresh run
-        if 'results' in job_state:
-            del job_state['results']
-        state[name] = job_state
+    job_state = state[name]
+    job_state['last_run'] = now
+    job_state['overlap'] = False
+    job_state['group'] = data['group']  # Store group for WebSocket handler
+    # Clear previous results when starting a fresh run
+    if 'results' in job_state:
+        del job_state['results']
+    state[name] = job_state
     log(cron=name, group=data['group'], what='start', instance=procname, time=now)
 
     # Initialize running dict BEFORE test.ping so kill commands work during this phase
@@ -958,19 +945,18 @@ def run(name, data, procname, running, state, commands, maintenance, state_updat
     ###
 
     dead_targets = []
-    with statelocks[name]:
-        tmpstate = state[name]
-        tmpstate['targets'] = targets_up.copy()
-        tmpstate['results'] = {}
+    tmpstate = state[name]
+    tmpstate['targets'] = targets_up.copy()
+    tmpstate['results'] = {}
 
-        # Record non-responsive targets
-        for tgt in targets_down:
-            tmpstate['results'][tgt] = {'ret': "Target did not respond",
-                                        'retcode': 255,
-                                        'starttime': now,
-                                        'endtime': datetime.now(timezone.utc)}
+    # Record non-responsive targets
+    for tgt in targets_down:
+        tmpstate['results'][tgt] = {'ret': "Target did not respond",
+                                    'retcode': 255,
+                                    'starttime': now,
+                                    'endtime': datetime.now(timezone.utc)}
 
-        state[name] = tmpstate
+    state[name] = tmpstate
 
     # Remove maintenance machines from targets_up and log a message
     for tgt in targets_up.copy():
@@ -1030,16 +1016,15 @@ def run(name, data, procname, running, state, commands, maintenance, state_updat
                             print(f"[JOB:{procname}] Stop signal detected before wrapper execution, skipping batch", flush=True)
                             # Mark machines as killed
                             now = datetime.now(timezone.utc)
-                            with statelocks[name]:
-                                job_state = state[name]
-                                if 'results' not in job_state:
-                                    job_state['results'] = {}
-                                for machine in chunk:
-                                    if machine in job_state['results']:
-                                        job_state['results'][machine]['endtime'] = now
-                                        job_state['results'][machine]['retcode'] = 143
-                                        job_state['results'][machine]['ret'] = '[Job killed before execution]'
-                                state[name] = job_state
+                            job_state = state[name]
+                            if 'results' not in job_state:
+                                job_state['results'] = {}
+                            for machine in chunk:
+                                if machine in job_state['results']:
+                                    job_state['results'][machine]['endtime'] = now
+                                    job_state['results'][machine]['retcode'] = 143
+                                    job_state['results'][machine]['ret'] = '[Job killed before execution]'
+                            state[name] = job_state
                             chunk = []
                             break
                         
@@ -1109,16 +1094,15 @@ def run(name, data, procname, running, state, commands, maintenance, state_updat
                 print(f"[JOB:{procname}] Stop signal detected before wrapper execution, aborting", flush=True)
                 # Mark all machines as killed
                 now = datetime.now(timezone.utc)
-                with statelocks[name]:
-                    job_state = state[name]
-                    if 'results' not in job_state:
-                        job_state['results'] = {}
-                    for machine in targets_up:
-                        if machine in job_state['results']:
-                            job_state['results'][machine]['endtime'] = now
-                            job_state['results'][machine]['retcode'] = 143
-                            job_state['results'][machine]['ret'] = '[Job killed before execution]'
-                    state[name] = job_state
+                job_state = state[name]
+                if 'results' not in job_state:
+                    job_state['results'] = {}
+                for machine in targets_up:
+                    if machine in job_state['results']:
+                        job_state['results'][machine]['endtime'] = now
+                        job_state['results'][machine]['retcode'] = 143
+                        job_state['results'][machine]['ret'] = '[Job killed before execution]'
+                state[name] = job_state
                 # Don't execute Salt - fall through to end for success evaluation
             else:
                 try:
@@ -1182,43 +1166,42 @@ def run(name, data, procname, running, state, commands, maintenance, state_updat
     
     # Evaluate job success ONCE - single source of truth
     # Count failures from results
-    with statelocks[name]:
-        job_state = state[name]
-        results = job_state.get('results', {})
+    job_state = state[name]
+    results = job_state.get('results', {})
         
-        debug_print(f"[SUCCESS EVAL DEBUG] Job {procname}: results keys = {list(results.keys())}")
-        debug_print(f"[SUCCESS EVAL DEBUG] Job {procname}: len(results) = {len(results)}")
+    debug_print(f"[SUCCESS EVAL DEBUG] Job {procname}: results keys = {list(results.keys())}")
+    debug_print(f"[SUCCESS EVAL DEBUG] Job {procname}: len(results) = {len(results)}")
         
-        failed_count = 0
-        total_count = 0
+    failed_count = 0
+    total_count = 0
         
-        for target, result in results.items():
-            debug_print(f"[SUCCESS EVAL DEBUG] Target {target}: retcode={result.get('retcode')}, ret={result.get('ret')}")
-            # Only count targets that have completed (retcode is set and not empty)
-            if 'retcode' in result and result['retcode'] != '' and result['retcode'] is not None:
-                total_count += 1
-                # Check if retcode is non-zero (handle both int and string)
-                retcode = result['retcode']
-                if retcode != 0 and retcode != '0':
-                    failed_count += 1
-                    debug_print(f"[SUCCESS EVAL DEBUG] Target {target}: FAILED with retcode={retcode}")
-                else:
-                    debug_print(f"[SUCCESS EVAL DEBUG] Target {target}: SUCCESS with retcode={retcode}")
+    for target, result in results.items():
+        debug_print(f"[SUCCESS EVAL DEBUG] Target {target}: retcode={result.get('retcode')}, ret={result.get('ret')}")
+        # Only count targets that have completed (retcode is set and not empty)
+        if 'retcode' in result and result['retcode'] != '' and result['retcode'] is not None:
+            total_count += 1
+            # Check if retcode is non-zero (handle both int and string)
+            retcode = result['retcode']
+            if retcode != 0 and retcode != '0':
+                failed_count += 1
+                debug_print(f"[SUCCESS EVAL DEBUG] Target {target}: FAILED with retcode={retcode}")
             else:
-                debug_print(f"[SUCCESS EVAL DEBUG] Target {target}: SKIPPED (retcode not set or empty)")
+                debug_print(f"[SUCCESS EVAL DEBUG] Target {target}: SUCCESS with retcode={retcode}")
+        else:
+            debug_print(f"[SUCCESS EVAL DEBUG] Target {target}: SKIPPED (retcode not set or empty)")
         
-        debug_print(f"[SUCCESS EVAL DEBUG] Final counts: total={total_count}, failed={failed_count}, success={total_count - failed_count}")
+    debug_print(f"[SUCCESS EVAL DEBUG] Final counts: total={total_count}, failed={failed_count}, success={total_count - failed_count}")
         
-        # Job is successful if no targets failed
-        success = (failed_count == 0) and (total_count > 0)
+    # Job is successful if no targets failed
+    success = (failed_count == 0) and (total_count > 0)
         
-        # Store success status in state for UI/API/logs to read
-        # Use job_state (already loaded above) instead of tmpstate (stale from start of run())
-        job_state['last_success'] = success
-        job_state['last_failed_count'] = failed_count
-        job_state['last_total_count'] = total_count
+    # Store success status in state for UI/API/logs to read
+    # Use job_state (already loaded above) instead of tmpstate (stale from start of run())
+    job_state['last_success'] = success
+    job_state['last_failed_count'] = failed_count
+    job_state['last_total_count'] = total_count
         
-        state[name] = job_state
+    state[name] = job_state
     
     # Log end with proper status code from evaluated success
     status_code = 0 if success else 1
@@ -1420,8 +1403,6 @@ def main():
     running = manager.dict()
     config = manager.dict()
     state = manager.dict()
-    global statelocks
-    statelocks = manager.dict()
     commands = manager.list()
     bad_crons = manager.list()
     timeline = manager.dict()
@@ -1437,7 +1418,7 @@ def main():
     # Start the WebSocket server for machine communication (pass commands queue for bidirectional communication)
     ws_server = multiprocessing.Process(
         target=machines_endpoint.start_websocket_server,
-        args=(params.machines_ws_bind_addr, params.machines_ws_port, state, running, statelocks, log, commands, state_update_queues, debug_flag),
+        args=(params.machines_ws_bind_addr, params.machines_ws_port, state, running, log, commands, state_update_queues, debug_flag),
         name='machines_endpoint'
     )
     ws_server.start()
@@ -1525,13 +1506,10 @@ def main():
                 result = parsecron(name, config['crons'][name], prev)
                 if name not in state:
                     state[name] = {}
-                if name not in statelocks:
-                    statelocks[name] = manager.Lock()
                 nextrun = prev + timedelta(seconds=result['nextrun'])
-                with statelocks[name]:
-                    job_state = state[name]
-                    job_state['next_run'] = nextrun
-                    state[name] = job_state
+                job_state = state[name]
+                job_state['next_run'] = nextrun
+                state[name] = job_state
                 #check if there are any start commands
                 runnow = False
                 for cmd in commands:

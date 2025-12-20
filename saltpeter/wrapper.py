@@ -201,7 +201,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
         })
         
         # Log start
-        log(f'Starting job: {command}', level='info')
+        log(f'Starting job: {command}', level='normal')
         
         # Add start message to pending queue
         pending_messages.append({
@@ -228,7 +228,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
             if timeout is not None and not killed:
                 elapsed = time.time() - job_start_time
                 if elapsed > timeout:
-                    log(f'Job timeout exceeded ({elapsed:.1f}s > {timeout}s), terminating process', level='info')
+                    log(f'Job timeout exceeded ({elapsed:.1f}s > {timeout}s), terminating process', level='normal')
                     killed = True
                     killed_by_timeout = True
                     
@@ -612,7 +612,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
             status = f'TIMEOUT (killed after {timeout}s, exit code: {final_retcode})'
         elif killed:
             status = f'KILLED (exit code: {final_retcode})'
-        log(f'Job completed: {status}', level='info')
+        log(f'Job completed: {status}', level='normal')
         
         # Add completion message to pending queue
         log(f'Adding completion message: retcode={final_retcode}, pending_count={len(pending_messages)}', level='debug')
@@ -750,7 +750,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
             log(f'--- OUTPUT END ---')
         
     except Exception as e:
-        log(f'Unexpected error in wrapper: {e}', level='info')
+        log(f'Unexpected error in wrapper: {e}', level='normal')
         # Make sure process is terminated if it's still running
         if process and process.poll() is None:
             try:
