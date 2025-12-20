@@ -11,12 +11,11 @@ from datetime import datetime, timezone
 import multiprocessing
 
 class WebSocketJobServer:
-    def __init__(self, host='0.0.0.0', port=8889, state=None, running=None, statelocks=None, log_func=None, commands=None, state_update_queues=None, debug_flag=None):
+    def __init__(self, host='0.0.0.0', port=8889, state=None, running=None, log_func=None, commands=None, state_update_queues=None, debug_flag=None):
         self.host = host
         self.port = port
         self.state = state
         self.running = running
-        self.statelocks = statelocks
         self.log_func = log_func
         self.commands = commands  # Shared command queue from main
         self.state_update_queues = state_update_queues  # job_instance → Queue for state updates
@@ -572,9 +571,9 @@ class WebSocketJobServer:
         """Run the WebSocket server (blocking)"""
         asyncio.run(self.start_server())
 
-def start_websocket_server(host, port, state, running, statelocks, log_func, commands=None, state_update_queues=None, debug_flag=None):
+def start_websocket_server(host, port, state, running, log_func, commands=None, state_update_queues=None, debug_flag=None):
     """Start WebSocket server in a separate process"""
     server = WebSocketJobServer(host=host, port=port, state=state, running=running, 
-                                statelocks=statelocks, log_func=log_func, commands=commands, 
+                                log_func=log_func, commands=commands, 
                                 state_update_queues=state_update_queues, debug_flag=debug_flag)
     server.run()

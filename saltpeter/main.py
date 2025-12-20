@@ -149,12 +149,11 @@ def processstart(chunk,name,group,procname,state):
         result = { 'ret': '', 'retcode': '',
             'starttime': starttime, 'endtime': ''}
         #do this crap to propagate changes; this is somewhat acceptable since this object is not modified anywhere else
-        with statelocks[name]:
-            job_state = state[name]
-            if 'results' not in job_state:
-                job_state['results'] = {}
-            job_state['results'][target] = result
-            state[name] = job_state
+        job_state = state[name]
+        if 'results' not in job_state:
+            job_state['results'] = {}
+        job_state['results'][target] = result
+        state[name] = job_state
 
         log(cron=name, group=group, what='machine_start', instance=procname,
                 time=starttime, machine=target)
@@ -167,13 +166,12 @@ def handle_wrapper_failure(machine, retcode, output, name, group, procname, runn
     now = datetime.now(timezone.utc)
     
     # Update state with failure
-    with statelocks[name]:
-        job_state = state[name]
-        if 'results' not in job_state:
-            job_state['results'] = {}
-        
-        # Always create/update entry with endtime to prevent heartbeat monitoring
-        if machine not in job_state['results']:
+    job_state = state[name]
+    if 'results' not in job_state:
+        job_state['results'] = {}
+    
+    # Always create/update entry with endtime to prevent heartbeat monitoring
+    if machine not in job_state['results']:
             job_state['results'][machine] = {
                 'ret': '',
                 'retcode': '',
@@ -311,13 +309,12 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                 timestamp = msg.get('timestamp')
                 
                 # Only this function modifies state[name] - no race conditions!
-                with statelocks[name]:
-                    job_state = state[name]
-                    if 'results' not in job_state:
-                        job_state['results'] = {}
-                    
-                    if msg_type == 'start':
-                            # Initialize machine result
+                job_state = state[name]
+                if 'results' not in job_state:
+                    job_state['results'] = {}
+                
+                if msg_type == 'start':
+                        # Initialize machine result
                             if machine not in job_state['results']:
                                 job_state['results'][machine] = {}
                             job_state['results'][machine]['starttime'] = timestamp
@@ -417,13 +414,12 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                         timestamp = msg.get('timestamp')
                         
                         # Process same logic as above
-                        with statelocks[name]:
-                            job_state = state[name]
-                            if 'results' not in job_state:
-                                job_state['results'] = {}
-                            
-                            if msg_type == 'start':
-                                if machine not in job_state['results']:
+                        job_state = state[name]
+                        if 'results' not in job_state:
+                            job_state['results'] = {}
+                        
+                        if msg_type == 'start':
+                            if machine not in job_state['results']:
                                     job_state['results'][machine] = {}
                                 job_state['results'][machine]['starttime'] = timestamp
                                 job_state['results'][machine]['ret'] = ''
@@ -554,13 +550,12 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                     
                     print(f"[JOB:{procname}] {tgt}: {error_msg}", flush=True)
                     
-                    with statelocks[name]:
-                        job_state = state[name]
-                        if 'results' not in job_state:
-                            job_state['results'] = {}
-                        job_state['results'][tgt] = {
-                            'ret': error_msg,
-                            'retcode': 254,  # Special code for startup failure
+                    job_state = state[name]
+                    if 'results' not in job_state:
+                        job_state['results'] = {}
+                    job_state['results'][tgt] = {
+                        'ret': error_msg,
+                        'retcode': 254,  # Special code for startup failure
                             'starttime': job_state.get('last_run', now),
                             'endtime': now
                         }
@@ -578,13 +573,12 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
             
             # Mark remaining targets as timed out
             now = datetime.now(timezone.utc)
-            with statelocks[name]:
-                job_state = state[name]
-                if 'results' not in job_state:
-                    job_state['results'] = {}
-                
-                for tgt in pending_targets:
-                    if tgt in job_state['results']:
+            job_state = state[name]
+            if 'results' not in job_state:
+                job_state['results'] = {}
+            
+            for tgt in pending_targets:
+                if tgt in job_state['results']:
                         starttime = job_state['results'][tgt].get('starttime', now)
                         output = job_state['results'][tgt].get('ret', '')
                     else:
@@ -615,13 +609,12 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
         
         # Check which targets have completed or timed out
         now = datetime.now(timezone.utc)
-        with statelocks[name]:
-            if name in state and 'results' in state[name]:
-                for tgt in list(pending_targets):
-                    if tgt in state[name]['results']:
-                        result = state[name]['results'][tgt]
-                        
-                        # Update last heartbeat time from state (set by WebSocket server)
+        if name in state and 'results' in state[name]:
+            for tgt in list(pending_targets):
+                if tgt in state[name]['results']:
+                    result = state[name]['results'][tgt]
+                    
+                    # Update last heartbeat time from state (set by WebSocket server)
                         if 'last_heartbeat' in result and result['last_heartbeat']:
                             # Convert ISO timestamp to Unix timestamp
                             try:
@@ -748,12 +741,11 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
                 r = i[m]['retcode']
                 o = i[m]['ret']
             result = { 'ret': o, 'retcode': r, 'starttime': state[name]['results'][m]['starttime'], 'endtime': datetime.now(timezone.utc) }
-            with statelocks[name]:
-                job_state = state[name]
-                if 'results' not in job_state:
-                    job_state['results'] = {}
-                job_state['results'][m] = result
-                state[name] = job_state
+            job_state = state[name]
+            if 'results' not in job_state:
+                job_state['results'] = {}
+            job_state['results'][m] = result
+            state[name] = job_state
 
                 if procname in running and m in running[procname]['machines']:
                     tmprunning = running[procname]
@@ -786,13 +778,12 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
                     r = job_listing['Result'][m]['retcode']
                     result = { 'ret': o, 'retcode': r, 'starttime': state[name]['results'][m]['starttime'], 'endtime': datetime.now(timezone.utc) }
                     send_log = False
-                    with statelocks[name]:
-                        job_state = state[name]
-                        if 'results' not in job_state:
-                            job_state['results'] = {}
+                    job_state = state[name]
+                    if 'results' not in job_state:
+                        job_state['results'] = {}
 
-                        #print(f'state before check if m not in tmprresults: {state[name]}')
-                        if m not in job_state['results'] or job_state['results'][m]['endtime'] =='':
+                    #print(f'state before check if m not in tmprresults: {state[name]}')
+                    if m not in job_state['results'] or job_state['results'][m]['endtime'] =='':
                             job_state['results'][m] = result
                             state[name] = job_state
 
@@ -825,13 +816,12 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
             log(what='machine_result',cron=name, group=group, instance=procname, machine=tgt,
                 code=255, out="Target did not return anything", time=now)
 
-            with statelocks[name]:
-                job_state = state[name]
-                job_state['results'][tgt] = { 'ret': "Target did not return anything",
-                        'retcode': 255,
-                        'starttime': starttime,
-                        'endtime': now }
-                state[name] = job_state
+            job_state = state[name]
+            job_state['results'][tgt] = { 'ret': "Target did not return anything",
+                    'retcode': 255,
+                    'starttime': starttime,
+                    'endtime': now }
+            state[name] = job_state
 
                 if procname in running and m in running[procname]['machines']:
                     tmprunning = running[procname]
@@ -850,15 +840,13 @@ def run(name, data, procname, running, state, commands, maintenance, state_updat
             if name == running[instance]['name']:
                 log(what='overlap', cron=name, group=data['group'], instance=instance,
                      time=datetime.now(timezone.utc))
-                with statelocks[name]:
-                    job_state = state[name]
-                    job_state['overlap'] = True
-                    state[name] = job_state
+                job_state = state[name]
+                job_state['overlap'] = True
+                state[name] = job_state
                 if 'allow_overlap' not in data or data['allow_overlap'] != 'i know what i am doing!':
                     return
 
         # Clear results from previous run at the start
-    with statelocks[name]:
         job_state = state[name]
         job_state['results'] = {}
         state[name] = job_state
@@ -931,13 +919,12 @@ def run(name, data, procname, running, state, commands, maintenance, state_updat
 
     now = datetime.now(timezone.utc)
     running[procname] = {'started': now, 'name': name, 'machines': []}
-    with statelocks[name]:
-        job_state = state[name]
-        job_state['last_run'] = now
-        job_state['overlap'] = False
-        job_state['group'] = data['group']  # Store group for WebSocket handler
-        # Clear previous results when starting a fresh run
-        if 'results' in job_state:
+    job_state = state[name]
+    job_state['last_run'] = now
+    job_state['overlap'] = False
+    job_state['group'] = data['group']  # Store group for WebSocket handler
+    # Clear previous results when starting a fresh run
+    if 'results' in job_state:
             del job_state['results']
         state[name] = job_state
     log(cron=name, group=data['group'], what='start', instance=procname, time=now)
@@ -958,13 +945,12 @@ def run(name, data, procname, running, state, commands, maintenance, state_updat
     ###
 
     dead_targets = []
-    with statelocks[name]:
-        tmpstate = state[name]
-        tmpstate['targets'] = targets_up.copy()
-        tmpstate['results'] = {}
+    tmpstate = state[name]
+    tmpstate['targets'] = targets_up.copy()
+    tmpstate['results'] = {}
 
-        # Record non-responsive targets
-        for tgt in targets_down:
+    # Record non-responsive targets
+    for tgt in targets_down:
             tmpstate['results'][tgt] = {'ret': "Target did not respond",
                                         'retcode': 255,
                                         'starttime': now,
@@ -1030,13 +1016,12 @@ def run(name, data, procname, running, state, commands, maintenance, state_updat
                             print(f"[JOB:{procname}] Stop signal detected before wrapper execution, skipping batch", flush=True)
                             # Mark machines as killed
                             now = datetime.now(timezone.utc)
-                            with statelocks[name]:
-                                job_state = state[name]
-                                if 'results' not in job_state:
-                                    job_state['results'] = {}
-                                for machine in chunk:
-                                    if machine in job_state['results']:
-                                        job_state['results'][machine]['endtime'] = now
+                            job_state = state[name]
+                            if 'results' not in job_state:
+                                job_state['results'] = {}
+                            for machine in chunk:
+                                if machine in job_state['results']:
+                                    job_state['results'][machine]['endtime'] = now
                                         job_state['results'][machine]['retcode'] = 143
                                         job_state['results'][machine]['ret'] = '[Job killed before execution]'
                                 state[name] = job_state
@@ -1109,13 +1094,12 @@ def run(name, data, procname, running, state, commands, maintenance, state_updat
                 print(f"[JOB:{procname}] Stop signal detected before wrapper execution, aborting", flush=True)
                 # Mark all machines as killed
                 now = datetime.now(timezone.utc)
-                with statelocks[name]:
-                    job_state = state[name]
-                    if 'results' not in job_state:
-                        job_state['results'] = {}
-                    for machine in targets_up:
-                        if machine in job_state['results']:
-                            job_state['results'][machine]['endtime'] = now
+                job_state = state[name]
+                if 'results' not in job_state:
+                    job_state['results'] = {}
+                for machine in targets_up:
+                    if machine in job_state['results']:
+                        job_state['results'][machine]['endtime'] = now
                             job_state['results'][machine]['retcode'] = 143
                             job_state['results'][machine]['ret'] = '[Job killed before execution]'
                     state[name] = job_state
@@ -1174,13 +1158,12 @@ def run(name, data, procname, running, state, commands, maintenance, state_updat
     # Evaluate job success ONCE - single source of truth
     # Note: cleanup moved to finally block to ensure it always runs
     # Count failures from results
-    with statelocks[name]:
-        job_state = state[name]
-        results = job_state.get('results', {})
-        
-        debug_print(f"[SUCCESS EVAL DEBUG] Job {procname}: results keys = {list(results.keys())}")
-        debug_print(f"[SUCCESS EVAL DEBUG] Job {procname}: len(results) = {len(results)}")
-        
+    job_state = state[name]
+    results = job_state.get('results', {})
+    
+    debug_print(f"[SUCCESS EVAL DEBUG] Job {procname}: results keys = {list(results.keys())}")
+    debug_print(f"[SUCCESS EVAL DEBUG] Job {procname}: len(results) = {len(results)}")
+    
         failed_count = 0
         total_count = 0
         
@@ -1430,8 +1413,6 @@ def main():
     running = manager.dict()
     config = manager.dict()
     state = manager.dict()
-    global statelocks
-    statelocks = manager.dict()
     commands = manager.list()
     bad_crons = manager.list()
     timeline = manager.dict()
@@ -1447,7 +1428,7 @@ def main():
     # Start the WebSocket server for machine communication (pass commands queue for bidirectional communication)
     ws_server = multiprocessing.Process(
         target=machines_endpoint.start_websocket_server,
-        args=(params.machines_ws_bind_addr, params.machines_ws_port, state, running, statelocks, log, commands, state_update_queues, debug_flag),
+        args=(params.machines_ws_bind_addr, params.machines_ws_port, state, running, log, commands, state_update_queues, debug_flag),
         name='machines_endpoint'
     )
     ws_server.start()
@@ -1535,13 +1516,10 @@ def main():
                 result = parsecron(name, config['crons'][name], prev)
                 if name not in state:
                     state[name] = {}
-                if name not in statelocks:
-                    statelocks[name] = manager.Lock()
                 nextrun = prev + timedelta(seconds=result['nextrun'])
-                with statelocks[name]:
-                    job_state = state[name]
-                    job_state['next_run'] = nextrun
-                    state[name] = job_state
+                job_state = state[name]
+                job_state['next_run'] = nextrun
+                state[name] = job_state
                 #check if there are any start commands
                 runnow = False
                 for cmd in commands:
