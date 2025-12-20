@@ -169,19 +169,65 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
         # Start the subprocess FIRST - runs regardless of WebSocket state
         process = subprocess.Popen(command, **proc_kwargs)
         
+        # Set streams to non-blocking mode
+        import fcntl
+        import os
+        fl = fcntl.fcntl(process.stdout, fcntl.F_GETFL)
+        fcntl.fcntl(process.stdout, fcntl.F_SETFL, fl | os.O_NONBLOCK)
+        fl = fcntl.fcntl(process.stderr, fcntl.F_GETFL)
+        fcntl.fcntl(process.stderr, fcntl.F_SETFL, fl | os.O_NONBLOCK)
+        
         # Wrap binary streams with TextIOWrapper to read characters while preserving \r
         import io
         stdout_text = io.TextIOWrapper(process.stdout, encoding='utf-8', errors='replace', newline='', line_buffering=False)
         stderr_text = io.TextIOWrapper(process.stderr, encoding='utf-8', errors='replace', newline='', line_buffering=False)
         
-        # Use select() to read from both streams in order
-        # This preserves cross-stream ordering better than separate threads
+        # Use single thread with select() to drain both pipes into queue as fast as possible
+        # This preserves ordering better than separate threads
+        import threading
+        import queue
         import selectors
-        import os
         
-        sel = selectors.DefaultSelector()
-        sel.register(stdout_text, selectors.EVENT_READ, data='stdout')
-        sel.register(stderr_text, selectors.EVENT_READ, data='stderr')
+        raw_output_queue = queue.Queue()  # FIFO queue of (chunk, stream_type)
+        drain_active = True
+        
+        def drain_pipes():
+            """Single thread draining both pipes using select()"""
+            nonlocal drain_active
+            
+            sel = selectors.DefaultSelector()
+            sel.register(stdout_text, selectors.EVENT_READ, data='stdout')
+            sel.register(stderr_text, selectors.EVENT_READ, data='stderr')
+            
+            try:
+                while drain_active:
+                    # Wait for data on either stream (with timeout to check drain_active)
+                    events = sel.select(timeout=0.1)
+                    for key, mask in events:
+                        stream = key.fileobj
+                        stream_type = key.data
+                        
+                        # Read all available data from this stream
+                        while True:
+                            try:
+                                chunk = stream.read(8192)
+                                if not chunk:
+                                    break
+                                # Immediately put in queue - NO processing
+                                raw_output_queue.put((chunk, stream_type))
+                            except BlockingIOError:
+                                break
+                            except Exception:
+                                break
+            except Exception as e:
+                log(f'Drain thread error: {e}')
+            finally:
+                sel.close()
+                drain_active = False
+        
+        # Start single drain thread
+        drain_thread = threading.Thread(target=drain_pipes, daemon=True)
+        drain_thread.start()
         
         output_buffer = []
         last_stderr_char = '\n'  # Track last stderr character for tagging
@@ -490,25 +536,32 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                         pass
                     
                     # Read available output from both streams using selector (non-blocking)
+                    # First: QUICKLY read all available data from ALL streams without processing
+                    # This minimizes delays that could cause ordering issues
+                    raw_chunks = []  # List of (chunk, stream_type) tuples
                     try:
-                        events = sel.select(timeout=0)
-                        for key, mask in events:
-                            stream = key.fileobj
-                            stream_type = key.data
-                            
-                            # Read one character from this stream
-                            chunk = stream.read(1)
-                            if chunk:
-                                # Add [STDERR] tag at stderr line boundaries
-                                if stream_type == 'stderr':
-                                    if last_stderr_char in ('\n', '\r'):
-                                        # Put tag + first character together
-                                        output_buffer.append(('[STDERR] ' + chunk, 'stderr'))
-                                    else:
-                                        output_buffer.append((chunk, stream_type))
-                                    last_stderr_char = chunk
+                        # Pull all available items from queue (non-blocking)
+                        while True:
+                            try:
+                                chunk, stream_type = raw_output_queue.get_nowait()
+                                raw_chunks.append((chunk, stream_type))
+                            except queue.Empty:
+                                break
+                    except Exception as e:
+                        log(f'Error reading output queue: {e}')
+                    
+                    # Second: Process the read data (add STDERR tags)
+                    for chunk, stream_type in raw_chunks:
+                        for char in chunk:
+                            if stream_type == 'stderr':
+                                if last_stderr_char in ('\n', '\r'):
+                                    # Put tag + first character together
+                                    output_buffer.append(('[STDERR] ' + char, 'stderr'))
                                 else:
-                                    output_buffer.append((chunk, stream_type))
+                                    output_buffer.append((char, stream_type))
+                                last_stderr_char = char
+                            else:
+                                output_buffer.append((char, stream_type))
                     except Exception as e:
                         log(f'Error reading output queue: {e}')
                     
@@ -639,29 +692,27 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
             # Clear buffer after final flush (process complete, won't need retransmission)
             output_buffer = []
         
-        # Read any remaining output from both streams after process exits
-        # Poll with short timeout to catch any buffered data
+        # Wait for drain thread to finish
+        drain_active = False
+        drain_thread.join(timeout=2)
+        
+        # Drain any remaining items from queue
         remaining_chunks = []
-        for _ in range(100):  # Try up to 100 times (2 seconds total)
-            events = sel.select(timeout=0.02)
-            if not events:
-                break
-            for key, mask in events:
-                stream = key.fileobj
-                stream_type = key.data
-                chunk = stream.read(1)
-                if chunk:
+        try:
+            while True:
+                chunk, stream_type = raw_output_queue.get_nowait()
+                # Process for STDERR tagging
+                for char in chunk:
                     if stream_type == 'stderr':
                         if last_stderr_char in ('\n', '\r'):
-                            remaining_chunks.append(('[STDERR] ' + chunk, 'stderr'))
+                            remaining_chunks.append(('[STDERR] ' + char, 'stderr'))
                         else:
-                            remaining_chunks.append((chunk, stream_type))
-                        last_stderr_char = chunk
+                            remaining_chunks.append((char, stream_type))
+                        last_stderr_char = char
                     else:
-                        remaining_chunks.append((chunk, stream_type))
-        
-        # Cleanup selector
-        sel.close()
+                        remaining_chunks.append((char, stream_type))
+        except queue.Empty:
+            pass
         
         # Add remaining output if any
         if remaining_chunks:
