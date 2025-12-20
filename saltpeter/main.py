@@ -518,8 +518,20 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
         # Check startup verification window
         elapsed = time.time() - job_start_time
         
-        # If Salt completed, check results immediately (don't wait for startup_window)
-        check_now = salt_result and salt_result.get('completed')
+        # Only fail fast if Salt returned with an actual error or non-zero retcode
+        # Success (retcode=0) means wrapper launched - wait for WebSocket connection
+        salt_failed = False
+        if salt_result and salt_result.get('completed'):
+            if salt_result.get('error'):
+                salt_failed = True
+            elif salt_result.get('result'):
+                # Check if any target has non-zero retcode
+                for tgt_name, tgt_result in salt_result['result'].items():
+                    if isinstance(tgt_result, dict) and tgt_result.get('retcode') not in (None, 0, '0'):
+                        salt_failed = True
+                        break
+        
+        check_now = salt_failed
         
         if check_now or elapsed > startup_window:
             # After startup window, check for targets that never connected
@@ -532,7 +544,7 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                             salt_error = salt_result['error']
                         elif salt_result.get('result') and tgt in salt_result['result']:
                             result = salt_result['result'][tgt]
-                            if isinstance(result, dict) and result.get('retcode') != 0:
+                            if isinstance(result, dict) and result.get('retcode') not in (None, 0, '0'):
                                 stderr = result.get('stderr', '').strip()
                                 stdout = result.get('stdout', '').strip()
                                 salt_error = f"Exit code {result['retcode']}"
