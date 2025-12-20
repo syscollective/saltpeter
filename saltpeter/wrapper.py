@@ -447,10 +447,11 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                         import select
                         ready, _, _ = select.select([stdout_text], [], [], 0)
                         if ready:
-                            line = stdout_text.readline()
-                            if line:
-                                output_buffer.append(line)
-                                full_output.append(line)  # Keep for local logging
+                            # Read up to 8KB of available data to capture \r updates
+                            chunk = stdout_text.read(8192)
+                            if chunk:
+                                output_buffer.append(chunk)
+                                full_output.append(chunk)  # Keep for local logging
                     except Exception as e:
                         log(f'Error reading output: {e}')
                     
@@ -558,12 +559,8 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
         # Process finished - ensure ALL buffered output is sent
         # Force send even if waiting_for_ack (this is the final flush)
         if output_buffer:
-            combined_output = ''.join(chunk for chunk, _ in output_buffer)
+            combined_output = ''.join(output_buffer)
             output_messages, next_seq = create_output_messages(combined_output, next_seq)
-            # Track mapping for final flush
-            current_buffer_end = buffer_cleared_up_to + len(output_buffer)
-            for msg in output_messages:
-                seq_to_buffer_map[msg['seq']] = current_buffer_end
             pending_messages.extend(output_messages)
             # Clear buffer after final flush (process complete, won't need retransmission)
             output_buffer = []
