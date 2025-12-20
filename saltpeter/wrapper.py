@@ -154,8 +154,8 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
             'stdout': subprocess.PIPE,
             'stderr': subprocess.STDOUT,  # Merge stderr into stdout for correct ordering
             'shell': True,
-            'text': True,
-            'bufsize': 1  # Line buffered
+            'text': False,  # Binary mode to preserve \r
+            'bufsize': 0  # Unbuffered
         }
         
         if cwd:
@@ -168,6 +168,10 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
         
         # Start the subprocess
         process = subprocess.Popen(command, **proc_kwargs)
+        
+        # Wrap stdout to preserve \r characters
+        import io
+        stdout_text = io.TextIOWrapper(process.stdout, encoding='utf-8', errors='replace', newline='')
         
         # Track job start time for timeout enforcement
         job_start_time = time.time()
@@ -441,9 +445,9 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                     # Read available output from stdout only (stderr merged into it)
                     try:
                         import select
-                        ready, _, _ = select.select([process.stdout], [], [], 0)
+                        ready, _, _ = select.select([stdout_text], [], [], 0)
                         if ready:
-                            line = process.stdout.readline()
+                            line = stdout_text.readline()
                             if line:
                                 output_buffer.append(line)
                                 full_output.append(line)  # Keep for local logging
@@ -566,7 +570,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
         
         # Read any remaining output
         try:
-            remaining = process.stdout.read()
+            remaining = stdout_text.read()
             if remaining:
                 remainder_messages, next_seq = create_output_messages(remaining, next_seq)
                 pending_messages.extend(remainder_messages)
