@@ -841,23 +841,23 @@ def processresults(client,commands,job,name,group,procname,running,state,targets
 
 
 def run(name, data, procname, running, state, commands, maintenance, state_update_queues=None, manager=None):
+    try:
+        if maintenance['global']:
+            log(cron=name, group=data['group'], what='maintenance', instance=procname, time=datetime.now(timezone.utc), out="Global maintenance mode active")
+            return
 
-    if maintenance['global']:
-        log(cron=name, group=data['group'], what='maintenance', instance=procname, time=datetime.now(timezone.utc), out="Global maintenance mode active")
-        return
+        for instance in running.keys():
+            if name == running[instance]['name']:
+                log(what='overlap', cron=name, group=data['group'], instance=instance,
+                     time=datetime.now(timezone.utc))
+                with statelocks[name]:
+                    job_state = state[name]
+                    job_state['overlap'] = True
+                    state[name] = job_state
+                if 'allow_overlap' not in data or data['allow_overlap'] != 'i know what i am doing!':
+                    return
 
-    for instance in running.keys():
-        if name == running[instance]['name']:
-            log(what='overlap', cron=name, group=data['group'], instance=instance,
-                 time=datetime.now(timezone.utc))
-            with statelocks[name]:
-                job_state = state[name]
-                job_state['overlap'] = True
-                state[name] = job_state
-            if 'allow_overlap' not in data or data['allow_overlap'] != 'i know what i am doing!':
-                return
-
-    # Clear results from previous run at the start
+        # Clear results from previous run at the start
     with statelocks[name]:
         job_state = state[name]
         job_state['results'] = {}
@@ -1171,16 +1171,8 @@ def run(name, data, procname, running, state, commands, maintenance, state_updat
                     print(f'[MAIN] Traceback:', flush=True)
                     traceback.print_exc()
 
-    # Clean up running state at the end of job execution
-    if procname in running:
-        del running[procname]
-    
-    # Clean up state update queue at the end of all batches
-    if use_wrapper and state_update_queues and procname in state_update_queues:
-        del state_update_queues[procname]
-        debug_print(f"[JOB:{procname}] Cleaned up state update queue", flush=True)
-    
     # Evaluate job success ONCE - single source of truth
+    # Note: cleanup moved to finally block to ensure it always runs
     # Count failures from results
     with statelocks[name]:
         job_state = state[name]
@@ -1225,6 +1217,24 @@ def run(name, data, procname, running, state, commands, maintenance, state_updat
     log(cron=name, group=data['group'], what='end', instance=procname, 
         time=datetime.now(timezone.utc), code=status_code,
         out=f"Completed: {total_count - failed_count}/{total_count} targets successful")
+    
+    except Exception as e:
+        print(f"[JOB:{procname}] FATAL ERROR in run() function: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+        # Continue to finally block for cleanup
+    
+    finally:
+        # CRITICAL: Always cleanup, even if exception occurred
+        # Clean up running state
+        if procname in running:
+            del running[procname]
+            print(f"[JOB:{procname}] Cleaned up running state (finally block)", flush=True)
+        
+        # Clean up state update queue
+        if state_update_queues and procname in state_update_queues:
+            del state_update_queues[procname]
+            print(f"[JOB:{procname}] Cleaned up state update queue (finally block)", flush=True)
 
 def debuglog(content):
     logfile = open(params.logdir+'/'+'debug.log','a')

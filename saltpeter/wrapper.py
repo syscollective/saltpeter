@@ -201,7 +201,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
         })
         
         # Log start
-        log(f'Starting job: {command}', level='info')
+        log(f'Starting job: {command}', level='normal')
         
         # Add start message to pending queue
         pending_messages.append({
@@ -228,7 +228,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
             if timeout is not None and not killed:
                 elapsed = time.time() - job_start_time
                 if elapsed > timeout:
-                    log(f'Job timeout exceeded ({elapsed:.1f}s > {timeout}s), terminating process', level='info')
+                    log(f'Job timeout exceeded ({elapsed:.1f}s > {timeout}s), terminating process', level='normal')
                     killed = True
                     killed_by_timeout = True
                     
@@ -351,6 +351,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                     try:
                         message = await asyncio.wait_for(websocket.recv(), timeout=0.1)
                         data = json.loads(message)
+                        log(f'Received message: type={data.get("type")}', level='debug')
                         
                         if data.get('type') == 'ack':
                             # Process acknowledgement
@@ -384,7 +385,14 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                             server_last_seq = data.get('last_seq', -1)
                             log(f'Sync response: server_last={server_last_seq}, our_last_acked={last_acked_seq}')
                             
-                            if server_last_seq >= last_acked_seq:
+                            # server_last=-1 means job doesn't exist on server (stopped/orphaned)
+                            # Don't try to resend - server won't accept it
+                            if server_last_seq == -1:
+                                log(f'Job no longer exists on server, stopping retries')
+                                waiting_for_ack = False
+                                # Clear pending output messages - server won't accept them
+                                pending_messages = [m for m in pending_messages if m.get('type') != 'output']
+                            elif server_last_seq >= last_acked_seq:
                                 # Server is ahead or equal, update our state
                                 last_acked_seq = server_last_seq
                                 waiting_for_ack = False
@@ -395,6 +403,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                             # This avoids flooding the connection with retries
                         
                         elif data.get('type') == 'kill':
+                            log(f'KILL message received from server', level='normal')
                             killed = True
 
                             # Flush any buffered output BEFORE closing pipes
@@ -612,7 +621,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
             status = f'TIMEOUT (killed after {timeout}s, exit code: {final_retcode})'
         elif killed:
             status = f'KILLED (exit code: {final_retcode})'
-        log(f'Job completed: {status}', level='info')
+        log(f'Job completed: {status}', level='normal')
         
         # Add completion message to pending queue
         log(f'Adding completion message: retcode={final_retcode}, pending_count={len(pending_messages)}', level='debug')
@@ -750,7 +759,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
             log(f'--- OUTPUT END ---')
         
     except Exception as e:
-        log(f'Unexpected error in wrapper: {e}', level='info')
+        log(f'Unexpected error in wrapper: {e}', level='normal')
         # Make sure process is terminated if it's still running
         if process and process.poll() is None:
             try:
