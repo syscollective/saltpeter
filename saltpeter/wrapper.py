@@ -963,7 +963,7 @@ def main():
         if lockdir and lockdir != '/tmp':
             os.makedirs(lockdir, mode=0o777, exist_ok=True)
         
-        should_write_pid = True
+        overlap_error = None
         # Check if lockfile exists
         if os.path.exists(lockfile_path):
             # Read PID from existing file
@@ -975,21 +975,25 @@ def main():
                     old_pid = int(pid_str)
                     # Check if process is still running
                     os.kill(old_pid, 0)
-                    # Process exists - don't write our PID
-                    should_write_pid = False
+                    # Process exists - overlap not allowed
+                    overlap_error = f"Job {job_name} already running (PID {old_pid}), overlap not allowed"
             except (ValueError, OSError):
                 # PID invalid or process doesn't exist - write our PID
                 pass
         
         # Write our PID if no conflict (create new or overwrite stale)
-        if should_write_pid:
+        if not overlap_error:
             try:
                 with open(lockfile_path, 'w') as f:
                     f.write(f"{os.getpid()}\n")
                 lockfile_acquired = True
-            except:
-                # Failed to write - just proceed without lockfile
-                pass
+            except Exception as e:
+                # Failed to write - report error
+                overlap_error = f"Failed to write lockfile {lockfile_path}: {e}"
+        
+        # If overlap detected, replace command with error message
+        if overlap_error:
+            command = f"echo 'LOCKFILE ERROR: {overlap_error}' && exit 254"
     
     # Run the command asynchronously
     asyncio.run(run_command_and_stream(websocket_url, job_name, job_instance, machine_id, command, cwd, user, timeout, loglevel, logdir, lockfile_path, lockfile_acquired))
