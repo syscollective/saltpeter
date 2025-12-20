@@ -975,58 +975,36 @@ def main():
                 lockfile_handle.flush()
             except BlockingIOError:
                 # Lock already held by another process
-                # Read existing PID before closing (file wasn't truncated)
+                # Read existing PID (file wasn't truncated since we couldn't get lock)
                 lockfile_handle.seek(0)
                 pid_str = lockfile_handle.read().strip()
                 lockfile_handle.close()
-                lockfile_handle = None
                 
-                # Handle empty or invalid lockfile - treat as stale
+                # Handle empty or invalid lockfile
                 if not pid_str:
-                    # Empty lockfile - stale, remove and retry
-                    try:
-                        os.unlink(lockfile_path)
-                        lockfile_handle = open(lockfile_path, 'a+')
-                        fcntl.flock(lockfile_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                        lockfile_handle.seek(0)
-                        lockfile_handle.truncate()
-                        lockfile_handle.write(f"{os.getpid()}\n")
-                        lockfile_handle.flush()
-                    except Exception as cleanup_err:
-                        raise Exception(f"Failed to clean up empty lockfile {lockfile_path}: {cleanup_err}")
-                else:
-                    try:
-                        old_pid = int(pid_str)
-                    except ValueError:
-                        # Corrupted lockfile - remove and retry
-                        try:
-                            os.unlink(lockfile_path)
-                            lockfile_handle = open(lockfile_path, 'a+')
-                            fcntl.flock(lockfile_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                            lockfile_handle.seek(0)
-                            lockfile_handle.truncate()
-                            lockfile_handle.write(f"{os.getpid()}\n")
-                            lockfile_handle.flush()
-                        except Exception as cleanup_err:
-                            raise Exception(f"Failed to clean up corrupted lockfile {lockfile_path}: {cleanup_err}")
-                    else:
-                        # Valid PID - check if process exists
-                        try:
-                            os.kill(old_pid, 0)  # Signal 0 just checks existence
-                            # Process exists - overlap not allowed
-                            raise Exception(f"Job {job_name} already running (PID {old_pid}), overlap not allowed")
-                        except OSError:
-                            # Process doesn't exist - stale lock, remove and acquire
-                            try:
-                                os.unlink(lockfile_path)
-                                lockfile_handle = open(lockfile_path, 'a+')
-                                fcntl.flock(lockfile_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                                lockfile_handle.seek(0)
-                                lockfile_handle.truncate()
-                                lockfile_handle.write(f"{os.getpid()}\n")
-                                lockfile_handle.flush()
-                            except Exception as cleanup_err:
-                                raise Exception(f"Failed to clean up stale lockfile {lockfile_path}: {cleanup_err}")
+                    # Empty but locked - another instance is starting right now
+                    raise Exception(f"Job {job_name} lockfile exists but is empty (another instance may be starting)")
+                
+                try:
+                    old_pid = int(pid_str)
+                except ValueError:
+                    # Corrupted but locked - fail (don't touch files we don't own)
+                    raise Exception(f"Job {job_name} lockfile corrupted: {repr(pid_str)}")
+                
+                # Valid PID - check if process exists
+                try:
+                    os.kill(old_pid, 0)  # Signal 0 just checks existence
+                    # Process exists - overlap not allowed
+                    raise Exception(f"Job {job_name} already running (PID {old_pid}), overlap not allowed")
+                except OSError:
+                    # Process doesn't exist - stale lock, remove and re-acquire
+                    os.unlink(lockfile_path)
+                    lockfile_handle = open(lockfile_path, 'a+')
+                    fcntl.flock(lockfile_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    lockfile_handle.seek(0)
+                    lockfile_handle.truncate()
+                    lockfile_handle.write(f"{os.getpid()}\n")
+                    lockfile_handle.flush()
         except Exception as e:
             # Lockfile acquisition failed - inject error and run wrapper normally
             error_msg = f"LOCKFILE ERROR: {e}\n"
