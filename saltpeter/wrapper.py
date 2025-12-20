@@ -734,7 +734,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
                             log(f'Job completed with exit code {final_retcode} but rejected by server')
                             log(f'Full output follows:')
                             log(f'--- OUTPUT START ---')
-                            log(full_output)
+                            log(''.join(full_output))
                             log(f'--- OUTPUT END ---')
                             return final_retcode
                         
@@ -785,7 +785,7 @@ async def run_command_and_stream(websocket_url, job_name, job_instance, machine_
             log(f'Job completed with exit code {final_retcode} but server unreachable')
             log(f'Full output follows:')
             log(f'--- OUTPUT START ---')
-            log(full_output)
+            log(''.join(full_output))
             log(f'--- OUTPUT END ---')
         
     except Exception as e:
