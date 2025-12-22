@@ -115,10 +115,15 @@ def parsecron(name, data, time=datetime.now(timezone.utc)):
         year = data['year']
     else:
         year = '*'
-    if 'hard_timeout' in data and data['hard_timeout'] != 0:
+    if 'hard_timeout' in data and data['hard_timeout'] is not None:
         ret['timeout'] = data['hard_timeout']
-    if 'timeout' in data and data['timeout'] != 0:
+    if 'timeout' in data and data['timeout'] is not None:
         ret['timeout'] = data['timeout']
+    
+    # Ensure timeout always has a value (default 3600s if not explicitly set)
+    # Note: timeout=0 means unlimited (no timeout)
+    if 'timeout' not in ret:
+        ret['timeout'] = 3600
 
 
     try:
@@ -259,12 +264,16 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
     queue_timeout = 0.1  # Block on queue for 100ms, then check other conditions
     
     # Default timeout of 1 hour if not specified
+    # Note: timeout=0 means unlimited (no timeout)
     if timeout is None:
         timeout = 3600
     
     # Heartbeat timeout should be job timeout + grace period
-    # This allows wrapper time to terminate process and send completion
-    heartbeat_timeout = timeout + 30
+    # If timeout=0 (unlimited), still need heartbeat timeout for connection loss detection
+    if timeout == 0:
+        heartbeat_timeout = float('inf')  # Never timeout on heartbeat if job has unlimited timeout
+    else:
+        heartbeat_timeout = timeout + 30
     
     # Get or create queue for this job instance to receive updates from WebSocket
     # Queue should already exist (created before wrapper launch), but create if missing
@@ -580,7 +589,8 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                     startup_verified[tgt] = True  # Mark as verified (failed)
         
         # Check if timeout exceeded (with 30s grace period for wrapper to terminate and report)
-        if elapsed > timeout + 30:
+        # Skip check if timeout=0 (unlimited)
+        if timeout > 0 and elapsed > timeout + 30:
             print(f"[JOB:{procname}] Timeout + grace period exceeded for {pending_targets} ({elapsed:.1f}s > {timeout + 30}s)", flush=True)
             
             # Mark remaining targets as timed out
@@ -598,13 +608,16 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                     output = ''
                     
                 output += "\n[SALTPETER ERROR: Job exceeded timeout]\n"
-                    
-                job_state['results'][tgt] = {
-                    'ret': output,
-                    'retcode': 124,  # Timeout exit code
-                    'starttime': starttime,
-                    'endtime': now
-                }
+                
+                # Preserve existing fields when marking timeout
+                if tgt not in job_state['results']:
+                    job_state['results'][tgt] = {}
+                    job_state['results'][tgt]['starttime'] = starttime
+                
+                job_state['results'][tgt]['ret'] = output
+                job_state['results'][tgt]['retcode'] = 124
+                job_state['results'][tgt]['endtime'] = now
+                # wrapper_version, last_heartbeat, starttime (if existed), etc. are preserved
                 
             state[name] = job_state
             
@@ -616,6 +629,12 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                 
                 log(what='machine_result', cron=name, group=group, instance=procname,
                     machine=tgt, code=124, out=output_for_log, time=now)
+                
+                # Remove from running list (only copy this procname entry, not entire running dict)
+                if procname in running and 'machines' in running[procname]:
+                    tmprunning = dict(running[procname])
+                    tmprunning['machines'] = [m for m in tmprunning['machines'] if m != tgt]
+                    running[procname] = tmprunning
             
             break
         
@@ -661,7 +680,7 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                             machine=tgt, code=result.get('retcode', 0), 
                             out=result.get('ret', ''), time=result['endtime'])
                             
-                        # Remove from running list
+                        # Remove from running list (only copy this procname entry, not entire running dict)
                         if procname in running and 'machines' in running[procname]:
                             if tgt in running[procname]['machines']:
                                 tmprunning = dict(running[procname])
@@ -682,13 +701,21 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                             starttime = result.get('starttime', now)
                             output = result.get('ret', '')
                             output += f"\n[SALTPETER ERROR: Job lost connection - no heartbeat for {time_since_heartbeat:.0f} seconds]\n"
-                                
-                            job_state['results'][tgt] = {
-                                'ret': output,
-                                'retcode': 253,  # Special code for heartbeat timeout
-                                'starttime': starttime,
-                                'endtime': now
-                            }
+                            
+                            # Preserve existing fields when marking heartbeat timeout
+                            if tgt in job_state['results']:
+                                job_state['results'][tgt]['ret'] = output
+                                job_state['results'][tgt]['retcode'] = 253
+                                job_state['results'][tgt]['endtime'] = now
+                                # wrapper_version, last_heartbeat, starttime, etc. are preserved
+                            else:
+                                # Shouldn't happen but handle gracefully
+                                job_state['results'][tgt] = {
+                                    'ret': output,
+                                    'retcode': 253,
+                                    'starttime': starttime,
+                                    'endtime': now
+                                }
                             state[name] = job_state
                                 
                             # Log the failure
@@ -908,8 +935,9 @@ def run(name, data, procname, running, state, commands, maintenance, state_updat
             wrapper_env['SP_CWD'] = data['cwd']
         if 'user' in data:
             wrapper_env['SP_USER'] = data['user']
-        if 'timeout' in data:
-            wrapper_env['SP_TIMEOUT'] = str(data['timeout'])
+        
+        # Always send timeout to wrapper (already has default applied in parsecron)
+        wrapper_env['SP_TIMEOUT'] = str(data['timeout'])
         
         # Add custom environment variables from YAML config
         if 'env' in data:
