@@ -71,7 +71,17 @@ def readconfig(configdir):
                     saltpeter_config.update(loaded_config[cron])
                 elif parsecron(cron,loaded_config[cron]) is not False:
                     add_config[cron] = loaded_config[cron]
-                    add_config[cron]['group'] = group 
+                    add_config[cron]['group'] = group
+                    
+                    # Apply defaults for missing cron fields
+                    if 'sec' not in add_config[cron]:
+                        add_config[cron]['sec'] = 0
+                    if 'year' not in add_config[cron]:
+                        add_config[cron]['year'] = '*'
+                    if 'utc' not in add_config[cron]:
+                        add_config[cron]['utc'] = False
+                    if 'timeout' not in add_config[cron]:
+                        add_config[cron]['timeout'] = 3600 
             crons.update(add_config)
             if f in bad_files:
                 bad_files.remove(f)
