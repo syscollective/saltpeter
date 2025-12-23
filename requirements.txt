@@ -1,7 +1,6 @@
-salt
 crontab
 pyyaml
-tornado
+aiohttp
 elasticsearch
 opensearch-py
 distro
@@ -11,3 +10,4 @@ jinja2
 msgpack
 zmq
 pycryptodome
+websockets

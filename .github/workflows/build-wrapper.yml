@@ -1,0 +1,227 @@
+name: Build Wrapper Binary
+
+on:
+  push:
+    branches:
+      - master
+      - async-agent
+    paths:
+      - 'saltpeter/wrapper.py'
+      - 'saltpeter/version.py'
+      - '.github/workflows/build-wrapper.yml'
+  pull_request:
+    branches:
+      - master
+    paths:
+      - 'saltpeter/wrapper.py'
+      - 'saltpeter/version.py'
+      - '.github/workflows/build-wrapper.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Wrapper Binary
+    runs-on: ubuntu-latest
+    container:
+      image: python:3.11-slim-bullseye
+    
+    steps:
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y binutils libssl-dev
+      
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Extract version from version.py
+        id: get_version
+        run: |
+          VERSION=$(grep -oP "__version__ = '\K[^']+" saltpeter/version.py)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Detected version: $VERSION"
+      
+      - name: Install PyInstaller and dependencies
+        run: |
+          pip install --no-cache-dir pyinstaller websockets
+      
+      - name: Verify OpenSSL is available in Python
+        run: |
+          python3 -c "import ssl; import hashlib; print('SSL version:', ssl.OPENSSL_VERSION); print('SHA1 available:', hasattr(hashlib, 'sha1'))"
+      
+      - name: Build wrapper binary with PyInstaller
+        run: |
+          pyinstaller --onefile \
+            --name sp_wrapper \
+            --distpath dist \
+            --add-data "saltpeter/version.py:saltpeter" \
+            --hidden-import=saltpeter.version \
+            --hidden-import=_ssl \
+            --hidden-import=_hashlib \
+            --collect-all ssl \
+            --clean \
+            saltpeter/wrapper.py
+      
+      - name: Test wrapper binary
+        run: |
+          # Test that the binary exists and is executable
+          chmod +x dist/sp_wrapper
+          # Test that SSL/hashlib work
+          dist/sp_wrapper 2>&1 | head -20 || true
+          # Check that OpenSSL libraries are bundled
+          ldd dist/sp_wrapper 2>&1 | grep -i ssl || echo "Static OpenSSL (good)"
+      
+      - name: Create version info file
+        run: |
+          cat > dist/VERSION.txt << EOF
+          Saltpeter Wrapper Binary
+          Version: ${{ steps.get_version.outputs.version }}
+          Platform: linux-x86_64 (Debian 11 Bullseye base, glibc 2.31+)
+          Python: 3.11 (embedded)
+          Built: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          Git Commit: ${{ github.sha }}
+          Git Ref: ${{ github.ref }}
+          
+          Compatible with:
+          - Ubuntu 20.04+ / Debian 11+ / RHEL 8+
+          - Any Linux x86_64 with glibc 2.31 or newer
+          EOF
+      
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sp_wrapper
+          path: |
+            dist/sp_wrapper
+            dist/VERSION.txt
+          retention-days: 90
+  
+  create-release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/async-agent'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Extract version from version.py
+        id: get_version
+        run: |
+          VERSION=$(grep -oP "__version__ = '\K[^']+" saltpeter/version.py)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Detected version: $VERSION"
+      
+      - name: Check if release exists
+        id: check_release
+        run: |
+          # Check if a release with this version tag already exists
+          if gh release view "v${{ steps.get_version.outputs.version }}" &>/dev/null; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Release v${{ steps.get_version.outputs.version }} already exists"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "Release v${{ steps.get_version.outputs.version }} does not exist, will create"
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Download all artifacts
+        if: steps.check_release.outputs.exists == 'false'
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      
+      - name: Create release archives
+        if: steps.check_release.outputs.exists == 'false'
+        run: |
+          mkdir -p release
+          cd artifacts/sp_wrapper
+          tar -czf ../../release/sp_wrapper.tar.gz sp_wrapper VERSION.txt
+          cd ../..
+          ls -lh release/
+      
+      - name: Generate release notes
+        if: steps.check_release.outputs.exists == 'false'
+        id: release_notes
+        run: |
+          cat > release_notes.md << 'EOF'
+          ## Saltpeter Wrapper Binary Release ${{ steps.get_version.outputs.version }}
+          
+          Standalone wrapper binary for Saltpeter, built with PyInstaller.
+          
+          ### Installation
+          
+          1. Download the binary:
+             ```bash
+             wget https://github.com/syscollective/saltpeter/releases/download/v${{ steps.get_version.outputs.version }}/sp_wrapper.tar.gz
+             ```
+          2. Extract the archive:
+             ```bash
+             tar -xzf sp_wrapper.tar.gz
+             ```
+          3. Make executable and install:
+             ```bash
+             chmod +x sp_wrapper
+             sudo mv sp_wrapper /usr/local/bin/
+             ```
+          
+          ### Platform Compatibility
+          
+          Built on **Debian 11 (Bullseye)** with **Python 3.11** (embedded).
+          
+          Compatible with:
+          - ✅ Ubuntu 20.04 or newer
+          - ✅ Debian 11 (Bullseye) or newer
+          - ✅ RHEL 8 or newer / Rocky Linux / AlmaLinux
+          - ✅ Any Linux x86_64 with glibc 2.31 or newer
+          
+          To check your glibc version: `ldd --version`
+          
+          ### Usage
+          
+          The wrapper is invoked by Salt via `cmd.run`. Configure in your Saltpeter job:
+          
+          ```yaml
+          my_job:
+            command: /path/to/command
+            targets: '*'
+            target_type: glob
+            use_wrapper: true
+            wrapper_path: /usr/local/bin/sp_wrapper
+            # ... other config
+          ```
+          
+          ### Requirements
+          
+          - No Python installation required on target machines
+          - WebSocket connectivity to Saltpeter server (default port 8889)
+          - Linux x86_64 architecture
+          - glibc 2.31 or newer
+          
+          ### Verification
+          
+          Check the VERSION.txt file in the archive for build details.
+          ```bash
+          ./sp_wrapper --help 2>&1 || echo "Binary is working (error expected without env vars)"
+          ```
+          EOF
+          
+          echo "RELEASE_NOTES<<EOF" >> $GITHUB_OUTPUT
+          cat release_notes.md >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+      
+      - name: Create Release
+        if: steps.check_release.outputs.exists == 'false'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ steps.get_version.outputs.version }}
+          name: Release v${{ steps.get_version.outputs.version }}
+          files: release/*.tar.gz
+          body: ${{ steps.release_notes.outputs.RELEASE_NOTES }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+

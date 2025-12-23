@@ -1,0 +1,136 @@
+```
+BIDIRECTIONAL WEBSOCKET ARCHITECTURE
+=====================================
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                                    UI / API                                  │
+│                                                                              │
+│  [Kill Job Button] ──► Add {'killcron': 'job_name'} to commands queue      │
+└────────────────────────────────────┬────────────────────────────────────────┘
+                                     │
+                                     │ Shared Manager.list()
+                                     │
+┌────────────────────────────────────▼────────────────────────────────────────┐
+│                         MAIN PROCESS (main.py)                               │
+│                                                                              │
+│  ┌──────────────────────────────────────────────────────────────┐           │
+│  │  commands = manager.list()  ◄─── Shared across processes     │           │
+│  │  state = manager.dict()                                       │           │
+│  │  running = manager.dict()                                     │           │
+│  │  statelocks = manager.dict()                                  │           │
+│  └──────────────────────────────────────────────────────────────┘           │
+│                                     │                                        │
+│                    Pass commands to WebSocket server                        │
+└─────────────────────────────────────┬───────────────────────────────────────┘
+                                      │
+                  ┌───────────────────┴───────────────────┐
+                  │                                       │
+                  ▼                                       ▼
+┌─────────────────────────────────────┐   ┌──────────────────────────────────┐
+│  WEBSOCKET SERVER (websocket_server.py)  │   API PROCESS (api.py)           │
+│                                          │                                  │
+│  Background Task (check_commands):       │   Tornado WebSocket Handler:    │
+│  ┌────────────────────────────────┐     │   - Receives UI kill requests   │
+│  │ while True:                    │     │   - Adds to commands queue      │
+│  │   for cmd in commands:         │     │   - Sends state updates to UI   │
+│  │     if 'killcron' in cmd:      │     │                                  │
+│  │       send_kill_to_wrappers()  │     │                                  │
+│  │       commands.remove(cmd)     │     │                                  │
+│  └────────────────────────────────┘     └──────────────────────────────────┘
+│                   │                                                         │
+│                   │ Finds matching connections                              │
+│                   ▼                                                         │
+│  ┌────────────────────────────────┐                                        │
+│  │ self.connections = {           │                                        │
+│  │   "job1:machine1": {           │                                        │
+│  │     websocket: <ws_conn>,      │                                        │
+│  │     job_name: "backup",        │                                        │
+│  │     job_instance: "backup_123" │                                        │
+│  │   }                            │                                        │
+│  │ }                              │                                        │
+│  └────────────────────────────────┘                                        │
+│                   │                                                         │
+│                   │ Send kill message                                       │
+└───────────────────┼─────────────────────────────────────────────────────────┘
+                    │
+                    │ WebSocket Message:
+                    │ {'type': 'kill', 'job_name': '...', ...}
+                    │
+                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                     WRAPPER PROCESS (wrapper.py)                             │
+│                     Running on Salt Minion                                   │
+│                                                                              │
+│  Main Event Loop:                                                           │
+│  ┌──────────────────────────────────────────────────────────────┐           │
+│  │ while process running:                                        │           │
+│  │   # Listen for messages (non-blocking)                        │           │
+│  │   try:                                                        │           │
+│  │     msg = await websocket.recv(timeout=0.1)                   │           │
+│  │     if msg['type'] == 'kill':                                 │           │
+│  │       ──► process.terminate()  # SIGTERM                      │           │
+│  │       ──► process.wait(5)                                     │           │
+│  │       ──► process.kill()       # SIGKILL if needed            │           │
+│  │       ──► break                                               │           │
+│  │   except TimeoutError:                                        │           │
+│  │     pass  # No message, continue                              │           │
+│  │                                                                │           │
+│  │   # Read process output                                       │           │
+│  │   ──► send output to server                                   │           │
+│  │                                                                │           │
+│  │   # Send heartbeat every 5s                                   │           │
+│  │   ──► send heartbeat to server                                │           │
+│  └──────────────────────────────────────────────────────────────┘           │
+│                                                                              │
+│  ┌──────────────────────────────────────────────────────────────┐           │
+│  │  subprocess.Popen(command)                                    │           │
+│  │  ├─► Running user's command (e.g., backup script)            │           │
+│  │  └─► Can be terminated via SIGTERM/SIGKILL                    │           │
+│  └──────────────────────────────────────────────────────────────┘           │
+│                                                                              │
+│  After kill or completion:                                                  │
+│  ──► Send final output                                                      │
+│  ──► Send complete message with exit code                                   │
+│  ──► Close WebSocket connection                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+
+MESSAGE FLOW - KILL SCENARIO
+=============================
+
+Time │ UI/API          │ Main Process    │ WS Server         │ Wrapper
+─────┼─────────────────┼─────────────────┼───────────────────┼──────────────────
+  0  │                 │                 │                   │ [Running command]
+     │                 │                 │                   │ ──► output
+     │                 │                 │                   │ ──► heartbeat
+  5  │ [Kill clicked]  │                 │                   │
+     │ ────────►       │                 │                   │
+  6  │                 │ Add to commands │                   │
+     │                 │ queue           │                   │
+     │                 │ ────────────►   │                   │
+  7  │                 │                 │ Detect kill cmd   │
+     │                 │                 │ ──────────────►   │
+  8  │                 │                 │                   │ Recv kill msg
+     │                 │                 │                   │ process.terminate()
+  9  │                 │                 │                   │ [Waiting 5s]
+ 10  │                 │                 │                   │ process.kill()
+     │                 │                 │                   │ [Process dead]
+ 11  │                 │                 │                   │ Send final output
+     │                 │                 │  ◄────────────────│
+     │                 │                 │ Update state      │
+ 12  │                 │                 │                   │ Send complete
+     │                 │                 │  ◄────────────────│ (retcode: 143)
+     │                 │                 │ Update state      │
+ 13  │                 │ State updated   │                   │
+     │  ◄──────────────│                 │                   │
+     │ [UI shows killed]                 │                   │
+
+
+EXIT CODES
+==========
+  0   - Success
+ 124  - Hard timeout
+ 143  - Killed by user (SIGTERM)  ◄── NEW
+ 253  - Heartbeat timeout
+ 255  - Error
+```
