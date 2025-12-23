@@ -991,9 +991,17 @@ def run(name, data, procname, running, state, commands, maintenance, state_updat
     running[procname] = {'started': now, 'name': name, 'machines': [], 'stop_signal': False}
 
     # ping the minions and parse the result
-    minion_ret = salt.cmd(targets, 'test.ping', tgt_type=target_type, timeout=20)
-    debug_print(f"[SALT DEBUG] test.ping response type: {type(minion_ret)}")
-    debug_print(f"[SALT DEBUG] test.ping response: {minion_ret}")
+    try:
+        minion_ret = salt.cmd(targets, 'test.ping', tgt_type=target_type, timeout=20)
+        debug_print(f"[SALT DEBUG] test.ping response type: {type(minion_ret)}")
+        debug_print(f"[SALT DEBUG] test.ping response: {minion_ret}")
+    except Exception as e:
+        error_msg = f"SALT-MASTER ERROR during test.ping: {str(e)}"
+        print(f"[MAIN] {error_msg}", flush=True)
+        log(cron=name, group=data['group'], what='test_ping_failed', instance=procname, 
+            time=datetime.now(timezone.utc), out=error_msg)
+        # Continue with empty results - let normal flow handle it
+        minion_ret = {}
 
     # minion_ret is already a dict: {minion_id: True/False}
     targets_up = [m for m, ret in minion_ret.items() if ret is True]
@@ -1104,8 +1112,8 @@ def run(name, data, procname, running, state, commands, maintenance, state_updat
                                 except Exception as e:
                                     if not salt_result['abandoned']:
                                         salt_result['completed'] = True
-                                        salt_result['error'] = str(e)
-                                        print(f"[SALT DEBUG] salt.cmd failed: {e}", flush=True)
+                                        salt_result['error'] = f"SALT-MASTER ERROR: {str(e)}"
+                                        print(f"[SALT DEBUG] SALT-MASTER ERROR in salt.cmd: {e}", flush=True)
                             
                             salt_thread = threading.Thread(target=run_salt_cmd, daemon=True)
                             salt_thread.start()
@@ -1182,8 +1190,8 @@ def run(name, data, procname, running, state, commands, maintenance, state_updat
                             except Exception as e:
                                 if not salt_result['abandoned']:
                                     salt_result['completed'] = True
-                                    salt_result['error'] = str(e)
-                                    print(f"[SALT DEBUG] salt.cmd failed: {e}", flush=True)
+                                    salt_result['error'] = f"SALT-MASTER ERROR: {str(e)}"
+                                    print(f"[SALT DEBUG] SALT-MASTER ERROR in salt.cmd: {e}", flush=True)
                         
                         salt_thread = threading.Thread(target=run_salt_cmd, daemon=True)
                         salt_thread.start()
@@ -1319,6 +1327,10 @@ def log(what, cron, group, instance, time, machine='', code=0, out='', status=''
         content = "###### Starting %s on %s at %s ################\n" % (instance, machine, time)
     elif what == 'no_machines':
         content = "!!!!!! No targets matched for %s !!!!!!\n" % instance
+    elif what == 'test_ping_failed':
+        content = "!!!!!! SALT-MASTER ERROR during test.ping for %s at %s !!!!!!\n%s\n" % (instance, time, out_processed)
+    elif what == 'wrapper_failed':
+        content = "!!!!!! Wrapper failed for %s on %s at %s !!!!!!\n%s\n" % (instance, machine, time, out_processed)
     elif what == 'end':
         content = "###### Finished %s at %s ################\n" % (instance, time)
     elif what == 'overlap':
