@@ -29,7 +29,7 @@ jobs:
       - name: Install build dependencies
         run: |
           apt-get update
-          apt-get install -y binutils libssl-dev
+          apt-get install -y binutils libssl-dev libncurses6
       
       - name: Checkout code
         uses: actions/checkout@v4
@@ -55,6 +55,8 @@ jobs:
             --name sp_wrapper \
             --distpath dist \
             --add-data "saltpeter/version.py:saltpeter" \
+            --add-binary "/lib/x86_64-linux-gnu/libtinfo.so.6:." \
+            --add-binary "/lib/x86_64-linux-gnu/libncurses.so.6:." \
             --hidden-import=saltpeter.version \
             --hidden-import=_ssl \
             --hidden-import=_hashlib \
