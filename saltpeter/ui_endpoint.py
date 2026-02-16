@@ -13,7 +13,7 @@ from .version import __version__
 
 
 class UIEndpoint:
-    def __init__(self, bind_addr, port, config, running, state, commands, bad_crons, timeline, debug_flag=None):
+    def __init__(self, bind_addr, port, config, running, state, commands, bad_crons, timeline, debug_flag=None, schedule_state=None):
         self.bind_addr = bind_addr
         self.port = port
         self.config = config
@@ -23,6 +23,7 @@ class UIEndpoint:
         self.bad_crons = bad_crons
         self.timeline = timeline
         self.debug_flag = debug_flag  # Shared debug flag from Manager
+        self.schedule_state = schedule_state  # Separate dict for next_run (avoids race with job state)
         
         self.ws_connections = {}  # Changed to dict to track per-connection state
         self.cfgserial = ''
@@ -218,7 +219,11 @@ class UIEndpoint:
                     else:
                         self.debug_print(f"[UI DEBUG] Sending cron {cron}: NO RESULTS")
                     
-                    if 'next_run' in srcron:
+                    # Merge next_run from schedule_state (stored separately to avoid
+                    # race condition with child processes writing job results to state)
+                    if self.schedule_state and cron in self.schedule_state:
+                        srcron['next_run'] = self.schedule_state[cron].isoformat()
+                    elif 'next_run' in srcron:
                         srcron['next_run'] = srcron['next_run'].isoformat()
                     if 'last_run' in srcron:
                         srcron['last_run'] = srcron['last_run'].isoformat()
@@ -414,7 +419,7 @@ class UIEndpoint:
         asyncio.run(self.start_servers())
 
 
-def start(bind_addr, port, config, running, state, commands, bad_crons, timeline, debug_flag=None):
+def start(bind_addr, port, config, running, state, commands, bad_crons, timeline, debug_flag=None, schedule_state=None):
     """Start the UI endpoint server"""
-    server = UIEndpoint(bind_addr, port, config, running, state, commands, bad_crons, timeline, debug_flag)
+    server = UIEndpoint(bind_addr, port, config, running, state, commands, bad_crons, timeline, debug_flag, schedule_state)
     server.run()

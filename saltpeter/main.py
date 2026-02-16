@@ -327,7 +327,7 @@ def processresults_websocket(name, group, procname, running, state, targets, tim
                 machine = msg.get('machine')
                 timestamp = msg.get('timestamp')
                 
-                # Only this function modifies state[name] - no race conditions!
+                # Only this function should modify state[name] while the job is running
                 job_state = state[name]
                 if 'results' not in job_state:
                     job_state['results'] = {}
@@ -1477,6 +1477,7 @@ def main():
     bad_crons = manager.list()
     timeline = manager.dict()
     state_update_queues = manager.dict()  # job_instance → Queue for state updates from WebSocket
+    schedule_state = manager.dict()  # cron_name → next_run datetime (separate from state to avoid race)
     debug_flag = manager.Value('b', params.debug)  # Shared boolean for debug flag
     debug_flag_shared = debug_flag  # Set global reference for debug_print
     last_maintenance_log = datetime.now(timezone.utc)
@@ -1496,7 +1497,7 @@ def main():
     
     #start the UI endpoint
     if params.api_ws:
-        a = multiprocessing.Process(target=ui_endpoint.start, args=(params.api_ws_bind_addr,params.api_ws_port,config,running,state,commands,bad_crons,timeline,debug_flag), name='ui_endpoint')
+        a = multiprocessing.Process(target=ui_endpoint.start, args=(params.api_ws_bind_addr,params.api_ws_port,config,running,state,commands,bad_crons,timeline,debug_flag,schedule_state), name='ui_endpoint')
         a.start()
 
     if params.elasticsearch != '':
@@ -1577,9 +1578,10 @@ def main():
                 if name not in state:
                     state[name] = {}
                 nextrun = prev + timedelta(seconds=result['nextrun'])
-                job_state = state[name]
-                job_state['next_run'] = nextrun
-                state[name] = job_state
+                # Store next_run in a separate dict to avoid racing with child
+                # processes that do read-modify-write on state[name] for job results.
+                # The UI endpoint merges this back when sending state to clients.
+                schedule_state[name] = nextrun
                 #check if there are any start commands
                 runnow = False
                 for cmd in commands:
